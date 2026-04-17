@@ -121,7 +121,7 @@ function renderTabs() {
 }
 
 async function fetchWorkbook() {
-    const res = await fetch(`${API_BASE}/workbook`);
+    const res = await fetch(`${API_BASE}/api/workbook`);
     workbook = await res.json();
     const activePill = document.getElementById("active-sheet-pill");
     if (activePill) activePill.textContent = workbook.active_sheet;
@@ -292,7 +292,10 @@ function syncSelectionUI() {
     const anchor = selectedRange.end;
     document.getElementById("name-box").textContent = selectionLabel();
     document.getElementById("selection-pill").textContent = selectionLabel();
-    document.getElementById("selection-summary").textContent = `Selection: ${selectionLabel()}${scopeMode === "selection" ? " · Assistant will use the selected cells." : " · Assistant will use the entire sheet."}`;
+    const composerHint = document.getElementById("composer-hint");
+    if (composerHint) {
+        composerHint.textContent = `${scopeMode === "selection" ? `Selection: ${selectionLabel()}` : "Whole sheet"} · Preview-safe by default`;
+    }
     const subtitleEl = document.getElementById("assistant-subtitle");
     if (subtitleEl) subtitleEl.textContent = scopeMode === "selection" ? "Focused on the selected cells." : "Focused on the active sheet.";
     const scopePill = document.getElementById("scope-pill");
@@ -395,13 +398,51 @@ function setSelection(start, end) {
 }
 
 function addLog(kind, html) {
-    const log = document.getElementById("assistant-log");
+    const conversation = document.getElementById("chat-conversation");
+    const empty = document.getElementById("chat-empty");
+    if (empty && empty.parentElement === conversation) empty.remove();
     const msg = document.createElement("div");
     msg.className = `msg ${kind}`;
     msg.innerHTML = html;
-    log.appendChild(msg);
-    log.scrollTop = log.scrollHeight;
+    conversation.appendChild(msg);
+    conversation.scrollTop = conversation.scrollHeight;
     return msg;
+}
+
+function clearChatConversation() {
+    const conversation = document.getElementById("chat-conversation");
+    conversation.innerHTML = `
+        <div class="chat-empty" id="chat-empty">
+            <div class="chat-empty-logo">GO</div>
+            <h3>How can I help?</h3>
+            <p>Describe what you want to build or analyze. I'll plan it, preview the cells, and only write them when you approve.</p>
+            <div class="quick-prompts" id="quick-prompts-empty"></div>
+        </div>
+    `;
+    // Re-seed the quick-prompt buttons inside the new empty state.
+    const empty = document.getElementById("quick-prompts-empty");
+    const prompts = [
+        { text: "Operating model", prompt: "Build a quarterly operating model starting at B2 with revenue growing 10% QoQ from 100, COGS at 40% of revenue, OpEx flat at 30, gross profit, and operating income. Plan the full model first, then fill section by section.", chain: true },
+        { text: "Simple DCF", prompt: "Build a simple DCF starting at B2: 5 years of FCF growing 15% from 100, a 10% discount rate row, present value of each year using DIVIDE and POWER, and a total PV. Plan first, then fill.", chain: true },
+        { text: "Hiring tracker", prompt: "Create a hiring tracker in the selected area with role, stage, owner, and notes columns.", chain: false },
+        { text: "Summarize selection", prompt: "Summarize the selected range into a clean executive header row and totals.", chain: false },
+    ];
+    prompts.forEach((p) => {
+        const btn = document.createElement("button");
+        btn.className = "quick-prompt";
+        btn.type = "button";
+        btn.textContent = p.text;
+        btn.dataset.prompt = p.prompt;
+        if (p.chain) btn.dataset.chain = "true";
+        btn.addEventListener("click", () => {
+            document.getElementById("assistant-input").value = p.prompt;
+            syncSendButtonState();
+            autoGrowInput();
+            if (p.chain) setChainMode(true);
+            document.getElementById("assistant-input").focus();
+        });
+        empty.appendChild(btn);
+    });
 }
 
 async function persistSingleCell(cell, value) {
@@ -726,51 +767,72 @@ async function saveProposedMacro(spec, block) {
     }
 }
 
-function renderPreviewCard() {
-    const card = document.getElementById("preview-card");
-    if (!previewState) {
-        card.style.display = "none";
-        card.innerHTML = "";
-        return;
+let previewMessageEl = null;
+
+function renderPreviewAsChatMessage() {
+    // Replace any existing preview message with the fresh state.
+    if (previewMessageEl && previewMessageEl.parentElement) {
+        previewMessageEl.remove();
     }
+    previewMessageEl = null;
+
+    if (!previewState) return;
+
     const hasCells = previewState.preview_cells && previewState.preview_cells.length;
     const previewRange = hasCells
-        ? `${previewState.preview_cells[0].cell} -> ${previewState.preview_cells[previewState.preview_cells.length - 1].cell}`
+        ? `${previewState.preview_cells[0].cell} → ${previewState.preview_cells[previewState.preview_cells.length - 1].cell}`
         : previewState.target_cell;
     const hasValues = Array.isArray(previewState.values) && previewState.values.length > 0;
-    const actionsRow = hasValues
-        ? `<div class="assistant-actions" style="margin-top:10px;">
-            <button class="primary-btn" id="apply-preview-btn">Apply Preview</button>
-            <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
-        </div>`
-        : `<div class="assistant-actions" style="margin-top:10px;">
-            <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
-        </div>`;
+
     const macroError = previewState.macro_error
         ? `<div style="margin-top:8px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(previewState.macro_error)}</div>`
         : "";
     const macroBlock = renderProposedMacroBlock(previewState.proposed_macro, { idSuffix: "card" });
     const planBlock = renderPlanBlock(previewState.plan);
-    card.style.display = "block";
-    card.innerHTML = `
-        <h4>${escapeHtml((previewState.category || "agent").toUpperCase())} preview</h4>
-        <p>${escapeHtml(previewState.reasoning || "Preview ready.")}</p>
-        <p>Scope: <strong>${previewState.scope === "selection" ? "Selected cells" : "Entire sheet"}</strong> | Target: <strong>${escapeHtml(previewRange)}</strong></p>
-        ${actionsRow}
+
+    const actionsRow = hasValues
+        ? `<div class="msg-actions">
+            <button class="primary-btn" id="apply-preview-btn">Apply</button>
+            <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
+        </div>`
+        : `<div class="msg-actions">
+            <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
+        </div>`;
+
+    const agentLabel = escapeHtml((previewState.category || "agent").toUpperCase());
+    const html = `
+        <div>${escapeHtml(previewState.reasoning || "Preview ready.")}</div>
+        <div class="msg-meta">
+            <strong style="color:var(--accent);">${agentLabel}</strong>
+            <span>·</span>
+            <span>${previewState.scope === "selection" ? "Selection" : "Whole sheet"}</span>
+            <span>·</span>
+            <span class="target-chip">${escapeHtml(previewRange || previewState.target_cell || "")}</span>
+        </div>
         ${planBlock}
         ${macroError}
         ${macroBlock}
+        ${actionsRow}
     `;
+
+    previewMessageEl = addLog("agent", html);
+
     if (hasValues) {
-        document.getElementById("apply-preview-btn").addEventListener("click", applyPreview);
+        previewMessageEl.querySelector("#apply-preview-btn")?.addEventListener("click", applyPreview);
     }
-    document.getElementById("dismiss-preview-btn").addEventListener("click", clearPreview);
-    wireProposedMacroButtons(card);
+    previewMessageEl.querySelector("#dismiss-preview-btn")?.addEventListener("click", clearPreview);
+    wireProposedMacroButtons(previewMessageEl);
+}
+
+// Back-compat shim — callers still call renderPreviewCard() to (re)render.
+function renderPreviewCard() {
+    renderPreviewAsChatMessage();
 }
 
 function clearPreview() {
     previewState = null;
-    renderPreviewCard();
+    if (previewMessageEl && previewMessageEl.parentElement) previewMessageEl.remove();
+    previewMessageEl = null;
     repaintPreview();
 }
 
@@ -778,6 +840,11 @@ async function requestPreview() {
     const prompt = document.getElementById("assistant-input").value.trim();
     if (!prompt) return;
     addLog("user", escapeHtml(prompt));
+    // Clear the composer after submit.
+    const input = document.getElementById("assistant-input");
+    input.value = "";
+    autoGrowInput();
+    syncSendButtonState();
 
     const payload = {
         prompt,
@@ -792,7 +859,8 @@ async function requestPreview() {
         return;
     }
 
-    setStatus("Previewing");
+    setStatus("Thinking");
+    const thinking = addLog("thinking", `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`);
     try {
         const res = await fetch(`${API_BASE}/agent/chat`, {
             method: "POST",
@@ -800,15 +868,16 @@ async function requestPreview() {
             body: JSON.stringify(payload),
         });
         const data = await res.json();
+        thinking.remove();
         if (!res.ok) throw new Error(data.detail || "Preview failed.");
         previewState = data;
         pendingHistory.push({ role: "user", content: prompt });
         pendingHistory.push({ role: "assistant", content: `${data.category}: ${data.reasoning}` });
-        renderPreviewCard();
+        renderPreviewAsChatMessage();
         repaintPreview();
-        addLog("agent", `Preview ready for <strong>${escapeHtml(data.target_cell || "target")}</strong>. Nothing has been written yet.`);
         setStatus("Awaiting approval");
     } catch (error) {
+        if (thinking.parentElement) thinking.remove();
         addLog("system", escapeHtml(`Preview failed: ${error.message}`));
         setStatus("Recover");
     }
@@ -816,8 +885,9 @@ async function requestPreview() {
 
 async function runChain(prompt, payload) {
     clearPreview();
-    setStatus("Chaining (this can take several seconds)");
-    addLog("system", "Chain mode engaged. Each step auto-applies and is observed.");
+    setStatus("Chaining…");
+    addLog("system", "Chain mode engaged — each step auto-applies and is observed.");
+    const thinking = addLog("thinking", `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`);
     const before = snapshotGrid();
 
     try {
@@ -827,6 +897,7 @@ async function runChain(prompt, payload) {
             body: JSON.stringify(payload),
         });
         const data = await res.json();
+        thinking.remove();
         if (!res.ok) throw new Error(data.detail || "Chain failed.");
 
         pendingHistory.push({ role: "user", content: prompt });
@@ -844,6 +915,7 @@ async function runChain(prompt, payload) {
         recordAction(before);
         setStatus(`Chain finished (${data.iterations_used} step${data.iterations_used === 1 ? "" : "s"})`);
     } catch (error) {
+        if (thinking.parentElement) thinking.remove();
         addLog("system", escapeHtml(`Chain failed: ${error.message}`));
         setStatus("Recover");
     }
@@ -936,7 +1008,7 @@ function setStatus(text) {
 
 function setScope(mode) {
     scopeMode = mode;
-    document.querySelectorAll(".scope-btn").forEach((button) => {
+    document.querySelectorAll(".chip[data-scope]").forEach((button) => {
         button.classList.toggle("active", button.dataset.scope === mode);
     });
     syncSelectionUI();
@@ -945,12 +1017,23 @@ function setScope(mode) {
 function setChainMode(enabled) {
     chainMode = Boolean(enabled);
     const toggle = document.getElementById("chain-mode-toggle");
-    const toggleLabel = toggle?.closest(".mode-toggle");
-    const previewBtn = document.getElementById("preview-btn");
+    const chip = toggle?.closest(".chip");
     if (toggle) toggle.checked = chainMode;
-    if (toggleLabel) toggleLabel.classList.toggle("active", chainMode);
-    if (previewBtn) previewBtn.textContent = chainMode ? "Run Chain" : "Preview Change";
+    if (chip) chip.classList.toggle("active", chainMode);
     if (chainMode && previewState) clearPreview();
+}
+
+function autoGrowInput() {
+    const input = document.getElementById("assistant-input");
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 160) + "px";
+}
+
+function syncSendButtonState() {
+    const btn = document.getElementById("send-btn");
+    const input = document.getElementById("assistant-input");
+    if (btn && input) btn.disabled = input.value.trim().length === 0;
 }
 
 function toggleAssistant(force) {
@@ -1140,6 +1223,22 @@ async function clearActiveSheet() {
     clearPreview();
     await fetchGrid();
     recordAction(before);
+}
+
+async function unlockAll() {
+    const approved = window.confirm("Force-unlock every cell across every sheet? This is irreversible via the lock state itself.");
+    if (!approved) return;
+    const before = snapshotGrid();
+    try {
+        const res = await fetch(`${API_BASE}/system/unlock-all`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Unlock failed.");
+        addLog("system", `Unlocked ${data.unlocked} cell${data.unlocked === 1 ? "" : "s"}, dropped ${data.dropped} empty placeholder${data.dropped === 1 ? "" : "s"}.`);
+        await fetchGrid();
+        recordAction(before);
+    } catch (error) {
+        addLog("system", escapeHtml(`Unlock failed: ${error.message}`));
+    }
 }
 
 // ======== Undo / Redo ========
@@ -1476,6 +1575,9 @@ async function handleMenuAction(action) {
             break;
         case "clear-sheet":
             await clearActiveSheet();
+            break;
+        case "unlock-all":
+            await unlockAll();
             break;
         case "undo":
             await undo();
@@ -2296,10 +2398,13 @@ async function bootstrap() {
 
     document.querySelectorAll("[data-prompt]").forEach((button) => {
         button.addEventListener("click", () => {
-            document.getElementById("assistant-input").value = button.dataset.prompt;
+            const input = document.getElementById("assistant-input");
+            input.value = button.dataset.prompt;
+            autoGrowInput();
+            syncSendButtonState();
             toggleAssistant(true);
             if (button.dataset.chain === "true") setChainMode(true);
-            document.getElementById("assistant-input").focus();
+            input.focus();
         });
     });
 
@@ -2312,12 +2417,21 @@ async function bootstrap() {
     document.getElementById("clear-sheet-btn").addEventListener("click", clearActiveSheet);
     document.getElementById("assistant-toggle").addEventListener("click", () => toggleAssistant());
     document.getElementById("assistant-close").addEventListener("click", () => toggleAssistant(false));
-    document.getElementById("preview-btn").addEventListener("click", requestPreview);
-    document.getElementById("cancel-preview-btn").addEventListener("click", clearPreview);
-    document.getElementById("assistant-input").addEventListener("keydown", (event) => {
+    document.getElementById("chat-clear")?.addEventListener("click", () => {
+        clearPreview();
+        clearChatConversation();
+    });
+    const sendBtn = document.getElementById("send-btn");
+    if (sendBtn) sendBtn.addEventListener("click", requestPreview);
+    const composerInput = document.getElementById("assistant-input");
+    composerInput.addEventListener("input", () => {
+        autoGrowInput();
+        syncSendButtonState();
+    });
+    composerInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
-            requestPreview();
+            if (!event.repeat) requestPreview();
         }
     });
     document.getElementById("save-btn").addEventListener("click", saveWorkbook);
@@ -2325,7 +2439,7 @@ async function bootstrap() {
     document.getElementById("undo-btn").addEventListener("click", undo);
     document.getElementById("redo-btn").addEventListener("click", redo);
 
-    document.querySelectorAll(".scope-btn").forEach((button) => {
+    document.querySelectorAll(".chip[data-scope]").forEach((button) => {
         button.addEventListener("click", () => setScope(button.dataset.scope));
     });
     const chainToggle = document.getElementById("chain-mode-toggle");
@@ -2333,6 +2447,8 @@ async function bootstrap() {
         chainToggle.addEventListener("change", (event) => setChainMode(event.target.checked));
     }
     setChainMode(false);
+    autoGrowInput();
+    syncSendButtonState();
 
     document.querySelectorAll("#ctx-menu li[data-action]").forEach((item) => {
         item.addEventListener("click", () => handleCtxAction(item.dataset.action));

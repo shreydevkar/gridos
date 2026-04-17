@@ -1054,7 +1054,7 @@
             background: var(--success);
         }
 
-        /* ===== Assistant ===== */
+        /* ===== Assistant (chat-style) ===== */
         .assistant {
             flex: 0 0 var(--assistant-w);
             display: flex;
@@ -1063,6 +1063,7 @@
             border-left: 1px solid var(--border);
             transition: flex-basis 180ms ease, width 180ms ease;
             overflow: hidden;
+            min-height: 0;
         }
 
         .assistant.hidden {
@@ -1076,13 +1077,32 @@
             align-items: center;
             justify-content: space-between;
             padding: 10px 14px;
-            border-bottom: 1px solid var(--border);
+            border-bottom: 1px solid var(--border-soft);
             height: var(--menubar-h);
+            flex-shrink: 0;
+        }
+
+        .assistant-header-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .assistant-header-logo {
+            width: 22px;
+            height: 22px;
+            border-radius: 5px;
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            display: grid;
+            place-items: center;
+            color: white;
+            font-weight: 700;
+            font-size: 10px;
         }
 
         .assistant-header h3 {
             margin: 0;
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 600;
         }
 
@@ -1092,63 +1112,67 @@
             color: var(--text-muted);
         }
 
-        .assistant-body {
-            flex: 1;
-            overflow-y: auto;
-            padding: 12px 14px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .scope-row {
-            display: inline-flex;
-            background: var(--bg-soft);
-            border-radius: var(--radius);
-            padding: 2px;
-            border: 1px solid var(--border-soft);
-            align-self: flex-start;
-        }
-
-        .scope-btn {
-            padding: 4px 12px;
-            font-size: 12px;
-            color: var(--text-muted);
-            border-radius: var(--radius-sm);
-            border: 1px solid transparent;
-        }
-
-        .scope-btn.active {
-            background: var(--bg);
-            color: var(--text);
-            border-color: var(--border);
-            box-shadow: var(--shadow-1);
-        }
-
-        .mode-toggle {
+        .assistant-header-actions {
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 8px 10px;
-            border: 1px solid var(--border-soft);
-            border-radius: var(--radius);
-            background: var(--bg-soft);
-            cursor: pointer;
+            gap: 2px;
+        }
+
+        /* Conversation area */
+        .chat-conversation {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            padding: 16px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        /* Empty state */
+        .chat-empty {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 24px 20px;
+            gap: 10px;
+        }
+
+        .chat-empty-logo {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            display: grid;
+            place-items: center;
+            color: #fff;
+            font-weight: 700;
+            font-size: 14px;
+            letter-spacing: 0.02em;
+            margin-bottom: 4px;
+        }
+
+        .chat-empty h3 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+
+        .chat-empty p {
+            margin: 0;
             font-size: 12px;
             color: var(--text-muted);
+            max-width: 280px;
+            line-height: 1.5;
         }
 
-        .mode-toggle input[type="checkbox"] {
-            width: 14px;
-            height: 14px;
-            accent-color: var(--accent);
-            cursor: pointer;
-        }
-
-        .mode-toggle.active {
-            border-color: var(--accent);
-            background: var(--accent-soft);
-            color: var(--text);
+        .chat-empty .quick-prompts {
+            margin-top: 14px;
+            justify-content: center;
         }
 
         .quick-prompts {
@@ -1158,7 +1182,7 @@
         }
 
         .quick-prompt {
-            padding: 4px 10px;
+            padding: 6px 12px;
             border: 1px solid var(--border);
             border-radius: 999px;
             background: var(--bg);
@@ -1166,44 +1190,260 @@
             font-size: 11px;
             line-height: 18px;
             cursor: pointer;
+            transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
         }
 
         .quick-prompt:hover {
-            background: var(--bg-hover);
+            background: var(--accent-soft);
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+
+        /* Message bubbles */
+        .msg {
+            max-width: 92%;
+            border-radius: 14px;
+            padding: 10px 14px;
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text);
+            word-wrap: break-word;
+        }
+
+        .msg.user {
+            align-self: flex-end;
+            background: var(--accent);
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+
+        .msg.user code {
+            background: rgba(255,255,255,0.18);
+            color: #fff;
+        }
+
+        .msg.agent {
+            align-self: flex-start;
+            background: var(--bg-soft);
+            border: 1px solid var(--border-soft);
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg.system {
+            align-self: center;
+            background: transparent;
+            border: none;
+            color: var(--text-mutedder);
+            font-size: 11px;
+            padding: 4px 10px;
+            font-style: italic;
+            max-width: 100%;
+            text-align: center;
+        }
+
+        .msg.chain-step {
+            align-self: flex-start;
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-left: 3px solid var(--accent);
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg.chain-step strong { color: var(--accent); }
+
+        .msg.chain-complete {
+            align-self: flex-start;
+            background: rgba(52, 168, 83, 0.08);
+            border: 1px solid rgba(52, 168, 83, 0.3);
+            border-left: 3px solid var(--success);
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg.chain-complete strong { color: var(--success); }
+
+        .msg ul {
+            margin: 6px 0 0;
+            padding-left: 18px;
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        .msg code {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            padding: 1px 5px;
+            border-radius: 4px;
+        }
+
+        .msg-meta {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-top: 6px;
+        }
+
+        .msg-meta .target-chip {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            padding: 2px 8px;
+            font-family: var(--font-mono);
+            font-size: 10px;
             color: var(--text);
         }
 
-        .selection-summary {
-            font-size: 11px;
+        .msg-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        /* Thinking indicator */
+        .msg.thinking {
+            align-self: flex-start;
+            background: var(--bg-soft);
+            border: 1px solid var(--border-soft);
+            border-bottom-left-radius: 4px;
+            padding: 12px 14px;
+            display: inline-flex;
+            gap: 4px;
+            align-items: center;
+        }
+
+        .msg.thinking .dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--text-mutedder);
+            animation: thinking-bounce 1.2s infinite ease-in-out;
+        }
+        .msg.thinking .dot:nth-child(2) { animation-delay: 0.15s; }
+        .msg.thinking .dot:nth-child(3) { animation-delay: 0.3s; }
+        @keyframes thinking-bounce {
+            0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+            30% { opacity: 1; transform: translateY(-3px); }
+        }
+
+        /* Composer (input bar pinned to bottom) */
+        .composer {
+            border-top: 1px solid var(--border-soft);
+            padding: 10px 14px 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            background: var(--bg);
+            flex-shrink: 0;
+        }
+
+        .composer-chips {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+
+        .chip {
+            padding: 3px 10px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--bg);
             color: var(--text-muted);
-            line-height: 1.45;
+            font-size: 11px;
+            cursor: pointer;
+            line-height: 16px;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .chip:hover { background: var(--bg-hover); color: var(--text); }
+
+        .chip.active {
+            background: var(--accent-soft);
+            color: var(--accent);
+            border-color: var(--accent);
+        }
+
+        .chip input[type="checkbox"] {
+            width: 12px;
+            height: 12px;
+            accent-color: var(--accent);
+            cursor: pointer;
+            margin: 0;
+        }
+
+        .composer-input-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 6px 6px 6px 14px;
+            background: var(--bg);
+            transition: border-color 120ms ease, box-shadow 120ms ease;
+        }
+
+        .composer-input-row:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
         }
 
         .assistant-input {
-            width: 100%;
-            min-height: 74px;
-            max-height: 220px;
-            resize: vertical;
-            padding: 10px 12px;
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            background: var(--bg);
+            flex: 1;
+            min-height: 24px;
+            max-height: 160px;
+            resize: none;
+            padding: 6px 0;
+            border: 0;
+            outline: 0;
+            background: transparent;
             color: var(--text);
             font: inherit;
             font-size: 13px;
-            outline: none;
+            line-height: 1.45;
+            overflow-y: auto;
         }
 
-        .assistant-input:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 2px var(--accent-soft);
+        .composer-send {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: none;
+            background: var(--accent);
+            color: #fff;
+            cursor: pointer;
+            display: grid;
+            place-items: center;
+            padding: 0;
+            flex-shrink: 0;
+            transition: background 120ms ease, transform 120ms ease;
         }
 
-        .assistant-actions {
-            display: flex;
-            gap: 8px;
+        .composer-send:hover:not(:disabled) {
+            background: var(--accent-hover);
         }
 
+        .composer-send:disabled {
+            background: var(--border);
+            cursor: not-allowed;
+        }
+
+        .composer-send svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        .composer-hint {
+            font-size: 10px;
+            color: var(--text-mutedder);
+            padding: 0 2px;
+        }
+
+        /* Action buttons inside agent messages */
         .primary-btn {
             display: inline-flex;
             align-items: center;
@@ -1214,12 +1454,18 @@
             background: var(--accent);
             color: white;
             font-weight: 500;
-            font-size: 13px;
+            font-size: 12px;
+            cursor: pointer;
         }
 
         .primary-btn:hover {
             background: var(--accent-hover);
             border-color: var(--accent-hover);
+        }
+
+        .primary-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
 
         .ghost-btn {
@@ -1228,93 +1474,11 @@
             border-radius: var(--radius);
             background: var(--bg);
             color: var(--text);
-            font-size: 13px;
-        }
-
-        .preview-card {
-            padding: 10px 12px;
-            border: 1px solid var(--preview-border);
-            background: rgba(52, 168, 83, 0.06);
-            border-radius: var(--radius);
-            color: var(--text);
             font-size: 12px;
-            line-height: 1.45;
+            cursor: pointer;
         }
 
-        .preview-card h4 {
-            margin: 0 0 6px;
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            color: var(--preview-border);
-        }
-
-        .preview-card p { margin: 0 0 6px; color: var(--text-muted); }
-
-        .preview-card .assistant-actions { margin-top: 10px; }
-
-        .assistant-log {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .msg {
-            border: 1px solid var(--border-soft);
-            border-radius: var(--radius);
-            padding: 8px 10px;
-            font-size: 12px;
-            line-height: 1.5;
-            background: var(--bg);
-            color: var(--text);
-        }
-
-        .msg.user {
-            background: var(--accent-soft);
-            border-color: transparent;
-            color: var(--text);
-        }
-
-        .msg.agent {
-            background: var(--bg-soft);
-        }
-
-        .msg.system {
-            color: var(--text-muted);
-            background: var(--bg-soft);
-        }
-
-        .msg.chain-step {
-            background: var(--bg);
-            border-left: 3px solid var(--accent);
-        }
-
-        .msg.chain-step strong {
-            color: var(--accent);
-        }
-
-        .msg.chain-complete {
-            background: rgba(52, 168, 83, 0.06);
-            border-left: 3px solid var(--preview-border);
-        }
-
-        .msg.chain-complete strong {
-            color: var(--preview-border);
-        }
-
-        .msg ul {
-            margin: 6px 0 0;
-            padding-left: 16px;
-            color: var(--text-muted);
-        }
-
-        .msg code {
-            font-family: var(--font-mono);
-            font-size: 11px;
-            background: var(--bg-soft);
-            padding: 1px 4px;
-            border-radius: 3px;
-        }
+        .ghost-btn:hover { background: var(--bg-hover); }
 
         /* ===== Context menu ===== */
         .ctx-menu {
@@ -1390,10 +1554,10 @@
         <div class="workspace">
             <!-- Menubar -->
             <header class="menubar">
-                <div class="menubar-brand">
+                <a class="menubar-brand" href="/" style="text-decoration:none;color:inherit;" title="Back to home">
                     <div class="menubar-logo">GO</div>
                     <h1>GridOS</h1>
-                </div>
+                </a>
                 <div class="menubar-menu-group">
                     <button class="menubar-menu-btn" data-menu="file" type="button">File</button>
                     <ul class="menu-dropdown" id="menu-file" role="menu">
@@ -1402,6 +1566,7 @@
                         <li data-menu-action="load">Load workbook<span class="menu-shortcut"></span></li>
                         <li class="menu-divider" role="separator"></li>
                         <li data-menu-action="clear-sheet">Clear unlocked cells<span class="menu-shortcut"></span></li>
+                        <li data-menu-action="unlock-all">Unlock all cells<span class="menu-shortcut"></span></li>
                     </ul>
                 </div>
                 <div class="menubar-menu-group">
@@ -1503,42 +1668,56 @@
             </footer>
         </div>
 
-        <!-- Assistant -->
+        <!-- Assistant (chat-style) -->
         <aside class="assistant" id="assistant-panel">
             <div class="assistant-header">
-                <div>
-                    <h3>GridOS Assistant</h3>
-                    <p id="assistant-subtitle">Focused on the selected cells.</p>
+                <div class="assistant-header-title">
+                    <div class="assistant-header-logo">GO</div>
+                    <div>
+                        <h3>GridOS Assistant</h3>
+                        <p id="assistant-subtitle">Focused on the selected cells.</p>
+                    </div>
                 </div>
-                <button class="icon-btn" id="assistant-close" type="button" title="Close assistant">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
+                <div class="assistant-header-actions">
+                    <button class="icon-btn" id="chat-clear" type="button" title="Clear conversation">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                    </button>
+                    <button class="icon-btn" id="assistant-close" type="button" title="Close assistant">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                    </button>
+                </div>
             </div>
-            <div id="preview-card" class="preview-card" style="display:none;"></div>
-            <div class="assistant-body">
-                <div class="scope-row">
-                    <button class="scope-btn active" data-scope="selection" type="button">Selection</button>
-                    <button class="scope-btn" data-scope="sheet" type="button">Whole sheet</button>
+
+            <div class="chat-conversation" id="chat-conversation">
+                <div class="chat-empty" id="chat-empty">
+                    <div class="chat-empty-logo">GO</div>
+                    <h3>How can I help?</h3>
+                    <p>Describe what you want to build or analyze. I'll plan it, preview the cells, and only write them when you approve.</p>
+                    <div class="quick-prompts">
+                        <button class="quick-prompt" data-prompt="Build a quarterly operating model starting at B2 with revenue growing 10% QoQ from 100, COGS at 40% of revenue, OpEx flat at 30, gross profit, and operating income. Plan the full model first, then fill section by section." data-chain="true" type="button">Operating model</button>
+                        <button class="quick-prompt" data-prompt="Build a simple DCF starting at B2: 5 years of FCF growing 15% from 100, a 10% discount rate row, present value of each year using DIVIDE and POWER, and a total PV. Plan first, then fill." data-chain="true" type="button">Simple DCF</button>
+                        <button class="quick-prompt" data-prompt="Create a hiring tracker in the selected area with role, stage, owner, and notes columns." type="button">Hiring tracker</button>
+                        <button class="quick-prompt" data-prompt="Summarize the selected range into a clean executive header row and totals." type="button">Summarize selection</button>
+                    </div>
                 </div>
-                <label class="mode-toggle" for="chain-mode-toggle">
-                    <input type="checkbox" id="chain-mode-toggle" />
-                    <span>Chain mode &mdash; auto-apply, observe, loop up to 10 steps</span>
-                </label>
-                <div class="selection-summary" id="selection-summary">Selection: A1</div>
-                <div class="quick-prompts">
-                    <button class="quick-prompt" data-prompt="Build a quarterly operating model starting at B2 with revenue growing 10% QoQ from 100, COGS at 40% of revenue, OpEx flat at 30, gross profit, and operating income. Plan the full model first, then fill section by section." data-chain="true" type="button">Operating model</button>
-                    <button class="quick-prompt" data-prompt="Build a simple DCF starting at B2: 5 years of FCF growing 15% from 100, a 10% discount rate row, present value of each year using DIVIDE and POWER, and a total PV. Plan first, then fill." data-chain="true" type="button">Simple DCF</button>
-                    <button class="quick-prompt" data-prompt="Create a hiring tracker in the selected area with role, stage, owner, and notes columns." type="button">Hiring tracker</button>
-                    <button class="quick-prompt" data-prompt="Summarize the selected range into a clean executive header row and totals." type="button">Summarize selection</button>
+            </div>
+
+            <div class="composer">
+                <div class="composer-chips">
+                    <button type="button" class="chip active" data-scope="selection">Selection</button>
+                    <button type="button" class="chip" data-scope="sheet">Whole sheet</button>
+                    <label class="chip" for="chain-mode-toggle">
+                        <input type="checkbox" id="chain-mode-toggle" />
+                        <span>Chain</span>
+                    </label>
                 </div>
-                <textarea id="assistant-input" class="assistant-input" placeholder="Ask the assistant to structure, analyze, or generate a block. Preview before you apply it."></textarea>
-                <div class="assistant-actions">
-                    <button class="primary-btn" id="preview-btn" type="button">Preview Change</button>
-                    <button class="ghost-btn" id="cancel-preview-btn" type="button">Clear</button>
+                <div class="composer-input-row">
+                    <textarea id="assistant-input" class="assistant-input" rows="1" placeholder="Ask GridOS…"></textarea>
+                    <button type="button" class="composer-send" id="send-btn" title="Send (Enter)" disabled>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                    </button>
                 </div>
-                <div id="assistant-log" class="assistant-log">
-                    <div class="msg system">The assistant is non-destructive by default. Preview first, then approve if it looks right.</div>
-                </div>
+                <div class="composer-hint" id="composer-hint">Selection: A1 · Preview-safe by default</div>
             </div>
         </aside>
 

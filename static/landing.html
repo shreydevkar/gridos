@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GridOS</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --bg-soft: #f8f9fa;
+            --bg-hover: #f1f3f4;
+            --border: #dadce0;
+            --border-soft: #e8eaed;
+            --text: #202124;
+            --text-muted: #5f6368;
+            --text-mutedder: #80868b;
+            --accent: #1a73e8;
+            --accent-soft: #e8f0fe;
+            --accent-hover: #1765cc;
+            --success: #1e8e3e;
+            --danger: #d93025;
+            --shadow-1: 0 1px 2px rgba(60, 64, 67, 0.1), 0 1px 3px rgba(60, 64, 67, 0.08);
+            --shadow-2: 0 2px 6px rgba(60, 64, 67, 0.15);
+            --shadow-3: 0 4px 12px rgba(60, 64, 67, 0.18);
+            --radius: 8px;
+            --radius-sm: 4px;
+            --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: var(--font-ui);
+            font-size: 14px;
+            color: var(--text);
+            background: var(--bg-soft);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* ===== Top bar ===== */
+        .topbar {
+            height: 60px;
+            background: var(--bg);
+            border-bottom: 1px solid var(--border-soft);
+            display: flex;
+            align-items: center;
+            padding: 0 32px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .topbar-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .topbar-logo {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            display: grid;
+            place-items: center;
+            color: #fff;
+            font-weight: 700;
+            font-size: 12px;
+            letter-spacing: 0.02em;
+        }
+
+        .topbar-brand h1 {
+            margin: 0;
+            font-size: 17px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+
+        .topbar-spacer { flex: 1; }
+
+        .topbar-actions { display: flex; align-items: center; gap: 14px; }
+
+        .topbar-actions a {
+            font-size: 13px;
+            color: var(--text-muted);
+            padding: 6px 10px;
+            border-radius: var(--radius-sm);
+        }
+        .topbar-actions a:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        /* ===== Page layout ===== */
+        .page {
+            max-width: 1120px;
+            margin: 0 auto;
+            padding: 48px 32px 80px;
+        }
+
+        .hero {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 32px;
+        }
+
+        .hero-eyebrow {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .hero h2 {
+            margin: 0;
+            font-size: 32px;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        .hero p {
+            margin: 0;
+            font-size: 15px;
+            color: var(--text-muted);
+            max-width: 560px;
+        }
+
+        /* ===== Section ===== */
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .section-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .section-head h3 {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .section-head .section-hint {
+            font-size: 12px;
+            color: var(--text-mutedder);
+        }
+
+        /* ===== Template/card grid ===== */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .card {
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius);
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            cursor: pointer;
+            transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+            min-height: 160px;
+        }
+
+        .card:hover {
+            border-color: var(--accent);
+            box-shadow: var(--shadow-2);
+        }
+
+        .card-thumb {
+            height: 84px;
+            background: var(--bg-soft);
+            border-radius: var(--radius-sm);
+            border: 1px dashed var(--border);
+            display: grid;
+            place-items: center;
+            color: var(--text-mutedder);
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        .card-thumb.blank {
+            background: linear-gradient(135deg, #fafbff, #eef3fe);
+            border: 1px solid var(--accent-soft);
+            color: var(--accent);
+        }
+
+        .card-thumb.template {
+            background:
+                linear-gradient(90deg, rgba(26, 115, 232, 0.08) 1px, transparent 1px) 0 0/20px 100%,
+                linear-gradient(0deg, rgba(26, 115, 232, 0.08) 1px, transparent 1px) 0 0/100% 14px,
+                var(--bg-soft);
+            border: 1px solid var(--border-soft);
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .card-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .card-meta .card-tag {
+            background: var(--bg-soft);
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            padding: 2px 8px;
+            color: var(--text-muted);
+            font-size: 10px;
+        }
+
+        .card-description {
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.45;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .empty-state {
+            padding: 24px;
+            border: 1px dashed var(--border);
+            border-radius: var(--radius);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+            background: var(--bg);
+        }
+
+        .skeleton {
+            padding: 24px;
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius);
+            color: var(--text-mutedder);
+            font-size: 12px;
+            background: var(--bg);
+        }
+
+        .skeleton .skeleton-row {
+            height: 10px;
+            background: var(--bg-soft);
+            border-radius: 4px;
+            margin-bottom: 8px;
+        }
+        .skeleton .skeleton-row:nth-child(1) { width: 60%; }
+        .skeleton .skeleton-row:nth-child(2) { width: 40%; }
+        .skeleton .skeleton-row:nth-child(3) { width: 75%; }
+
+        /* ===== Loading overlay ===== */
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.85);
+            display: grid;
+            place-items: center;
+            z-index: 1000;
+        }
+        .loading-overlay[hidden] { display: none; }
+
+        .spinner {
+            width: 28px;
+            height: 28px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 800ms linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            margin-top: 12px;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        .loading-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* ===== Error toast ===== */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: var(--bg);
+            border: 1px solid var(--danger);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-3);
+            padding: 12px 16px;
+            font-size: 13px;
+            color: var(--danger);
+            max-width: 320px;
+            z-index: 500;
+        }
+        .toast[hidden] { display: none; }
+
+        @media (max-width: 640px) {
+            .page { padding: 32px 20px 60px; }
+            .hero h2 { font-size: 26px; }
+            .topbar { padding: 0 16px; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-brand">
+            <div class="topbar-logo">GO</div>
+            <h1>GridOS</h1>
+        </div>
+        <div class="topbar-spacer"></div>
+        <div class="topbar-actions">
+            <a href="https://github.com/shreydevkar/gridos_kernel" target="_blank" rel="noopener">GitHub</a>
+        </div>
+    </header>
+
+    <main class="page">
+        <section class="hero">
+            <span class="hero-eyebrow">Agentic spreadsheet</span>
+            <h2>Open a workbook</h2>
+            <p>Start with a blank sheet, pick a saved template, or continue where you left off. GridOS pairs a deterministic spreadsheet kernel with an AI assistant that plans and fills multi-section models for you.</p>
+        </section>
+
+        <section class="section">
+            <div class="section-head">
+                <h3>Start something new</h3>
+            </div>
+            <div class="grid" id="starter-grid">
+                <div class="card" id="card-blank">
+                    <div class="card-thumb blank">+ blank</div>
+                    <div class="card-title">Blank workbook</div>
+                    <div class="card-description">Empty grid. Build it from scratch or ask the assistant to scaffold something.</div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-head">
+                <h3>Templates</h3>
+                <span class="section-hint">Saved workbook snapshots — applying one clears unlocked cells.</span>
+            </div>
+            <div id="template-grid" class="grid">
+                <div class="skeleton">
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                </div>
+            </div>
+            <div id="template-empty" class="empty-state" hidden>
+                No templates saved yet. Open the Library tab inside a workbook to save the current sheet as a template.
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-head">
+                <h3>Recent activity</h3>
+                <span class="section-hint">Currently single-kernel — the "Continue" card opens the workspace at its current state.</span>
+            </div>
+            <div class="grid">
+                <div class="card" id="card-continue">
+                    <div class="card-thumb template">
+                        <span id="continue-thumb-label">loading</span>
+                    </div>
+                    <div class="card-title">Continue active workbook</div>
+                    <div class="card-description" id="continue-description">Picks up at the workbook's last state.</div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div id="loading-overlay" class="loading-overlay" hidden>
+        <div class="loading-group">
+            <div class="spinner"></div>
+            <div class="loading-text" id="loading-text">Opening workbook…</div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script>
+        const API_BASE = window.location.origin;
+
+        function showLoading(text) {
+            document.getElementById("loading-text").textContent = text || "Loading…";
+            document.getElementById("loading-overlay").hidden = false;
+        }
+
+        function hideLoading() {
+            document.getElementById("loading-overlay").hidden = true;
+        }
+
+        function showError(message) {
+            const toast = document.getElementById("toast");
+            toast.textContent = message;
+            toast.hidden = false;
+            setTimeout(() => { toast.hidden = true; }, 4500);
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function formatDate(iso) {
+            if (!iso) return "";
+            try {
+                const d = new Date(iso);
+                return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+            } catch {
+                return "";
+            }
+        }
+
+        async function openBlank() {
+            showLoading("Clearing workbook…");
+            try {
+                await fetch(`${API_BASE}/system/clear`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+                window.location.href = "/workbook";
+            } catch (e) {
+                hideLoading();
+                showError(`Could not start a blank workbook: ${e.message}`);
+            }
+        }
+
+        async function openContinue() {
+            window.location.href = "/workbook";
+        }
+
+        async function applyTemplateAndOpen(templateId, templateName) {
+            showLoading(`Applying “${templateName}”…`);
+            try {
+                const res = await fetch(`${API_BASE}/templates/apply/${encodeURIComponent(templateId)}`, { method: "POST" });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || "Template apply failed.");
+                window.location.href = "/workbook";
+            } catch (e) {
+                hideLoading();
+                showError(`Could not apply template: ${e.message}`);
+            }
+        }
+
+        function renderTemplates(templates) {
+            const grid = document.getElementById("template-grid");
+            const empty = document.getElementById("template-empty");
+            grid.innerHTML = "";
+            if (!templates.length) {
+                grid.hidden = true;
+                empty.hidden = false;
+                return;
+            }
+            grid.hidden = false;
+            empty.hidden = true;
+
+            templates.forEach((tpl) => {
+                const card = document.createElement("div");
+                card.className = "card";
+                const cells = tpl.cell_count != null ? `${tpl.cell_count} cell${tpl.cell_count === 1 ? "" : "s"}` : "";
+                const when = formatDate(tpl.created_at);
+                const tagBits = [cells, when].filter(Boolean).join(" · ");
+                card.innerHTML = `
+                    <div class="card-thumb template"></div>
+                    <div class="card-title">${escapeHtml(tpl.name || tpl.id)}</div>
+                    <div class="card-description">${escapeHtml(tpl.description || "Saved workbook snapshot.")}</div>
+                    <div class="card-meta">
+                        <span>${escapeHtml(tpl.sheet_count != null ? `${tpl.sheet_count} sheet${tpl.sheet_count === 1 ? "" : "s"}` : "")}</span>
+                        <span class="card-tag">${escapeHtml(tagBits)}</span>
+                    </div>
+                `;
+                card.addEventListener("click", () => applyTemplateAndOpen(tpl.id, tpl.name || tpl.id));
+                grid.appendChild(card);
+            });
+        }
+
+        async function loadTemplates() {
+            try {
+                const res = await fetch(`${API_BASE}/templates/list`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Could not list templates.");
+                renderTemplates(data.templates || []);
+            } catch (e) {
+                const grid = document.getElementById("template-grid");
+                grid.innerHTML = `<div class="empty-state">Could not load templates: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        async function loadContinueMeta() {
+            try {
+                const res = await fetch(`${API_BASE}/debug/grid`);
+                const data = await res.json();
+                const cellCount = Object.keys(data.cells || {}).length;
+                const chartCount = (data.charts || []).length;
+                const label = cellCount ? `${cellCount} filled cells` : "empty";
+                document.getElementById("continue-thumb-label").textContent = label;
+                const bits = [];
+                if (cellCount) bits.push(`${cellCount} filled cell${cellCount === 1 ? "" : "s"}`);
+                if (chartCount) bits.push(`${chartCount} chart${chartCount === 1 ? "" : "s"}`);
+                document.getElementById("continue-description").textContent = bits.length
+                    ? `Last state: ${bits.join(", ")}.`
+                    : "No data yet — equivalent to starting blank.";
+            } catch {
+                document.getElementById("continue-thumb-label").textContent = "workbook";
+            }
+        }
+
+        document.getElementById("card-blank").addEventListener("click", openBlank);
+        document.getElementById("card-continue").addEventListener("click", openContinue);
+
+        loadTemplates();
+        loadContinueMeta();
+    </script>
+</body>
+</html>

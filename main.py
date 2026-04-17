@@ -549,7 +549,12 @@ def generate_agent_preview(req: ChatRequest) -> dict:
 
 
 @app.get("/")
-async def serve_frontend():
+async def serve_landing():
+    return FileResponse("static/landing.html")
+
+
+@app.get("/workbook")
+async def serve_workbook():
     return FileResponse("static/index.html")
 
 
@@ -886,7 +891,7 @@ async def get_grid(sheet: Optional[str] = None):
     }
 
 
-@app.get("/workbook")
+@app.get("/api/workbook")
 async def get_workbook():
     return {
         "active_sheet": kernel.active_sheet,
@@ -976,6 +981,27 @@ async def evaluate_formula(req: FormulaRequest):
 async def clear_grid(sheet: Optional[str] = None):
     kernel.clear_unlocked(sheet)
     return {"status": "Success", "sheet": sheet or kernel.active_sheet}
+
+
+@app.post("/system/unlock-all")
+async def unlock_all():
+    """Forcibly clear the locked flag on every cell across every sheet, and drop
+    any empty-locked placeholder cells that have no value/formula."""
+    dropped = 0
+    unlocked = 0
+    for sheet_name, state in kernel.sheets.items():
+        cells = state["cells"]
+        for coords in list(cells.keys()):
+            cell = cells[coords]
+            if not cell.locked:
+                continue
+            if cell.value in (None, "") and not cell.formula:
+                del cells[coords]
+                dropped += 1
+            else:
+                cell.locked = False
+                unlocked += 1
+    return {"status": "Success", "unlocked": unlocked, "dropped": dropped}
 
 
 # ---------- Charts ----------
