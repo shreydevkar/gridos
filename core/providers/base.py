@@ -22,6 +22,7 @@ class ProviderResponse:
     prompt_tokens: Optional[int] = None
     candidates_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
+    finish_reason: Optional[str] = None
     raw: object = field(default=None, repr=False)
 
 

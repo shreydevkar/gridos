@@ -21,7 +21,9 @@ from core.models import AgentIntent, WriteResponse
 from core.providers import (
     AnthropicProvider,
     GeminiProvider,
+    GroqProvider,
     MODEL_CATALOG,
+    OpenRouterProvider,
     Provider,
     ProviderAuthError,
     ProviderTransientError,
@@ -148,10 +150,14 @@ _load_hero_tools()
 PROVIDER_CLASSES: dict[str, type[Provider]] = {
     "gemini": GeminiProvider,
     "anthropic": AnthropicProvider,
+    "groq": GroqProvider,
+    "openrouter": OpenRouterProvider,
 }
 PROVIDER_DISPLAY_NAMES = {
     "gemini": "Google Gemini",
     "anthropic": "Anthropic Claude",
+    "groq": "Groq",
+    "openrouter": "OpenRouter",
 }
 PROVIDERS: dict[str, Provider] = {}
 API_KEYS: dict[str, str] = {}
@@ -180,6 +186,8 @@ def _seed_keys_from_env(keys: dict[str, str]) -> dict[str, str]:
     env_map = {
         "gemini": os.environ.get("GOOGLE_API_KEY"),
         "anthropic": os.environ.get("ANTHROPIC_API_KEY"),
+        "groq": os.environ.get("GROQ_API_KEY"),
+        "openrouter": os.environ.get("OPENROUTER_API_KEY"),
     }
     for pid, env_val in env_map.items():
         if pid not in keys and env_val:
@@ -286,6 +294,7 @@ def call_model(
         "prompt_token_count": response.prompt_tokens,
         "candidates_token_count": response.candidates_tokens,
         "total_token_count": response.total_tokens,
+        "finish_reason": response.finish_reason,
     })
     return response
 
@@ -418,6 +427,25 @@ Proposed macros are NOT saved automatically — the user reviews and approves th
 """.strip()
 
 
+# Router prefers the fastest configured small model — classification is trivial
+# and doesn't need frontier quality. Wall-clock savings are visible on every chat.
+# Ordered fastest-first; first entry whose provider has a key wins.
+_ROUTER_MODEL_PREFERENCE = [
+    ("openai/gpt-oss-20b", "groq"),              # ~1000 tps
+    ("llama-3.1-8b-instant", "groq"),            # ~560 tps
+    ("gemini-3.1-flash-lite-preview", "gemini"), # Google's fastest
+    ("claude-haiku-4-5-20251001", "anthropic"),  # Anthropic's fastest
+]
+
+
+def _pick_router_model(user_choice: Optional[str]) -> Optional[str]:
+    configured = _configured_provider_ids()
+    for mid, pid in _ROUTER_MODEL_PREFERENCE:
+        if pid in configured:
+            return mid
+    return user_choice
+
+
 def route_prompt(prompt: str, history_context: str, model_id: Optional[str] = None) -> str:
     if len(AGENTS) == 1:
         return next(iter(AGENTS))
@@ -440,7 +468,7 @@ Return ONLY the lowercase agent id that best fits the task. No other text.
         "router",
         system_instruction="You are a routing classifier. Respond with only a lowercase agent id.",
         user_message=instruction,
-        model_id=model_id,
+        model_id=_pick_router_model(model_id),
     )
     candidate = res.text.strip().lower().split()[0] if res.text else "general"
     return candidate if candidate in AGENTS else "general"
@@ -521,9 +549,82 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
     return "\n\n".join(sections)
 
 
-def _parse_ai_response(text: str) -> dict:
-    cleaned = text.replace("```json", "").replace("```", "").strip()
-    return json.loads(cleaned)
+def _extract_first_json_object(text: str) -> Optional[str]:
+    """Find the first balanced {...} in text, tolerant of prose prefix/suffix.
+    Handles quoted strings + escape chars so braces inside a JSON string don't
+    confuse the depth counter. Returns None if no complete object is present."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _parse_ai_response(response) -> dict:
+    """Extract JSON payload from a ProviderResponse. Raises HTTPException(422) with
+    a user-actionable message when the model returned empty/malformed output —
+    this is the common Groq/OpenRouter failure mode on complex prompts."""
+    text = (response.text or "").replace("```json", "").replace("```", "").strip()
+
+    finish = response.finish_reason
+    ctx = f"{response.provider_id}/{response.model}"
+    if finish:
+        ctx += f" (finish_reason={finish})"
+
+    if not text:
+        hint = (
+            "hit the output-token cap — try a shorter prompt or a model with more headroom"
+            if finish and ("length" in str(finish).lower() or str(finish).upper() == "MAX_TOKENS")
+            else "returned no content — try a stronger model (Gemini/Claude) or rephrase"
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=f"Model {ctx} {hint}.",
+        )
+
+    # Try a strict parse first; if that fails, dig out the first balanced {...} —
+    # small open models often prepend prose like "Sure! Here's the JSON: {...}".
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    extracted = _extract_first_json_object(text)
+    if extracted:
+        try:
+            return json.loads(extracted)
+        except json.JSONDecodeError:
+            pass
+
+    preview = text[:180].replace("\n", " ")
+    raise HTTPException(
+        status_code=422,
+        detail=(
+            f"Model {ctx} returned non-JSON output — try a stronger model (Gemini/Claude) "
+            f"or rephrase. First bytes: {preview!r}"
+        ),
+    )
 
 
 def _sanitize_plan(raw: Any) -> Optional[dict]:
@@ -603,7 +704,7 @@ def generate_agent_preview(req: ChatRequest) -> dict:
         user_message=req.prompt,
         model_id=req.model_id,
     )
-    ai_data = _parse_ai_response(final_response.text or "")
+    ai_data = _parse_ai_response(final_response)
 
     raw_values = ai_data.get("values")
     raw_target = ai_data.get("target_cell")
@@ -616,8 +717,12 @@ def generate_agent_preview(req: ChatRequest) -> dict:
         any(v not in ("", None) for v in row) for row in raw_values if isinstance(row, list)
     )
 
-    if not has_values and (chart_spec or proposed_macro):
-        # No-cells operation: just a chart update and/or a macro proposal.
+    if not has_values:
+        # No grid write this turn. Covers three cases cleanly:
+        #   1. Pure acknowledgement ("hello" → the agent has no cells to write).
+        #   2. Chart-only / macro-proposal-only turn.
+        #   3. Plan-declaration turn that deferred the first write.
+        # The UI hides the Apply button when values is null and no chart is attached.
         return {
             "category": agent_id,
             "reasoning": ai_data.get("reasoning"),
@@ -638,11 +743,30 @@ def generate_agent_preview(req: ChatRequest) -> dict:
     intent = AgentIntent(
         agent_id=agent_id,
         target_start_a1=raw_target or fallback_target,
-        data_payload=raw_values if isinstance(raw_values, list) and raw_values else [["Error"]],
+        data_payload=raw_values,
         shift_direction="right",
     )
 
     preview = kernel.preview_agent_intent(intent, sheet)
+
+    dep_issues = _find_empty_formula_deps(
+        preview["preview_cells"],
+        kernel._sheet_state(sheet),
+    )
+    if dep_issues:
+        bullets = "\n".join(
+            f"  - {d['cell']} ({d['formula']}) references empty cell(s): {', '.join(d['empty_refs'])}"
+            for d in dep_issues[:5]
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The agent proposed formulas whose inputs are empty — applying would produce "
+                "#DIV/0! or misleading zeros. Re-ask the agent to also populate the referenced "
+                "cells, or fill them yourself first.\n" + bullets
+            ),
+        )
+
     return {
         "category": agent_id,
         "reasoning": ai_data.get("reasoning"),
@@ -734,6 +858,44 @@ async def apply_agent_preview(req: PreviewApplyRequest):
 
 
 _CELL_REF_RE = re.compile(r"[A-Z]+\d+")
+
+
+def _find_empty_formula_deps(preview_cells: list[dict], sheet_state: dict) -> list[dict]:
+    """For each formula-bearing preview cell, flag any cell reference that points
+    at an empty cell in the current sheet AND isn't being populated by this same
+    preview. Catches the '#DIV/0! from an empty baseline' bug class — e.g. the
+    agent writes =GROWTH(C4, C3) but forgets to seed C3."""
+    self_written_nonempty: set[str] = set()
+    for p in preview_cells:
+        v = p.get("value")
+        if v not in (None, ""):
+            self_written_nonempty.add(p["cell"].upper())
+
+    issues: list[dict] = []
+    for p in preview_cells:
+        v = p.get("value")
+        if not isinstance(v, str) or not v.startswith("="):
+            continue
+        empty_refs: list[str] = []
+        for ref in _CELL_REF_RE.findall(v.upper()):
+            if ref in self_written_nonempty:
+                continue
+            try:
+                r, c = a1_to_coords(ref)
+            except ValueError:
+                continue
+            cell = sheet_state["cells"].get((r, c))
+            if cell is None:
+                empty_refs.append(ref)
+            elif cell.value in (None, "") and not cell.formula:
+                empty_refs.append(ref)
+        if empty_refs:
+            issues.append({
+                "cell": p["cell"],
+                "formula": v,
+                "empty_refs": empty_refs,
+            })
+    return issues
 
 
 def _formula_references_text_cell(formula: str, sheet_state: dict) -> list[str]:

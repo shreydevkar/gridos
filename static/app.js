@@ -807,10 +807,29 @@ async function saveProposedMacro(spec, block) {
 
 let previewMessageEl = null;
 
+function freezePreviewCard(outcome) {
+    // Turn the active preview card into a persistent chat history entry:
+    // strip the action buttons, optionally tag it with an outcome badge,
+    // and release the previewMessageEl handle so future renders don't touch it.
+    if (!previewMessageEl) return;
+    previewMessageEl.querySelectorAll(".msg-actions").forEach((el) => el.remove());
+    if (outcome) {
+        const badge = document.createElement("div");
+        badge.className = `preview-outcome preview-outcome-${outcome}`;
+        badge.textContent = outcome === "applied" ? "Applied"
+            : outcome === "dismissed" ? "Dismissed"
+            : outcome === "replaced" ? "Superseded"
+            : outcome;
+        previewMessageEl.prepend(badge);
+    }
+    previewMessageEl = null;
+}
+
 function renderPreviewAsChatMessage() {
-    // Replace any existing preview message with the fresh state.
+    // Freeze the prior preview (keep its reasoning visible as chat history)
+    // before rendering the new one.
     if (previewMessageEl && previewMessageEl.parentElement) {
-        previewMessageEl.remove();
+        freezePreviewCard("replaced");
     }
     previewMessageEl = null;
 
@@ -861,7 +880,11 @@ function renderPreviewAsChatMessage() {
     if (canApply) {
         previewMessageEl.querySelector("#apply-preview-btn")?.addEventListener("click", applyPreview);
     }
-    previewMessageEl.querySelector("#dismiss-preview-btn")?.addEventListener("click", clearPreview);
+    previewMessageEl.querySelector("#dismiss-preview-btn")?.addEventListener("click", () => {
+        freezePreviewCard("dismissed");
+        previewState = null;
+        repaintPreview();
+    });
     wireProposedMacroButtons(previewMessageEl);
 }
 
@@ -1039,13 +1062,11 @@ async function applyPreview() {
         if (!res.ok) throw new Error(data.detail || "Apply failed.");
         if (data.chart_error) {
             addLog("system", escapeHtml(data.chart_error));
-        } else if (values.length) {
-            addLog("agent", `Applied preview into <strong>${escapeHtml(previewState.target_cell)}</strong>.${hasChart ? " Chart added." : ""}`);
-        } else if (hasChart) {
-            addLog("agent", `Chart added.`);
         }
         if (previewState.target_cell) selectedRange = { start: previewState.target_cell, end: previewState.target_cell };
-        clearPreview();
+        freezePreviewCard("applied");
+        previewState = null;
+        repaintPreview();
         await fetchGrid();
         recordAction(before);
         setStatus("Ready");

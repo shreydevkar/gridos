@@ -2,7 +2,7 @@
 
 Each entry: {id, provider, display_name, description}.
 - `id` is the string sent to the provider SDK.
-- `provider` is the short stable provider id ("gemini" | "anthropic").
+- `provider` is the short stable provider id ("gemini" | "anthropic" | "openrouter" | "groq").
 
 Add new models by appending to MODEL_CATALOG. The UI picks them up automatically
 as long as the corresponding provider has a configured API key.
@@ -40,11 +40,67 @@ MODEL_CATALOG: list[dict] = [
         "display_name": "Claude Opus 4.7",
         "description": "Most capable Claude model. Best for complex models.",
     },
+    {
+        "id": "nousresearch/hermes-3-llama-3.1-405b:free",
+        "provider": "openrouter",
+        "display_name": "Hermes 3 Llama 3.1 405B (free)",
+        "description": "Free via OpenRouter. Large 405B reasoning model.",
+    },
+    {
+        "id": "meta-llama/llama-3.3-70b-instruct:free",
+        "provider": "openrouter",
+        "display_name": "Llama 3.3 70B Instruct (free)",
+        "description": "Free via OpenRouter. Strong general-purpose Llama.",
+    },
+    {
+        "id": "meta-llama/llama-3.2-3b-instruct:free",
+        "provider": "openrouter",
+        "display_name": "Llama 3.2 3B Instruct (free)",
+        "description": "Free via OpenRouter. Tiny + fast; good for quick edits.",
+    },
+    {
+        "id": "openrouter/free",
+        "provider": "openrouter",
+        "display_name": "Free Models Router (auto)",
+        "description": "Free via OpenRouter. Auto-routes to a random free model that supports the request.",
+    },
+    {
+        "id": "openai/gpt-oss-120b",
+        "provider": "groq",
+        "display_name": "GPT-OSS 120B (Groq)",
+        "description": "OpenAI open-weights 120B via Groq. Best instruction-following among Groq options.",
+    },
+    {
+        "id": "openai/gpt-oss-20b",
+        "provider": "groq",
+        "display_name": "GPT-OSS 20B (Groq, fast)",
+        "description": "OpenAI open-weights 20B via Groq at ~1000 tps. Fastest Groq model.",
+    },
+    {
+        "id": "qwen/qwen3-32b",
+        "provider": "groq",
+        "display_name": "Qwen3 32B (Groq)",
+        "description": "Qwen3 32B via Groq. Strong at structured output (preview; may change).",
+    },
+    {
+        "id": "llama-3.3-70b-versatile",
+        "provider": "groq",
+        "display_name": "Llama 3.3 70B (Groq)",
+        "description": "Llama 3.3 70B via Groq. Capable but sometimes prefaces JSON with prose.",
+    },
+    {
+        "id": "llama-3.1-8b-instant",
+        "provider": "groq",
+        "display_name": "Llama 3.1 8B (Groq, instant)",
+        "description": "Llama 3.1 8B via Groq. Tiny + extremely fast; good for router/classifier calls.",
+    },
 ]
 
 _FALLBACK_BY_PROVIDER = {
     "gemini": "gemini-3.1-flash-lite-preview",
     "anthropic": "claude-haiku-4-5-20251001",
+    "groq": "openai/gpt-oss-120b",
+    "openrouter": "openrouter/free",
 }
 
 
@@ -61,4 +117,8 @@ def default_model_id(available_providers: set[str]) -> Optional[str]:
         return _FALLBACK_BY_PROVIDER["gemini"]
     if "anthropic" in available_providers:
         return _FALLBACK_BY_PROVIDER["anthropic"]
+    if "groq" in available_providers:
+        return _FALLBACK_BY_PROVIDER["groq"]
+    if "openrouter" in available_providers:
+        return _FALLBACK_BY_PROVIDER["openrouter"]
     return None

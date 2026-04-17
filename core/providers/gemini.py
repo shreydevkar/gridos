@@ -26,6 +26,12 @@ class GeminiProvider(Provider):
             config=config,
         )
         usage = getattr(response, "usage_metadata", None)
+        finish_reason = None
+        candidates = getattr(response, "candidates", None) or []
+        if candidates:
+            fr = getattr(candidates[0], "finish_reason", None)
+            if fr is not None:
+                finish_reason = getattr(fr, "name", None) or str(fr)
         return ProviderResponse(
             text=response.text or "",
             model=model,
@@ -33,5 +39,6 @@ class GeminiProvider(Provider):
             prompt_tokens=getattr(usage, "prompt_token_count", None) if usage else None,
             candidates_tokens=getattr(usage, "candidates_token_count", None) if usage else None,
             total_tokens=getattr(usage, "total_token_count", None) if usage else None,
+            finish_reason=finish_reason,
             raw=response,
         )

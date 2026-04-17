@@ -58,6 +58,7 @@ class AnthropicProvider(Provider):
             prompt_tokens=input_tokens,
             candidates_tokens=output_tokens,
             total_tokens=total,
+            finish_reason=getattr(response, "stop_reason", None),
             raw=response,
         )
 
