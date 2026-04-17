@@ -102,6 +102,11 @@ Open http://127.0.0.1:8000. The model picker in the chat composer lists every mo
 
 Add more by editing `core/providers/catalog.py`.
 
+## GridOS UI Pictures:
+<img width="1920" height="1095" alt="Screenshot 2026-04-17 171916" src="https://github.com/user-attachments/assets/2b69ef11-69b0-4fce-8415-b29166e3dbd3" />
+
+<img width="1898" height="1085" alt="Screenshot 2026-04-17 172353" src="https://github.com/user-attachments/assets/0a8c4972-da67-433d-bc99-fa19f8fd3aed" />
+
 ## Roadmap
 
 - [x] Deterministic core — grid memory, locking, collision resolution
