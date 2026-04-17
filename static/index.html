@@ -382,6 +382,22 @@
             width: 100% !important;
             height: 100% !important;
         }
+        .chart-overlay.minimized {
+            height: auto !important;
+            width: auto !important;
+            min-width: 160px;
+            max-width: 260px;
+        }
+        .chart-overlay.minimized .chart-overlay-canvas-wrap {
+            display: none;
+        }
+        .chart-overlay.minimized .chart-overlay-header {
+            border-bottom: none;
+        }
+        .chart-overlay.flash-highlight {
+            box-shadow: 0 0 0 3px #1a73e8, 0 6px 18px rgba(16, 24, 40, 0.2);
+            transition: box-shadow 0.4s ease;
+        }
 
         /* ===== Charts panel ===== */
         .charts-panel {

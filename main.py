@@ -149,6 +149,8 @@ If the user asks for a chart/graph/visualization, also fill in chart_spec:
     "orientation": "columns"      // "columns" = first column is labels (typical); "rows" = first row is labels
 }
 Omit chart_spec (leave as null) when the user is only writing data or editing cells.
+
+If the user wants to MOVE, RESIZE, RETYPE, or RENAME an EXISTING chart (e.g. "place the performance chart at F16", "make the scores chart a pie"), reuse the SAME title as the existing chart in chart_spec — the system will update it in place. In that case set "values": null and set "target_cell" to the new anchor_cell. Do NOT invent placeholder data.
 """.strip()
 
 
@@ -185,11 +187,22 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
         if bounds else "Occupied region: empty"
     )
 
+    existing_charts = kernel.list_charts(req.sheet or kernel.active_sheet)
+    if existing_charts:
+        chart_lines = [
+            f"- \"{c.get('title') or '(untitled)'}\" ({c.get('chart_type')}, range {c.get('data_range')}, anchor {c.get('anchor_cell')})"
+            for c in existing_charts
+        ]
+        charts_section = "EXISTING CHARTS ON THIS SHEET (reuse the same title in chart_spec to update one):\n" + "\n".join(chart_lines)
+    else:
+        charts_section = "EXISTING CHARTS ON THIS SHEET: none"
+
     sections = [
         BASE_SYSTEM_RULES,
         f"ACTIVE SHEET: {req.sheet or kernel.active_sheet}\nVIEW SCOPE: {scope_line}\nSELECTED CELLS: {selected_summary}\n{bounds_line}",
         f"CELL METADATA (a1 -> {{val, locked, type}}):\n{context['cell_metadata_json']}",
         f"READABLE GRID STATE:\n{context['formatted_data']}",
+        charts_section,
     ]
 
     if req.history:
@@ -224,10 +237,35 @@ def generate_agent_preview(req: ChatRequest) -> dict:
     )
     ai_data = _parse_ai_response(final_response.text or "")
 
+    raw_values = ai_data.get("values")
+    raw_target = ai_data.get("target_cell")
+    chart_spec = ai_data.get("chart_spec")
+    fallback_target = req.selected_cells[0] if req.selected_cells else "A1"
+
+    has_values = isinstance(raw_values, list) and any(
+        any(v not in ("", None) for v in row) for row in raw_values if isinstance(row, list)
+    )
+
+    if not has_values and chart_spec:
+        # Chart-only operation: no cells to write, skip the preview intent.
+        return {
+            "category": agent_id,
+            "reasoning": ai_data.get("reasoning"),
+            "sheet": sheet,
+            "scope": req.scope,
+            "selected_cells": req.selected_cells,
+            "agent_id": agent_id,
+            "target_cell": raw_target or fallback_target,
+            "original_request": raw_target or fallback_target,
+            "preview_cells": [],
+            "values": None,
+            "chart_spec": chart_spec,
+        }
+
     intent = AgentIntent(
         agent_id=agent_id,
-        target_start_a1=ai_data.get("target_cell", req.selected_cells[0] if req.selected_cells else "C2"),
-        data_payload=ai_data.get("values", [["Error"]]),
+        target_start_a1=raw_target or fallback_target,
+        data_payload=raw_values if isinstance(raw_values, list) and raw_values else [["Error"]],
         shift_direction="right",
     )
 
@@ -242,8 +280,8 @@ def generate_agent_preview(req: ChatRequest) -> dict:
         "target_cell": preview["actual_target"],
         "original_request": preview["original_target"],
         "preview_cells": preview["preview_cells"],
-        "values": ai_data.get("values"),
-        "chart_spec": ai_data.get("chart_spec"),
+        "values": raw_values,
+        "chart_spec": chart_spec,
     }
 
 
@@ -353,8 +391,10 @@ async def chat_chain(req: ChainRequest):
             )
             preview = generate_agent_preview(chat_req)
             values = preview["values"] or [[""]]
+            chart_spec = preview.get("chart_spec")
+            is_chart_only = preview["values"] is None and chart_spec is not None
 
-            if _is_completion_signal(values):
+            if _is_completion_signal(values) and not is_chart_only:
                 steps.append({
                     "iteration": iteration,
                     "agent_id": preview["agent_id"],
@@ -366,21 +406,26 @@ async def chat_chain(req: ChainRequest):
                 })
                 break
 
-            intent = AgentIntent(
-                agent_id=preview["agent_id"],
-                target_start_a1=preview["original_request"],
-                data_payload=values,
-                shift_direction="right",
-            )
-            _, actual_target = kernel.process_agent_intent(intent, sheet)
-            observations = _observe_written_cells(preview["preview_cells"], sheet)
-            formula_observations = [o for o in observations if o["formula"]]
+            if is_chart_only:
+                actual_target = preview["original_request"]
+                observations = []
+                formula_observations = []
+            else:
+                intent = AgentIntent(
+                    agent_id=preview["agent_id"],
+                    target_start_a1=preview["original_request"],
+                    data_payload=values,
+                    shift_direction="right",
+                )
+                _, actual_target = kernel.process_agent_intent(intent, sheet)
+                observations = _observe_written_cells(preview["preview_cells"], sheet)
+                formula_observations = [o for o in observations if o["formula"]]
 
             chart = None
             chart_error = None
-            if preview.get("chart_spec"):
+            if chart_spec:
                 try:
-                    chart = kernel.add_chart(preview["chart_spec"], sheet_name=sheet)
+                    chart = kernel.add_chart(chart_spec, sheet_name=sheet)
                 except Exception as e:
                     chart_error = str(e)
 

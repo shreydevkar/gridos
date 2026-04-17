@@ -416,6 +416,17 @@ class GridOSKernel:
     def add_chart(self, spec: dict, sheet_name: str | None = None) -> dict:
         state = self._sheet_state(sheet_name)
         payload = dict(spec)
+        title = (payload.get("title") or "").strip()
+
+        if not payload.get("id") and title:
+            for idx, existing in enumerate(state["charts"]):
+                if (existing.title or "").strip().lower() == title.lower():
+                    merged = existing.model_dump()
+                    merged.update({k: v for k, v in payload.items() if v is not None})
+                    updated = ChartSpec(**merged)
+                    state["charts"][idx] = updated
+                    return updated.model_dump()
+
         if not payload.get("id"):
             payload["id"] = f"chart_{uuid.uuid4().hex[:8]}"
         chart = ChartSpec(**payload)

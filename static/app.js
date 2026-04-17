@@ -36,6 +36,7 @@ let activeCellId = null;
 let sheetCharts = [];
 const chartInstances = new Map();
 const chartOverlayEls = new Map();
+const minimizedChartIds = new Set();
 let editingChartId = null;
 const CHART_PALETTE = ["#4285f4", "#ea4335", "#fbbc04", "#34a853", "#a142f4", "#00acc1", "#ff7043", "#8d6e63"];
 
@@ -1421,8 +1422,32 @@ function positionChartOverlay(el, spec) {
     el.style.display = "flex";
     el.style.left = `${anchor.offsetLeft}px`;
     el.style.top = `${anchor.offsetTop}px`;
-    el.style.width = `${spec.width || 400}px`;
-    el.style.height = `${spec.height || 280}px`;
+    if (minimizedChartIds.has(spec.id)) {
+        el.style.width = "";
+        el.style.height = "";
+    } else {
+        el.style.width = `${spec.width || 400}px`;
+        el.style.height = `${spec.height || 280}px`;
+    }
+}
+
+function setChartMinimized(id, minimized) {
+    const overlay = chartOverlayEls.get(id);
+    if (!overlay) return;
+    if (minimized) minimizedChartIds.add(id);
+    else minimizedChartIds.delete(id);
+    overlay.classList.toggle("minimized", minimized);
+    const btn = overlay.querySelector(".chart-overlay-btn.minimize");
+    if (btn) {
+        btn.textContent = minimized ? "▢" : "–";
+        btn.title = minimized ? "Restore chart" : "Minimize chart";
+    }
+    const spec = sheetCharts.find(c => c.id === id);
+    if (spec) positionChartOverlay(overlay, spec);
+    const inst = chartInstances.get(id);
+    if (inst && !minimized) {
+        requestAnimationFrame(() => inst.resize());
+    }
 }
 
 function destroyChartInstance(id) {
@@ -1436,6 +1461,11 @@ function destroyChartInstance(id) {
     chartOverlayEls.delete(id);
 }
 
+function pruneMinimizedIds() {
+    const keep = new Set(sheetCharts.map(c => c.id));
+    Array.from(minimizedChartIds).forEach(id => { if (!keep.has(id)) minimizedChartIds.delete(id); });
+}
+
 function renderSingleChart(spec) {
     const layer = document.getElementById("chart-layer");
     if (!layer || typeof Chart === "undefined") return;
@@ -1445,6 +1475,7 @@ function renderSingleChart(spec) {
     const overlay = document.createElement("div");
     overlay.className = "chart-overlay";
     overlay.dataset.chartId = spec.id;
+    if (minimizedChartIds.has(spec.id)) overlay.classList.add("minimized");
 
     const header = document.createElement("div");
     header.className = "chart-overlay-header";
@@ -1454,6 +1485,13 @@ function renderSingleChart(spec) {
     titleEl.title = `${spec.data_range} · ${spec.chart_type}`;
     const actions = document.createElement("div");
     actions.className = "chart-overlay-actions";
+    const minBtn = document.createElement("button");
+    minBtn.className = "chart-overlay-btn minimize";
+    minBtn.type = "button";
+    const startsMinimized = minimizedChartIds.has(spec.id);
+    minBtn.textContent = startsMinimized ? "▢" : "–";
+    minBtn.title = startsMinimized ? "Restore chart" : "Minimize chart";
+    minBtn.addEventListener("click", () => setChartMinimized(spec.id, !minimizedChartIds.has(spec.id)));
     const editBtn = document.createElement("button");
     editBtn.className = "chart-overlay-btn";
     editBtn.type = "button";
@@ -1465,6 +1503,7 @@ function renderSingleChart(spec) {
     closeBtn.textContent = "×";
     closeBtn.title = "Delete chart";
     closeBtn.addEventListener("click", () => deleteChartById(spec.id));
+    actions.appendChild(minBtn);
     actions.appendChild(editBtn);
     actions.appendChild(closeBtn);
     header.appendChild(titleEl);
@@ -1532,7 +1571,30 @@ function renderCharts() {
     Array.from(chartInstances.keys()).forEach(id => {
         if (!keepIds.has(id)) destroyChartInstance(id);
     });
+    pruneMinimizedIds();
     sheetCharts.forEach(spec => renderSingleChart(spec));
+}
+
+function revealChart(spec) {
+    if (!spec) return;
+    if (minimizedChartIds.has(spec.id)) setChartMinimized(spec.id, false);
+    const anchor = cellEls.get(spec.anchor_cell);
+    const wrap = document.getElementById("sheet-wrap");
+    if (anchor && wrap) {
+        const wrapRect = wrap.getBoundingClientRect();
+        const anchorRect = anchor.getBoundingClientRect();
+        const targetLeft = wrap.scrollLeft + (anchorRect.left - wrapRect.left) - 40;
+        const targetTop = wrap.scrollTop + (anchorRect.top - wrapRect.top) - 40;
+        wrap.scrollTo({ left: Math.max(0, targetLeft), top: Math.max(0, targetTop), behavior: "smooth" });
+        setSelection(spec.anchor_cell, spec.anchor_cell);
+    }
+    const overlay = chartOverlayEls.get(spec.id);
+    if (overlay) {
+        overlay.classList.remove("flash-highlight");
+        void overlay.offsetWidth;
+        overlay.classList.add("flash-highlight");
+        setTimeout(() => overlay.classList.remove("flash-highlight"), 1200);
+    }
 }
 
 function refreshChartsList() {
@@ -1550,11 +1612,18 @@ function refreshChartsList() {
         li.className = "charts-list-item";
         const name = document.createElement("div");
         name.innerHTML = `<strong>${escapeHtml(spec.title || "(untitled)")}</strong>`;
+        name.style.cursor = "pointer";
+        name.title = "Jump to chart";
+        name.addEventListener("click", () => revealChart(spec));
         const meta = document.createElement("div");
         meta.className = "meta";
         meta.textContent = `${spec.chart_type} · ${spec.data_range} · anchor ${spec.anchor_cell}`;
         const actions = document.createElement("div");
         actions.className = "actions";
+        const jumpBtn = document.createElement("button");
+        jumpBtn.type = "button";
+        jumpBtn.textContent = "Jump";
+        jumpBtn.addEventListener("click", () => revealChart(spec));
         const editBtn = document.createElement("button");
         editBtn.type = "button";
         editBtn.textContent = "Edit";
@@ -1564,6 +1633,7 @@ function refreshChartsList() {
         delBtn.textContent = "Delete";
         delBtn.className = "danger";
         delBtn.addEventListener("click", () => deleteChartById(spec.id));
+        actions.appendChild(jumpBtn);
         actions.appendChild(editBtn);
         actions.appendChild(delBtn);
         li.appendChild(name);
