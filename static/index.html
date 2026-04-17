@@ -126,6 +126,35 @@
             letter-spacing: -0.01em;
         }
 
+        .workbook-title {
+            display: flex;
+            align-items: center;
+            margin-right: 8px;
+            padding-right: 8px;
+            border-right: 1px solid var(--border-soft);
+            height: 100%;
+        }
+        .workbook-title-input {
+            font: inherit;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text);
+            background: transparent;
+            border: 1px solid transparent;
+            border-radius: var(--radius-sm);
+            padding: 4px 8px;
+            max-width: 240px;
+            min-width: 120px;
+            text-overflow: ellipsis;
+            outline: none;
+        }
+        .workbook-title-input:hover { background: #f1f3f4; }
+        .workbook-title-input:focus {
+            background: #fff;
+            border-color: #1a73e8;
+            box-shadow: 0 0 0 1px #1a73e8;
+        }
+
         .menubar-menu-group {
             position: relative;
             display: flex;
@@ -401,7 +430,8 @@
 
         /* ===== Charts panel ===== */
         .charts-panel {
-            width: 280px;
+            width: 340px;
+            flex-shrink: 0;
             border-left: 1px solid var(--border-soft);
             background: #fff;
             display: flex;
@@ -413,8 +443,14 @@
             display: flex;
             align-items: flex-start;
             justify-content: space-between;
+            gap: 10px;
             padding: 12px 14px;
             border-bottom: 1px solid var(--border-soft);
+        }
+        .charts-panel-header > div { flex: 1; min-width: 0; }
+        .charts-panel-subtitle {
+            white-space: normal;
+            overflow-wrap: break-word;
         }
         .charts-panel-header h3 { margin: 0; font-size: 14px; }
         .charts-panel-subtitle {
@@ -614,6 +650,31 @@
             flex-direction: column;
             gap: 4px;
             font-size: 12px;
+        }
+        .library-list-item.is-preset {
+            border-left: 3px solid #1a73e8;
+            background: #f4f8ff;
+        }
+        .library-list-item .author-badge {
+            display: inline-block;
+            font-size: 10px;
+            font-weight: 500;
+            padding: 1px 7px;
+            border-radius: 999px;
+            margin-left: 6px;
+            vertical-align: middle;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+        }
+        .library-list-item .author-badge.preset {
+            background: #e8f0fe;
+            color: #1a73e8;
+            border: 1px solid #c6dafc;
+        }
+        .library-list-item .author-badge.user {
+            background: #e6f4ea;
+            color: #137333;
+            border: 1px solid #ceead6;
         }
         .library-list-item .meta {
             color: #5f6368;
@@ -1081,6 +1142,20 @@
             height: var(--menubar-h);
             flex-shrink: 0;
         }
+
+        /* Top-left close button shared by toggleable panels (assistant, charts) */
+        .closing-x {
+            width: 22px;
+            height: 22px;
+            padding: 0;
+            display: grid;
+            place-items: center;
+            color: var(--text-muted);
+            border-radius: 4px;
+            flex-shrink: 0;
+        }
+        .closing-x svg { width: 14px; height: 14px; }
+        .closing-x:hover { background: var(--bg); color: #202124; }
 
         .assistant-header-title {
             display: flex;
@@ -1558,6 +1633,9 @@
                     <div class="menubar-logo">GO</div>
                     <h1>GridOS</h1>
                 </a>
+                <div class="workbook-title">
+                    <input class="workbook-title-input" id="workbook-title-input" type="text" spellcheck="false" autocomplete="off" placeholder="Untitled workbook" title="Rename workbook" />
+                </div>
                 <div class="menubar-menu-group">
                     <button class="menubar-menu-btn" data-menu="file" type="button">File</button>
                     <ul class="menu-dropdown" id="menu-file" role="menu">
@@ -1682,7 +1760,7 @@
                     <button class="icon-btn" id="chat-clear" type="button" title="Clear conversation">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
                     </button>
-                    <button class="icon-btn" id="assistant-close" type="button" title="Close assistant">
+                    <button class="icon-btn closing-x" id="assistant-close" type="button" title="Close assistant">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                     </button>
                 </div>
@@ -1728,7 +1806,7 @@
                     <h3>Charts</h3>
                     <p class="charts-panel-subtitle" id="charts-panel-subtitle">No charts on this sheet yet.</p>
                 </div>
-                <button class="icon-btn" id="charts-panel-close" type="button" title="Close charts panel">
+                <button class="icon-btn closing-x" id="charts-panel-close" type="button" title="Close charts panel">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
             </div>

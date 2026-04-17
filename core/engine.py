@@ -199,6 +199,11 @@ class _ExpressionEvaluator:
             return 1.0 if value else 0.0
         if isinstance(value, (int, float)):
             return float(value)
+        if isinstance(value, str):
+            try:
+                return float(value.strip())
+            except ValueError:
+                return 0.0
         return 0.0
 
 
@@ -208,7 +213,17 @@ class GridOSKernel:
         self.sheets: dict[str, dict] = {}
         self.sheet_order: list[str] = []
         self.active_sheet = "Sheet1"
+        self.workbook_name: str = "Untitled workbook"
         self._ensure_sheet(self.active_sheet)
+
+    def rename_workbook(self, new_name: str) -> str:
+        cleaned = (new_name or "").strip()
+        if not cleaned:
+            raise ValueError("Workbook name cannot be empty.")
+        if len(cleaned) > 120:
+            raise ValueError("Workbook name must be 120 characters or fewer.")
+        self.workbook_name = cleaned
+        return cleaned
 
     @property
     def cells(self):
@@ -359,8 +374,7 @@ class GridOSKernel:
                 if existing and existing.locked:
                     raise ValueError(f"Cell {coords_to_a1(*coords)} is locked.")
 
-        normalized = [[self._normalize_user_value(value) for value in row] for row in payload]
-        self._commit_write(start_r, start_c, normalized, user_id, sheet_name)
+        self._commit_write(start_r, start_c, payload, user_id, sheet_name)
         return target_a1
 
     def _commit_write(self, start_r: int, start_c: int, payload: list[list], agent_id: str, sheet_name: str | None = None):
@@ -368,10 +382,11 @@ class GridOSKernel:
         cells = state["cells"]
 
         for r_offset, row_data in enumerate(payload):
-            for c_offset, val in enumerate(row_data):
+            for c_offset, raw_val in enumerate(row_data):
                 r = start_r + r_offset
                 c = start_c + c_offset
 
+                val = self._normalize_user_value(raw_val)
                 computed_val = val
                 formula_str = None
 
@@ -529,6 +544,7 @@ class GridOSKernel:
 
     def export_state_dict(self) -> dict:
         return {
+            "workbook_name": self.workbook_name,
             "active_sheet": self.active_sheet,
             "sheet_order": self.sheet_order,
             "sheets": {
@@ -557,6 +573,11 @@ class GridOSKernel:
         return True
 
     def apply_state_dict(self, import_data: dict):
+        imported_name = import_data.get("workbook_name")
+        if isinstance(imported_name, str) and imported_name.strip():
+            self.workbook_name = imported_name.strip()[:120]
+        elif "workbook_name" in import_data:
+            self.workbook_name = "Untitled workbook"
         if "sheets" in import_data:
             self.sheets = {}
             import_order = import_data.get("sheet_order", list(import_data["sheets"].keys()))

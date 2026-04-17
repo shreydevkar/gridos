@@ -1,0 +1,111 @@
+{
+  "id": "loan-amortization",
+  "name": "Loan Amortization",
+  "description": "12-month amortization starter with principal, rate, term, and month-by-month interest/principal/balance columns.",
+  "author": "GridOS",
+  "created_at": "2026-04-17T05:00:03.000000+00:00",
+  "state": {
+    "active_sheet": "Sheet1",
+    "sheet_order": ["Sheet1"],
+    "sheets": {
+      "Sheet1": {
+        "cells": {
+          "B2": {"value": "Loan Amortization", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+
+          "B4": {"value": "Principal", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C4": {"value": 100000, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "B5": {"value": "Annual Rate", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C5": {"value": 0.06, "formula": null, "datatype": "float", "locked": false, "agent_owner": "finance"},
+          "B6": {"value": "Term (months)", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C6": {"value": 12, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "B7": {"value": "Monthly Payment", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C7": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B9": {"value": "Month", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C9": {"value": "Payment", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "D9": {"value": "Interest", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "E9": {"value": "Principal", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "F9": {"value": "Balance", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+
+          "B10": {"value": 1, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C10": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D10": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E10": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F10": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B11": {"value": 2, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C11": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D11": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E11": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F11": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B12": {"value": 3, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C12": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D12": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E12": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F12": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B13": {"value": 4, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C13": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D13": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E13": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F13": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B14": {"value": 5, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C14": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D14": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E14": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F14": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B15": {"value": 6, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C15": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D15": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E15": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F15": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B16": {"value": 7, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C16": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D16": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E16": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F16": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B17": {"value": 8, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C17": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D17": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E17": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F17": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B18": {"value": 9, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C18": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D18": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E18": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F18": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B19": {"value": 10, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C19": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D19": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E19": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F19": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B20": {"value": 11, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C20": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D20": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E20": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F20": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B21": {"value": 12, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "C21": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D21": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E21": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F21": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B23": {"value": "Totals", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C23": {"value": 0, "formula": "=SUM(C10:C21)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+          "D23": {"value": 0, "formula": "=SUM(D10:D21)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+          "E23": {"value": 0, "formula": "=SUM(E10:E21)", "datatype": "float", "locked": false, "agent_owner": "finance"}
+        },
+        "charts": []
+      }
+    }
+  }
+}

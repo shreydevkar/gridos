@@ -125,7 +125,42 @@ async function fetchWorkbook() {
     workbook = await res.json();
     const activePill = document.getElementById("active-sheet-pill");
     if (activePill) activePill.textContent = workbook.active_sheet;
+    syncWorkbookTitleInput();
     renderTabs();
+}
+
+function syncWorkbookTitleInput() {
+    const input = document.getElementById("workbook-title-input");
+    const name = workbook.workbook_name || "Untitled workbook";
+    document.title = `${name} — GridOS`;
+    if (!input) return;
+    if (document.activeElement === input) return;
+    input.value = name;
+}
+
+async function commitWorkbookName(newName) {
+    const cleaned = (newName || "").trim();
+    const current = workbook.workbook_name || "Untitled workbook";
+    if (!cleaned || cleaned === current) {
+        syncWorkbookTitleInput();
+        return;
+    }
+    try {
+        const res = await fetch(`${API_BASE}/workbook/rename`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: cleaned }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not rename workbook.");
+        workbook.workbook_name = data.workbook_name;
+        syncWorkbookTitleInput();
+        document.title = `${data.workbook_name} — GridOS`;
+        addLog("system", `Workbook renamed to ${escapeHtml(data.workbook_name)}.`);
+    } catch (error) {
+        addLog("system", escapeHtml(`Rename failed: ${error.message}`));
+        syncWorkbookTitleInput();
+    }
 }
 
 async function activateSheet(name) {
@@ -783,6 +818,9 @@ function renderPreviewAsChatMessage() {
         ? `${previewState.preview_cells[0].cell} → ${previewState.preview_cells[previewState.preview_cells.length - 1].cell}`
         : previewState.target_cell;
     const hasValues = Array.isArray(previewState.values) && previewState.values.length > 0;
+    const hasChart = Boolean(previewState.chart_spec);
+    const canApply = hasValues || hasChart;
+    const applyLabel = hasValues ? "Apply" : "Add chart";
 
     const macroError = previewState.macro_error
         ? `<div style="margin-top:8px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(previewState.macro_error)}</div>`
@@ -790,9 +828,9 @@ function renderPreviewAsChatMessage() {
     const macroBlock = renderProposedMacroBlock(previewState.proposed_macro, { idSuffix: "card" });
     const planBlock = renderPlanBlock(previewState.plan);
 
-    const actionsRow = hasValues
+    const actionsRow = canApply
         ? `<div class="msg-actions">
-            <button class="primary-btn" id="apply-preview-btn">Apply</button>
+            <button class="primary-btn" id="apply-preview-btn">${escapeHtml(applyLabel)}</button>
             <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
         </div>`
         : `<div class="msg-actions">
@@ -817,7 +855,7 @@ function renderPreviewAsChatMessage() {
 
     previewMessageEl = addLog("agent", html);
 
-    if (hasValues) {
+    if (canApply) {
         previewMessageEl.querySelector("#apply-preview-btn")?.addEventListener("click", applyPreview);
     }
     previewMessageEl.querySelector("#dismiss-preview-btn")?.addEventListener("click", clearPreview);
@@ -976,21 +1014,32 @@ function renderChainSteps(data) {
 async function applyPreview() {
     if (!previewState) return;
     const before = snapshotGrid();
+    const values = Array.isArray(previewState.values) ? previewState.values : [];
+    const targetCell = previewState.original_request || previewState.target_cell || "A1";
+    const hasChart = Boolean(previewState.chart_spec);
     try {
         setStatus("Applying");
-        await fetch(`${API_BASE}/agent/apply`, {
+        const res = await fetch(`${API_BASE}/agent/apply`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 sheet: workbook.active_sheet,
                 agent_id: previewState.agent_id,
-                target_cell: previewState.original_request || previewState.target_cell,
-                values: previewState.values,
+                target_cell: targetCell,
+                values: values,
                 shift_direction: "right",
                 chart_spec: previewState.chart_spec || null,
             }),
         });
-        addLog("agent", `Applied preview into <strong>${escapeHtml(previewState.target_cell)}</strong>.${previewState.chart_spec ? " Chart added." : ""}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || "Apply failed.");
+        if (data.chart_error) {
+            addLog("system", escapeHtml(data.chart_error));
+        } else if (values.length) {
+            addLog("agent", `Applied preview into <strong>${escapeHtml(previewState.target_cell)}</strong>.${hasChart ? " Chart added." : ""}`);
+        } else if (hasChart) {
+            addLog("agent", `Chart added.`);
+        }
         if (previewState.target_cell) selectedRange = { start: previewState.target_cell, end: previewState.target_cell };
         clearPreview();
         await fetchGrid();
@@ -1689,8 +1738,12 @@ async function refreshTemplateList() {
 function renderTemplateItem(tpl) {
     const li = document.createElement("li");
     li.className = "library-list-item";
+    const author = tpl.author || "You";
+    const isPreset = author !== "You";
+    if (isPreset) li.classList.add("is-preset");
     const name = document.createElement("div");
-    name.innerHTML = `<strong>${escapeHtml(tpl.name || tpl.id)}</strong>`;
+    const badgeClass = isPreset ? "author-badge preset" : "author-badge user";
+    name.innerHTML = `<strong>${escapeHtml(tpl.name || tpl.id)}</strong> <span class="${badgeClass}">${escapeHtml(author)}</span>`;
     const meta = document.createElement("div");
     meta.className = "meta";
     const when = tpl.created_at ? new Date(tpl.created_at).toLocaleString() : "unknown";
@@ -2438,6 +2491,21 @@ async function bootstrap() {
     document.getElementById("load-btn").addEventListener("click", loadWorkbook);
     document.getElementById("undo-btn").addEventListener("click", undo);
     document.getElementById("redo-btn").addEventListener("click", redo);
+
+    const titleInput = document.getElementById("workbook-title-input");
+    if (titleInput) {
+        titleInput.addEventListener("blur", () => commitWorkbookName(titleInput.value));
+        titleInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                titleInput.blur();
+            } else if (event.key === "Escape") {
+                event.preventDefault();
+                syncWorkbookTitleInput();
+                titleInput.blur();
+            }
+        });
+    }
 
     document.querySelectorAll(".chip[data-scope]").forEach((button) => {
         button.addEventListener("click", () => setScope(button.dataset.scope));

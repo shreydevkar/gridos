@@ -254,6 +254,10 @@ class SheetActivateRequest(BaseModel):
     name: str
 
 
+class WorkbookRenameRequest(BaseModel):
+    name: str
+
+
 # ---------- Agent routing & prompts ----------
 
 
@@ -894,9 +898,19 @@ async def get_grid(sheet: Optional[str] = None):
 @app.get("/api/workbook")
 async def get_workbook():
     return {
+        "workbook_name": kernel.workbook_name,
         "active_sheet": kernel.active_sheet,
         "sheets": kernel.list_sheets(),
     }
+
+
+@app.post("/workbook/rename")
+async def rename_workbook(req: WorkbookRenameRequest):
+    try:
+        name = kernel.rename_workbook(req.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"workbook_name": name}
 
 
 @app.post("/workbook/sheet")
@@ -951,7 +965,9 @@ async def load_grid():
 @app.get("/system/export")
 async def export_workbook():
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    filename = f"gridos-workbook-{timestamp}.gridos"
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "-" for c in kernel.workbook_name).strip() or "workbook"
+    safe_name = safe_name.replace(" ", "_")
+    filename = f"{safe_name}-{timestamp}.gridos"
     body = json.dumps(kernel.export_state_dict(), indent=2)
     return Response(
         content=body,
@@ -1115,6 +1131,7 @@ async def save_template(req: TemplateSaveRequest):
         "id": candidate,
         "name": req.name.strip(),
         "description": (req.description or "").strip(),
+        "author": "You",
         "created_at": created_at,
         "state": kernel.export_state_dict(),
     }
@@ -1134,6 +1151,7 @@ def _template_summary(payload: dict) -> dict:
         "id": payload.get("id"),
         "name": payload.get("name"),
         "description": payload.get("description", ""),
+        "author": payload.get("author") or "You",
         "created_at": payload.get("created_at"),
         "sheet_count": len(sheets),
         "cell_count": cell_count,

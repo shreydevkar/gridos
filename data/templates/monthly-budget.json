@@ -1,0 +1,79 @@
+{
+  "id": "monthly-budget",
+  "name": "Monthly Budget",
+  "description": "Personal budget with 3-month tracker, category totals, and net savings line.",
+  "author": "GridOS",
+  "created_at": "2026-04-17T05:00:01.000000+00:00",
+  "state": {
+    "active_sheet": "Sheet1",
+    "sheet_order": ["Sheet1"],
+    "sheets": {
+      "Sheet1": {
+        "cells": {
+          "B2": {"value": "Monthly Budget", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+
+          "B4": {"value": "Category", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C4": {"value": "Jan", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "D4": {"value": "Feb", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "E4": {"value": "Mar", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "F4": {"value": "Total", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+
+          "B5": {"value": "Income", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C5": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D5": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E5": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F5": {"value": 0, "formula": "=SUM(C5:E5)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B6": {"value": "Rent / Mortgage", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C6": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D6": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E6": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F6": {"value": 0, "formula": "=SUM(C6:E6)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B7": {"value": "Groceries", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C7": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D7": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E7": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F7": {"value": 0, "formula": "=SUM(C7:E7)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B8": {"value": "Transportation", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C8": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D8": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E8": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F8": {"value": 0, "formula": "=SUM(C8:E8)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B9": {"value": "Utilities", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C9": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D9": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E9": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F9": {"value": 0, "formula": "=SUM(C9:E9)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B10": {"value": "Entertainment", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C10": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D10": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E10": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F10": {"value": 0, "formula": "=SUM(C10:E10)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B11": {"value": "Other", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C11": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "D11": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "E11": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "F11": {"value": 0, "formula": "=SUM(C11:E11)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B13": {"value": "Total Expenses", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C13": {"value": 0, "formula": "=SUM(C6:C11)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+          "D13": {"value": 0, "formula": "=SUM(D6:D11)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+          "E13": {"value": 0, "formula": "=SUM(E6:E11)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+          "F13": {"value": 0, "formula": "=SUM(F6:F11)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B14": {"value": "Net Savings", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C14": {"value": 0, "formula": "=MINUS(C5,C13)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+          "D14": {"value": 0, "formula": "=MINUS(D5,D13)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+          "E14": {"value": 0, "formula": "=MINUS(E5,E13)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+          "F14": {"value": 0, "formula": "=MINUS(F5,F13)", "datatype": "float", "locked": false, "agent_owner": "finance"}
+        },
+        "charts": []
+      }
+    }
+  }
+}

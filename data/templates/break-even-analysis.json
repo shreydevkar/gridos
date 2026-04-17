@@ -1,0 +1,40 @@
+{
+  "id": "break-even-analysis",
+  "name": "Break-Even Analysis",
+  "description": "Unit economics starter: fixed costs, price, variable cost, contribution margin, break-even units and revenue.",
+  "author": "GridOS",
+  "created_at": "2026-04-17T05:00:02.000000+00:00",
+  "state": {
+    "active_sheet": "Sheet1",
+    "sheet_order": ["Sheet1"],
+    "sheets": {
+      "Sheet1": {
+        "cells": {
+          "B2": {"value": "Break-Even Analysis", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+
+          "B4": {"value": "Inputs", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "B5": {"value": "Fixed Costs", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C5": {"value": 10000, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "B6": {"value": "Price per Unit", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C6": {"value": 50, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "B7": {"value": "Variable Cost per Unit", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C7": {"value": 20, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B9": {"value": "Derived", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "B10": {"value": "Contribution Margin", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C10": {"value": 30, "formula": "=MINUS(C6,C7)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B11": {"value": "Contribution Margin %", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C11": {"value": 0.6, "formula": "=DIVIDE(C10,C6)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B12": {"value": "Break-Even Units", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C12": {"value": 334, "formula": "=CEIL(DIVIDE(C5,C10))", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B13": {"value": "Break-Even Revenue", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C13": {"value": 16700, "formula": "=MULTIPLY(C12,C6)", "datatype": "float", "locked": false, "agent_owner": "finance"}
+        },
+        "charts": []
+      }
+    }
+  }
+}

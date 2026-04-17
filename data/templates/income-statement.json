@@ -1,0 +1,56 @@
+{
+  "id": "income-statement",
+  "name": "Income Statement",
+  "description": "P&L skeleton from Revenue through Net Income with formula-driven subtotals.",
+  "author": "GridOS",
+  "created_at": "2026-04-17T05:00:04.000000+00:00",
+  "state": {
+    "active_sheet": "Sheet1",
+    "sheet_order": ["Sheet1"],
+    "sheets": {
+      "Sheet1": {
+        "cells": {
+          "B2": {"value": "Income Statement", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+
+          "B4": {"value": "Line Item", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C4": {"value": "Amount", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+
+          "B5": {"value": "Revenue", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C5": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B6": {"value": "Cost of Goods Sold", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C6": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B7": {"value": "Gross Profit", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C7": {"value": 0, "formula": "=MINUS(C5,C6)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B9": {"value": "Operating Expenses", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "B10": {"value": "Salaries", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C10": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "B11": {"value": "Rent", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C11": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "B12": {"value": "Marketing", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C12": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+          "B13": {"value": "Other OpEx", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C13": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B14": {"value": "Total OpEx", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C14": {"value": 0, "formula": "=SUM(C10:C13)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B16": {"value": "Operating Income", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C16": {"value": 0, "formula": "=MINUS(C7,C14)", "datatype": "float", "locked": false, "agent_owner": "finance"},
+
+          "B17": {"value": "Interest Expense", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C17": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B18": {"value": "Taxes", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C18": {"value": 0, "formula": null, "datatype": "int", "locked": false, "agent_owner": "finance"},
+
+          "B19": {"value": "Net Income", "formula": null, "datatype": "str", "locked": false, "agent_owner": "finance"},
+          "C19": {"value": 0, "formula": "=MINUS(MINUS(C16,C17),C18)", "datatype": "float", "locked": false, "agent_owner": "finance"}
+        },
+        "charts": []
+      }
+    }
+  }
+}
