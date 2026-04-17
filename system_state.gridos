@@ -1,149 +1,153 @@
 {
-  "B2": {
-    "value": null,
-    "formula": null,
-    "datatype": "string",
-    "locked": true,
-    "agent_owner": "User"
-  },
-  "B3": {
-    "value": null,
-    "formula": null,
-    "datatype": "string",
-    "locked": true,
-    "agent_owner": "User"
-  },
-  "B4": {
-    "value": null,
-    "formula": null,
-    "datatype": "string",
-    "locked": true,
-    "agent_owner": "User"
-  },
-  "B5": {
-    "value": null,
-    "formula": null,
-    "datatype": "string",
-    "locked": true,
-    "agent_owner": "User"
-  },
-  "B6": {
-    "value": null,
-    "formula": null,
-    "datatype": "string",
-    "locked": true,
-    "agent_owner": "User"
-  },
-  "B7": {
-    "value": null,
-    "formula": null,
-    "datatype": "string",
-    "locked": true,
-    "agent_owner": "User"
-  },
-  "B8": {
-    "value": null,
-    "formula": null,
-    "datatype": "string",
-    "locked": true,
-    "agent_owner": "User"
-  },
-  "B9": {
-    "value": null,
-    "formula": null,
-    "datatype": "string",
-    "locked": true,
-    "agent_owner": "User"
-  },
-  "B10": {
-    "value": null,
-    "formula": null,
-    "datatype": "string",
-    "locked": true,
-    "agent_owner": "User"
-  },
-  "C2": {
-    "value": "Rev",
-    "formula": null,
-    "datatype": "str",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "D2": {
-    "value": "Cost",
-    "formula": null,
-    "datatype": "str",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "E2": {
-    "value": "Total Rev",
-    "formula": null,
-    "datatype": "str",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "C3": {
-    "value": 150,
-    "formula": null,
-    "datatype": "int",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "D3": {
-    "value": 50,
-    "formula": null,
-    "datatype": "int",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "E3": {
-    "value": 200.0,
-    "formula": "=SUM(C3, D3)",
-    "datatype": "float",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "C4": {
-    "value": 200,
-    "formula": null,
-    "datatype": "int",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "D4": {
-    "value": 80,
-    "formula": null,
-    "datatype": "int",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "E4": {
-    "value": 200.0,
-    "formula": "=MAX(C4, D4)",
-    "datatype": "float",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "C5": {
-    "value": 0,
-    "formula": null,
-    "datatype": "int",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "D5": {
-    "value": 0,
-    "formula": null,
-    "datatype": "int",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
-  },
-  "E5": {
-    "value": "#NAME? (Unknown function: MAGIC)",
-    "formula": "=MAGIC(C5, D5)",
-    "datatype": "str",
-    "locked": false,
-    "agent_owner": "Finance-Bot"
+  "active_sheet": "Sheet1",
+  "sheet_order": [
+    "Sheet1",
+    "Sheet 2"
+  ],
+  "sheets": {
+    "Sheet1": {
+      "B2": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B3": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B4": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B5": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B6": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B7": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B8": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B9": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B10": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "A1": {
+        "value": 19,
+        "formula": null,
+        "datatype": "int",
+        "locked": false,
+        "agent_owner": "User"
+      },
+      "A2": {
+        "value": 59,
+        "formula": null,
+        "datatype": "int",
+        "locked": false,
+        "agent_owner": "User"
+      }
+    },
+    "Sheet 2": {
+      "B2": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B3": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B4": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B5": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B6": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B7": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B8": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B9": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      },
+      "B10": {
+        "value": null,
+        "formula": null,
+        "datatype": "string",
+        "locked": true,
+        "agent_owner": "User"
+      }
+    }
   }
 }

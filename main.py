@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import Body, FastAPI, HTTPException
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from google import genai
 from google.genai import types
@@ -471,6 +471,29 @@ async def load_grid():
     if kernel.load_state():
         return {"status": "Success"}
     return {"status": "Error", "message": "No save file found."}
+
+
+@app.get("/system/export")
+async def export_workbook():
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"gridos-workbook-{timestamp}.gridos"
+    body = json.dumps(kernel.export_state_dict(), indent=2)
+    return Response(
+        content=body,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/system/import")
+async def import_workbook(payload: dict = Body(...)):
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid workbook payload.")
+    try:
+        kernel.apply_state_dict(payload)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not import workbook: {e}")
+    return {"status": "Success"}
 
 
 @app.post("/formula/evaluate")

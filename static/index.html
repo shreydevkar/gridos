@@ -1,436 +1,376 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GridOS | Elegant Agentic Workbook</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GridOS</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
         :root {
-            --bg: #0a1015;
-            --bg-2: #0f171e;
-            --panel: rgba(17, 24, 31, 0.88);
-            --panel-2: rgba(22, 31, 41, 0.96);
-            --panel-3: rgba(15, 22, 29, 0.97);
-            --line: rgba(145, 169, 189, 0.16);
-            --line-strong: rgba(145, 169, 189, 0.3);
-            --text: #eef4f8;
-            --muted: #93a6b6;
-            --accent: #7ed6ff;
-            --accent-2: #b5f0ff;
-            --accent-soft: rgba(126, 214, 255, 0.14);
-            --success: #98e4aa;
-            --warning: #ffd67a;
-            --danger: #ff8f9b;
-            --shadow: 0 30px 120px rgba(0, 0, 0, 0.38);
-            --radius-xl: 24px;
-            --radius-lg: 18px;
-            --radius-md: 12px;
+            --bg: #ffffff;
+            --bg-soft: #f8f9fa;
+            --bg-hover: #f1f3f4;
+            --border: #dadce0;
+            --border-soft: #e8eaed;
+            --text: #202124;
+            --text-muted: #5f6368;
+            --text-mutedder: #80868b;
+            --accent: #1a73e8;
+            --accent-soft: #e8f0fe;
+            --accent-hover: #1765cc;
+            --selection-fill: rgba(26, 115, 232, 0.08);
+            --selection-border: #1a73e8;
+            --preview-fill: rgba(52, 168, 83, 0.1);
+            --preview-border: #1e8e3e;
+            --lock-fill: #fff7e0;
+            --lock-accent: #b06000;
+            --success: #1e8e3e;
+            --danger: #d93025;
+            --shadow-1: 0 1px 2px rgba(60, 64, 67, 0.1), 0 1px 3px rgba(60, 64, 67, 0.08);
+            --shadow-2: 0 2px 6px rgba(60, 64, 67, 0.15);
+            --radius: 6px;
+            --radius-sm: 4px;
+            --menubar-h: 44px;
+            --formulabar-h: 34px;
+            --tabs-h: 34px;
+            --statusbar-h: 26px;
+            --row-h: 24px;
+            --col-w: 112px;
+            --rowhdr-w: 48px;
+            --assistant-w: 360px;
+            --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
         }
 
-        * {
-            box-sizing: border-box;
-        }
+        * { box-sizing: border-box; }
 
         html, body {
             margin: 0;
-            min-height: 100%;
-            font-family: "Manrope", sans-serif;
+            padding: 0;
+            height: 100%;
+            font-family: var(--font-ui);
+            font-size: 13px;
             color: var(--text);
-            background:
-                radial-gradient(circle at top left, rgba(126, 214, 255, 0.08), transparent 24%),
-                radial-gradient(circle at 82% 8%, rgba(126, 214, 255, 0.07), transparent 18%),
-                linear-gradient(180deg, #070b0f 0%, #0a1015 100%);
+            background: var(--bg-soft);
+            -webkit-font-smoothing: antialiased;
         }
 
-        body::before {
-            content: "";
-            position: fixed;
-            inset: 0;
-            pointer-events: none;
-            background-image:
-                linear-gradient(rgba(145, 169, 189, 0.03) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(145, 169, 189, 0.03) 1px, transparent 1px);
-            background-size: 96px 96px;
-            opacity: 0.6;
+        button {
+            font: inherit;
+            color: inherit;
+            background: transparent;
+            border: 1px solid transparent;
+            cursor: pointer;
+            border-radius: var(--radius-sm);
+            padding: 4px 10px;
+            line-height: 20px;
+            transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
         }
+
+        button:hover { background: var(--bg-hover); }
+        button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+        button:disabled { opacity: 0.45; cursor: default; }
+        button:disabled:hover { background: transparent; }
 
         .app-shell {
-            position: relative;
-            z-index: 1;
-            min-height: 100vh;
-            padding: 18px;
-        }
-
-        .layout {
-            display: grid;
-            grid-template-columns: 280px minmax(0, 1fr);
-            gap: 16px;
-            min-height: calc(100vh - 36px);
-        }
-
-        .panel {
-            background: var(--panel);
-            border: 1px solid var(--line);
-            border-radius: var(--radius-xl);
-            box-shadow: var(--shadow);
-            backdrop-filter: blur(20px);
-        }
-
-        .sidebar {
-            padding: 18px;
             display: flex;
-            flex-direction: column;
-            gap: 14px;
-        }
-
-        .brand-card,
-        .metric-card,
-        .note-card,
-        .prompt-card {
-            border-radius: 18px;
-            border: 1px solid var(--line);
-            background: rgba(19, 27, 35, 0.84);
-        }
-
-        .brand-card {
-            padding: 18px;
-            background:
-                linear-gradient(150deg, rgba(126, 214, 255, 0.12), transparent 44%),
-                rgba(18, 24, 31, 0.94);
-        }
-
-        .eyebrow {
-            font-size: 11px;
-            letter-spacing: 0.22em;
-            text-transform: uppercase;
-            color: var(--accent);
-        }
-
-        .brand-card h1 {
-            margin: 12px 0 10px;
-            font-size: 30px;
-            line-height: 1.03;
-        }
-
-        .brand-card p,
-        .muted,
-        .note-card p {
-            color: var(--muted);
-            line-height: 1.6;
-        }
-
-        .brand-card p,
-        .note-card p {
-            margin: 0;
-            font-size: 14px;
-        }
-
-        .metrics {
-            display: grid;
-            grid-template-columns: repeat(2, minmax(0, 1fr));
-            gap: 10px;
-        }
-
-        .metric-card {
-            padding: 14px;
-        }
-
-        .metric-card strong {
-            display: block;
-            margin-top: 8px;
-            font-size: 22px;
-        }
-
-        .metric-card span {
-            color: var(--muted);
-            font-size: 12px;
-        }
-
-        .section-title {
-            margin: 0 0 10px;
-            font-size: 14px;
-            font-weight: 700;
-        }
-
-        .prompt-stack,
-        .note-stack {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .prompt-card,
-        .ghost-btn,
-        .primary-btn,
-        .scope-btn,
-        .tab-btn,
-        .icon-btn {
-            font: inherit;
-            color: var(--text);
-        }
-
-        .prompt-card {
-            width: 100%;
-            padding: 12px 14px;
-            text-align: left;
-            cursor: pointer;
-            transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
-        }
-
-        .prompt-card:hover,
-        .ghost-btn:hover,
-        .primary-btn:hover,
-        .tab-btn:hover,
-        .icon-btn:hover {
-            transform: translateY(-1px);
-            border-color: var(--line-strong);
-        }
-
-        .note-card {
-            padding: 14px;
+            height: 100vh;
+            width: 100vw;
+            background: var(--bg);
         }
 
         .workspace {
-            padding: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 14px;
+            flex: 1 1 auto;
             min-width: 0;
+            display: grid;
+            grid-template-rows: var(--menubar-h) var(--formulabar-h) 1fr var(--tabs-h) var(--statusbar-h);
+            border-right: 1px solid var(--border);
         }
 
-        .topbar {
+        /* ===== Menubar ===== */
+        .menubar {
             display: flex;
-            justify-content: space-between;
-            gap: 16px;
-            align-items: flex-start;
-        }
-
-        .topbar h2 {
-            margin: 8px 0 6px;
-            font-size: 28px;
-        }
-
-        .topbar p {
-            margin: 0;
-            color: var(--muted);
-        }
-
-        .pill-row,
-        .toolbar-actions,
-        .assistant-actions,
-        .scope-row,
-        .tab-strip {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
             align-items: center;
+            gap: 2px;
+            padding: 0 10px;
+            background: var(--bg);
+            border-bottom: 1px solid var(--border);
         }
 
-        .pill {
-            display: inline-flex;
+        .menubar-brand {
+            display: flex;
             align-items: center;
             gap: 8px;
-            min-height: 36px;
-            padding: 0 14px;
-            border-radius: 999px;
-            border: 1px solid var(--line);
-            background: rgba(13, 20, 27, 0.88);
-            color: var(--muted);
-            font-size: 13px;
+            padding-right: 12px;
+            margin-right: 8px;
+            border-right: 1px solid var(--border-soft);
+            height: 100%;
         }
 
-        .pill strong {
+        .menubar-logo {
+            width: 22px;
+            height: 22px;
+            border-radius: 5px;
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            display: grid;
+            place-items: center;
+            color: white;
+            font-weight: 700;
+            font-size: 11px;
+            letter-spacing: 0.02em;
+        }
+
+        .menubar-brand h1 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+
+        .menubar-menu-group {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .menubar-menu-btn {
+            padding: 4px 10px;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .menubar-menu-btn.open {
+            background: var(--bg-hover);
             color: var(--text);
         }
 
-        .live-dot {
-            width: 10px;
-            height: 10px;
+        .menu-dropdown {
+            display: none;
+            position: absolute;
+            top: calc(var(--menubar-h) - 6px);
+            left: 0;
+            min-width: 220px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-2);
+            padding: 4px 0;
+            margin: 0;
+            list-style: none;
+            z-index: 80;
+        }
+
+        .menu-dropdown.open {
+            display: block;
+        }
+
+        .menu-dropdown li {
+            padding: 6px 14px;
+            font-size: 12px;
+            color: var(--text);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 18px;
+        }
+
+        .menu-dropdown li:hover {
+            background: var(--bg-hover);
+        }
+
+        .menu-dropdown li.disabled {
+            color: var(--text-mutedder);
+            cursor: default;
+        }
+
+        .menu-dropdown li.disabled:hover {
+            background: transparent;
+        }
+
+        .menu-dropdown .menu-shortcut {
+            color: var(--text-mutedder);
+            font-size: 11px;
+            font-family: var(--font-mono);
+        }
+
+        .menu-divider {
+            height: 1px;
+            background: var(--border-soft);
+            margin: 4px 0;
+            padding: 0 !important;
+            pointer-events: none;
+        }
+
+        .menubar-divider {
+            width: 1px;
+            height: 20px;
+            background: var(--border-soft);
+            margin: 0 6px;
+        }
+
+        .menubar-actions {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .menubar-spacer {
+            flex: 1;
+        }
+
+        .menubar-actions .icon-btn {
+            width: 30px;
+            height: 30px;
+            padding: 0;
+            display: grid;
+            place-items: center;
+            color: var(--text-muted);
+        }
+
+        .menubar-actions .icon-btn svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        .menubar-ai-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .menubar-ai-btn:hover {
+            background: var(--accent-soft);
+            border-color: var(--accent);
+        }
+
+        .menubar-ai-btn::before {
+            content: "";
+            width: 8px;
+            height: 8px;
             border-radius: 50%;
             background: var(--success);
-            box-shadow: 0 0 16px rgba(152, 228, 170, 0.74);
+            box-shadow: 0 0 0 2px rgba(30, 142, 62, 0.15);
         }
 
-        .tab-strip-wrap,
-        .toolbar,
-        .sheet-panel {
-            border-radius: 20px;
-            border: 1px solid var(--line);
-            background: var(--panel-2);
-        }
-
-        .tab-strip-wrap {
-            padding: 10px;
-        }
-
-        .tab-btn,
-        .icon-btn,
-        .scope-btn,
-        .ghost-btn,
-        .primary-btn {
-            border-radius: 12px;
-            border: 1px solid var(--line);
-            background: rgba(15, 22, 29, 0.92);
-            cursor: pointer;
-            transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
-        }
-
-        .tab-btn {
-            padding: 10px 14px;
-            min-width: 110px;
-            text-align: left;
-        }
-
-        .tab-btn.active {
-            border-color: rgba(126, 214, 255, 0.34);
-            background: rgba(126, 214, 255, 0.12);
-        }
-
-        .icon-btn {
-            width: 40px;
-            height: 40px;
-        }
-
-        .toolbar {
-            padding: 12px;
-            display: grid;
-            grid-template-columns: 112px minmax(0, 1fr) auto;
-            gap: 10px;
-        }
-
-        .name-box,
-        .formula-input {
-            min-height: 48px;
-            border-radius: 14px;
-            border: 1px solid var(--line);
-            background: rgba(11, 18, 24, 0.96);
-            color: var(--text);
+        /* ===== Formula bar ===== */
+        .formula-bar {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            padding: 0 8px;
+            background: var(--bg);
+            border-bottom: 1px solid var(--border);
+            height: var(--formulabar-h);
         }
 
         .name-box {
+            min-width: 96px;
+            padding: 0 10px;
+            height: 24px;
             display: flex;
             align-items: center;
-            justify-content: center;
-            font-family: "JetBrains Mono", monospace;
-            color: var(--accent);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--bg);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text);
         }
 
-        .formula-input {
-            width: 100%;
-            padding: 0 14px;
-            font: inherit;
-            outline: none;
-        }
-
-        .formula-input:focus,
-        .assistant-input:focus {
-            border-color: var(--line-strong);
-            box-shadow: 0 0 0 3px rgba(126, 214, 255, 0.08);
-        }
-
-        .ghost-btn,
-        .primary-btn,
-        .scope-btn {
-            min-height: 44px;
-            padding: 0 14px;
-            font-weight: 700;
-        }
-
-        .primary-btn {
-            background: linear-gradient(135deg, rgba(126, 214, 255, 0.18), rgba(126, 214, 255, 0.08));
-        }
-
-        .scope-btn.active {
-            border-color: rgba(126, 214, 255, 0.34);
-            background: rgba(126, 214, 255, 0.12);
-        }
-
-        .sheet-panel {
-            min-height: 0;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .sheet-header {
-            padding: 14px 16px;
-            border-bottom: 1px solid var(--line);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .sheet-header h3 {
-            margin: 0;
-            font-size: 15px;
-        }
-
-        .sheet-header span {
-            color: var(--muted);
+        .formula-fx {
+            padding: 0 10px;
+            color: var(--text-mutedder);
+            font-style: italic;
+            font-family: var(--font-mono);
             font-size: 12px;
         }
 
-        .sheet-wrap {
-            position: relative;
+        .formula-input {
             flex: 1;
-            min-height: 0;
-            overflow: auto;
-            background: rgba(10, 16, 22, 0.96);
+            height: 24px;
+            padding: 0 8px;
+            border: 1px solid transparent;
+            border-radius: var(--radius-sm);
+            background: var(--bg);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text);
+            outline: none;
         }
 
-        table {
+        .formula-input:focus {
+            border-color: var(--accent);
+            background: var(--bg);
+        }
+
+        /* ===== Grid ===== */
+        .grid-wrap {
+            overflow: auto;
+            background: var(--bg);
+            position: relative;
+        }
+
+        table.spreadsheet {
             border-collapse: separate;
             border-spacing: 0;
-            width: max-content;
-            min-width: 100%;
-            font-family: "JetBrains Mono", monospace;
+            font-family: var(--font-ui);
+            table-layout: fixed;
         }
 
-        th,
-        td {
-            border-right: 1px solid rgba(145, 169, 189, 0.1);
-            border-bottom: 1px solid rgba(145, 169, 189, 0.1);
+        th, td {
+            border-right: 1px solid var(--border-soft);
+            border-bottom: 1px solid var(--border-soft);
+            font-weight: 400;
         }
 
         th {
             position: sticky;
-            top: 0;
-            z-index: 4;
-            height: 34px;
-            min-width: 124px;
-            padding: 0 10px;
-            background: rgba(20, 28, 36, 0.99);
-            color: var(--muted);
-            font-size: 12px;
-            font-weight: 600;
+            height: var(--row-h);
+            min-width: var(--col-w);
+            width: var(--col-w);
+            padding: 0;
+            background: var(--bg-soft);
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 500;
             text-align: center;
+            z-index: 2;
+            user-select: none;
         }
 
         th.corner {
-            left: 0;
-            z-index: 6;
-            min-width: 56px;
-            width: 56px;
-        }
-
-        .col-header {
-            position: sticky;
             top: 0;
+            left: 0;
+            z-index: 4;
+            min-width: var(--rowhdr-w);
+            width: var(--rowhdr-w);
+            border-right: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
         }
 
-        .row-header {
-            position: sticky;
+        th.col-header {
+            top: 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th.row-header {
             left: 0;
             z-index: 3;
-            min-width: 56px;
-            width: 56px;
-            background: rgba(20, 28, 36, 0.99);
-            color: var(--muted);
-            font-size: 12px;
-            text-align: center;
+            min-width: var(--rowhdr-w);
+            width: var(--rowhdr-w);
+            border-right: 1px solid var(--border);
+            font-variant-numeric: tabular-nums;
+        }
+
+        th.col-header.col-selected,
+        th.row-header.row-selected {
+            background: var(--accent-soft);
+            color: var(--accent);
         }
 
         .header-inner {
@@ -451,53 +391,72 @@
         .resize-handle-col {
             top: 0;
             right: -3px;
-            width: 8px;
+            width: 6px;
             height: 100%;
             cursor: col-resize;
+        }
+
+        .resize-handle-col:hover {
+            background: var(--accent);
         }
 
         .resize-handle-row {
             left: 0;
             bottom: -3px;
             width: 100%;
-            height: 8px;
+            height: 6px;
             cursor: row-resize;
+        }
+
+        .resize-handle-row:hover {
+            background: var(--accent);
         }
 
         td {
             position: relative;
-            min-width: 124px;
-            width: 124px;
-            height: 34px;
-            background: rgba(10, 16, 22, 0.92);
+            min-width: var(--col-w);
+            width: var(--col-w);
+            height: var(--row-h);
+            background: var(--bg);
             padding: 0;
             cursor: cell;
-            transition: background 120ms ease, box-shadow 120ms ease;
-        }
-
-        td:hover {
-            background: rgba(16, 26, 34, 0.98);
-        }
-
-        td.active {
-            box-shadow: inset 0 0 0 1px rgba(126, 214, 255, 0.88);
-            background: rgba(16, 30, 40, 0.98);
         }
 
         td.selected {
-            background: rgba(126, 214, 255, 0.09);
+            background: var(--selection-fill);
+        }
+
+        td.active {
+            background: var(--bg);
+            box-shadow: inset 0 0 0 2px var(--selection-border);
+            z-index: 1;
         }
 
         td.preview {
-            background: rgba(152, 228, 170, 0.12);
+            background: var(--preview-fill);
         }
 
         td.preview-active {
-            box-shadow: inset 0 0 0 1px rgba(152, 228, 170, 0.88);
+            box-shadow: inset 0 0 0 2px var(--preview-border);
+            z-index: 1;
         }
 
         td.locked {
-            background: linear-gradient(135deg, rgba(255, 143, 155, 0.12), rgba(10, 16, 22, 0.96));
+            background: var(--lock-fill);
+        }
+
+        td.locked::after {
+            content: "";
+            position: absolute;
+            top: 3px;
+            right: 3px;
+            width: 8px;
+            height: 8px;
+            background: var(--lock-accent);
+            -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 8V7a3 3 0 1 1 6 0v3H9z'/></svg>") center/contain no-repeat;
+                    mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5zm-3 8V7a3 3 0 1 1 6 0v3H9z'/></svg>") center/contain no-repeat;
+            pointer-events: none;
+            opacity: 0.85;
         }
 
         .cell-content {
@@ -505,12 +464,13 @@
             height: 100%;
             display: flex;
             align-items: center;
-            padding: 0 8px;
+            padding: 0 6px;
             overflow: hidden;
             white-space: nowrap;
             text-overflow: ellipsis;
             font-size: 12px;
-            color: #e3edf3;
+            color: var(--text);
+            font-variant-numeric: tabular-nums;
         }
 
         .cell-formula {
@@ -518,29 +478,22 @@
         }
 
         .cell-preview-text {
-            color: var(--success);
+            color: var(--preview-border);
             font-style: italic;
-            opacity: 0.9;
-        }
-
-        td.preview {
-            background: rgba(152, 228, 170, 0.18);
-        }
-
-        td.preview-active {
-            box-shadow: inset 0 0 0 2px rgba(152, 228, 170, 0.9);
         }
 
         .editing-input {
             width: 100%;
             height: 100%;
             border: 0;
-            outline: none;
-            padding: 0 8px;
+            outline: 0;
+            padding: 0 6px;
             font: inherit;
-            font-family: "JetBrains Mono", monospace;
+            font-family: var(--font-mono);
+            font-size: 12px;
             color: var(--text);
-            background: rgba(14, 28, 36, 1);
+            background: var(--bg);
+            box-shadow: inset 0 0 0 2px var(--selection-border);
         }
 
         .fill-handle {
@@ -549,326 +502,593 @@
             bottom: -4px;
             width: 8px;
             height: 8px;
-            border-radius: 2px;
-            background: var(--accent-2);
-            box-shadow: 0 0 0 1px rgba(10, 16, 22, 1);
+            background: var(--selection-border);
+            border: 1px solid var(--bg);
             cursor: crosshair;
-            z-index: 7;
+            z-index: 5;
         }
 
-        .assistant-toggle {
-            position: fixed;
-            right: 24px;
-            bottom: 22px;
-            z-index: 30;
-            min-height: 52px;
-            padding: 0 18px;
-            border-radius: 999px;
-            border: 1px solid rgba(126, 214, 255, 0.24);
-            background: rgba(17, 25, 33, 0.96);
-            box-shadow: var(--shadow);
+        /* ===== Tabs (bottom) ===== */
+        .tabs {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 0 10px;
+            background: var(--bg-soft);
+            border-top: 1px solid var(--border);
+            overflow-x: auto;
         }
 
-        .assistant-panel {
-            position: fixed;
-            right: 24px;
-            bottom: 86px;
-            z-index: 29;
-            width: min(420px, calc(100vw - 28px));
-            max-height: calc(100vh - 140px);
+        .tab-strip {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            height: 100%;
+        }
+
+        .tab-btn {
+            padding: 0 14px;
+            height: 26px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 12px;
+            background: transparent;
+        }
+
+        .tab-btn:hover { background: var(--bg-hover); }
+
+        .tab-btn.active {
+            background: var(--bg);
+            border-color: var(--border);
+            color: var(--text);
+            position: relative;
+        }
+
+        .tab-btn.active::after {
+            content: "";
+            position: absolute;
+            left: 0; right: 0; bottom: -1px;
+            height: 2px;
+            background: var(--accent);
+        }
+
+        .tabs .icon-btn {
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        /* ===== Status bar ===== */
+        .statusbar {
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+            background: var(--bg);
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 12px;
+            gap: 16px;
+        }
+
+        .statusbar .sb-group {
+            display: flex;
+            gap: 14px;
+            align-items: center;
+        }
+
+        .statusbar .sb-spacer { flex: 1; }
+
+        .statusbar strong {
+            color: var(--text);
+            font-weight: 500;
+            font-family: var(--font-mono);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .statusbar .status-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .statusbar .status-chip::before {
+            content: "";
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--success);
+        }
+
+        /* ===== Assistant ===== */
+        .assistant {
+            flex: 0 0 var(--assistant-w);
             display: flex;
             flex-direction: column;
-            border-radius: 24px;
-            border: 1px solid var(--line);
-            background: rgba(15, 22, 29, 0.97);
-            box-shadow: var(--shadow);
+            background: var(--bg);
+            border-left: 1px solid var(--border);
+            transition: flex-basis 180ms ease, width 180ms ease;
             overflow: hidden;
         }
 
-        .assistant-panel.hidden {
-            display: none;
-        }
-
-        .assistant-header,
-        .assistant-body,
-        .preview-card {
-            padding: 14px 16px;
+        .assistant.hidden {
+            flex-basis: 0;
+            width: 0;
+            border-left: none;
         }
 
         .assistant-header {
-            border-bottom: 1px solid var(--line);
-            background: rgba(18, 25, 33, 0.98);
             display: flex;
+            align-items: center;
             justify-content: space-between;
-            gap: 10px;
-            align-items: flex-start;
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+            height: var(--menubar-h);
         }
 
-        .assistant-header h3,
-        .preview-card h4 {
+        .assistant-header h3 {
             margin: 0;
+            font-size: 14px;
+            font-weight: 600;
         }
 
-        .assistant-header p,
-        .preview-card p,
-        .selection-summary {
-            margin: 6px 0 0;
-            color: var(--muted);
-            font-size: 12px;
-            line-height: 1.5;
+        .assistant-header p {
+            margin: 0;
+            font-size: 11px;
+            color: var(--text-muted);
         }
 
         .assistant-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 14px;
             display: flex;
             flex-direction: column;
             gap: 12px;
-            overflow: auto;
         }
 
-        .preview-card {
-            border-bottom: 1px solid var(--line);
-            background: rgba(17, 27, 22, 0.45);
+        .scope-row {
+            display: inline-flex;
+            background: var(--bg-soft);
+            border-radius: var(--radius);
+            padding: 2px;
+            border: 1px solid var(--border-soft);
+            align-self: flex-start;
         }
 
-        .assistant-input {
-            width: 100%;
-            min-height: 110px;
-            resize: vertical;
-            padding: 12px 14px;
-            border-radius: 14px;
-            border: 1px solid var(--line);
-            background: rgba(11, 18, 24, 0.96);
+        .scope-btn {
+            padding: 4px 12px;
+            font-size: 12px;
+            color: var(--text-muted);
+            border-radius: var(--radius-sm);
+            border: 1px solid transparent;
+        }
+
+        .scope-btn.active {
+            background: var(--bg);
             color: var(--text);
-            font: inherit;
-            outline: none;
-        }
-
-        .assistant-log {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            max-height: 220px;
-            overflow: auto;
-        }
-
-        .msg {
-            border: 1px solid var(--line);
-            border-radius: 14px;
-            padding: 12px 13px;
-            font-size: 13px;
-            line-height: 1.55;
-        }
-
-        .msg.user {
-            background: rgba(126, 214, 255, 0.1);
-        }
-
-        .msg.system {
-            color: var(--muted);
-            background: rgba(13, 20, 27, 0.94);
-        }
-
-        .msg.agent {
-            background: rgba(20, 28, 36, 0.94);
-        }
-
-        .msg.chain-step {
-            background: rgba(126, 214, 255, 0.07);
-            border-left: 3px solid rgba(126, 214, 255, 0.6);
-        }
-
-        .msg.chain-step strong {
-            color: var(--accent-2);
-        }
-
-        .msg.chain-complete {
-            background: rgba(152, 228, 170, 0.08);
-            border-left: 3px solid rgba(152, 228, 170, 0.7);
-        }
-
-        .msg.chain-step ul,
-        .msg.chain-complete ul {
-            margin: 6px 0 0;
-            padding-left: 18px;
-            color: var(--muted);
+            border-color: var(--border);
+            box-shadow: var(--shadow-1);
         }
 
         .mode-toggle {
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 10px 12px;
-            border-radius: 12px;
-            border: 1px solid var(--line);
-            background: rgba(15, 22, 29, 0.9);
+            gap: 8px;
+            padding: 8px 10px;
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius);
+            background: var(--bg-soft);
             cursor: pointer;
-            font-size: 13px;
-            color: var(--muted);
+            font-size: 12px;
+            color: var(--text-muted);
         }
 
         .mode-toggle input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
             accent-color: var(--accent);
-            width: 16px;
-            height: 16px;
             cursor: pointer;
         }
 
         .mode-toggle.active {
-            border-color: rgba(126, 214, 255, 0.34);
-            background: rgba(126, 214, 255, 0.08);
+            border-color: var(--accent);
+            background: var(--accent-soft);
             color: var(--text);
         }
 
-        @media (max-width: 1080px) {
-            .layout {
-                grid-template-columns: 1fr;
-            }
+        .quick-prompts {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .quick-prompt {
+            padding: 4px 10px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: var(--bg);
+            color: var(--text-muted);
+            font-size: 11px;
+            line-height: 18px;
+            cursor: pointer;
+        }
+
+        .quick-prompt:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .selection-summary {
+            font-size: 11px;
+            color: var(--text-muted);
+            line-height: 1.45;
+        }
+
+        .assistant-input {
+            width: 100%;
+            min-height: 74px;
+            max-height: 220px;
+            resize: vertical;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg);
+            color: var(--text);
+            font: inherit;
+            font-size: 13px;
+            outline: none;
+        }
+
+        .assistant-input:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 2px var(--accent-soft);
+        }
+
+        .assistant-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .primary-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 6px 14px;
+            border-radius: var(--radius);
+            border: 1px solid var(--accent);
+            background: var(--accent);
+            color: white;
+            font-weight: 500;
+            font-size: 13px;
+        }
+
+        .primary-btn:hover {
+            background: var(--accent-hover);
+            border-color: var(--accent-hover);
+        }
+
+        .ghost-btn {
+            padding: 6px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg);
+            color: var(--text);
+            font-size: 13px;
+        }
+
+        .preview-card {
+            padding: 10px 12px;
+            border: 1px solid var(--preview-border);
+            background: rgba(52, 168, 83, 0.06);
+            border-radius: var(--radius);
+            color: var(--text);
+            font-size: 12px;
+            line-height: 1.45;
+        }
+
+        .preview-card h4 {
+            margin: 0 0 6px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--preview-border);
+        }
+
+        .preview-card p { margin: 0 0 6px; color: var(--text-muted); }
+
+        .preview-card .assistant-actions { margin-top: 10px; }
+
+        .assistant-log {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .msg {
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius);
+            padding: 8px 10px;
+            font-size: 12px;
+            line-height: 1.5;
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        .msg.user {
+            background: var(--accent-soft);
+            border-color: transparent;
+            color: var(--text);
+        }
+
+        .msg.agent {
+            background: var(--bg-soft);
+        }
+
+        .msg.system {
+            color: var(--text-muted);
+            background: var(--bg-soft);
+        }
+
+        .msg.chain-step {
+            background: var(--bg);
+            border-left: 3px solid var(--accent);
+        }
+
+        .msg.chain-step strong {
+            color: var(--accent);
+        }
+
+        .msg.chain-complete {
+            background: rgba(52, 168, 83, 0.06);
+            border-left: 3px solid var(--preview-border);
+        }
+
+        .msg.chain-complete strong {
+            color: var(--preview-border);
+        }
+
+        .msg ul {
+            margin: 6px 0 0;
+            padding-left: 16px;
+            color: var(--text-muted);
+        }
+
+        .msg code {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            background: var(--bg-soft);
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
+
+        /* ===== Context menu ===== */
+        .ctx-menu {
+            position: fixed;
+            min-width: 180px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-2);
+            padding: 4px 0;
+            margin: 0;
+            list-style: none;
+            z-index: 200;
+        }
+
+        .ctx-menu li {
+            padding: 6px 14px;
+            font-size: 12px;
+            color: var(--text);
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 18px;
+        }
+
+        .ctx-menu li:hover {
+            background: var(--bg-hover);
+        }
+
+        .ctx-menu li.disabled {
+            color: var(--text-mutedder);
+            cursor: default;
+            background: transparent;
+        }
+
+        .ctx-menu-shortcut {
+            color: var(--text-mutedder);
+            font-size: 11px;
+            font-family: var(--font-mono);
+        }
+
+        .ctx-menu-divider {
+            height: 1px;
+            background: var(--border-soft);
+            margin: 4px 0;
+        }
+
+        /* ===== Misc ===== */
+        ::-webkit-scrollbar {
+            width: 12px;
+            height: 12px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #c0c4c8;
+            border: 3px solid var(--bg);
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover { background: #9aa0a6; }
+        ::-webkit-scrollbar-track { background: var(--bg); }
+
+        @media (max-width: 980px) {
+            .assistant { --assistant-w: 320px; }
         }
 
         @media (max-width: 820px) {
-            .app-shell {
-                padding: 12px;
-            }
-
-            .toolbar {
-                grid-template-columns: 1fr;
-            }
-
-            .topbar {
-                flex-direction: column;
-            }
-
-            .assistant-panel {
-                right: 12px;
-                bottom: 78px;
-            }
-
-            .assistant-toggle {
-                right: 12px;
-                bottom: 12px;
-            }
+            .assistant { display: none; }
         }
     </style>
 </head>
 <body>
     <div class="app-shell">
-        <div class="layout">
-            <aside class="panel sidebar">
-                <section class="brand-card">
-                    <div class="eyebrow">GridOS Workbook</div>
-                    <h1>Elegant spreadsheet control for operator-grade work.</h1>
-                    <p>Direct editing, multi-sheet organization, and agent assistance that previews changes before anything lands in the workbook.</p>
-                </section>
-
-                <section class="metrics">
-                    <div class="metric-card">
-                        <div class="eyebrow">Mode</div>
-                        <strong id="metric-mode">Hybrid</strong>
-                        <span>Spreadsheet + agent</span>
-                    </div>
-                    <div class="metric-card">
-                        <div class="eyebrow">Cells</div>
-                        <strong id="metric-cells">0</strong>
-                        <span>Populated in active tab</span>
-                    </div>
-                </section>
-
-                <section>
-                    <h3 class="section-title">Launch Prompts</h3>
-                    <div class="prompt-stack">
-                        <button class="prompt-card" data-prompt="Build a quarterly operating model starting at C3 with revenue, costs, and profit.">Quarterly operating model</button>
-                        <button class="prompt-card" data-prompt="Create a hiring tracker in the selected area with role, stage, owner, and notes columns.">Hiring tracker block</button>
-                        <button class="prompt-card" data-prompt="Summarize the selected range into a clean executive header row and totals.">Summarize selected range</button>
-                    </div>
-                </section>
-
-                <section>
-                    <h3 class="section-title">Grid Behaviors</h3>
-                    <div class="note-stack">
-                        <div class="note-card"><p>Click and drag to select ranges, copy and paste rectangular data, and drag the fill handle to extend patterns.</p></div>
-                        <div class="note-card"><p>Double click any unlocked cell to edit inline. Resize rows and columns from the headers just like a spreadsheet.</p></div>
-                        <div class="note-card"><p>Agent previews stay non-destructive until you approve them, and the assistant always shows whether it is reading the full tab or the selected cells.</p></div>
-                    </div>
-                </section>
-            </aside>
-
-            <main class="panel workspace">
-                <div class="topbar">
-                    <div>
-                        <div class="eyebrow">Workspace</div>
-                        <h2>Professional workbook with agentic assistance</h2>
-                        <p>Purpose-built for startup operations, planning, and analysis with a calmer, more executive visual language.</p>
-                    </div>
-                    <div class="pill-row">
-                        <div class="pill"><span class="live-dot"></span><strong>Kernel live</strong></div>
-                        <div class="pill">Sheet <strong id="active-sheet-pill">Sheet1</strong></div>
-                        <div class="pill">Selection <strong id="selection-pill">A1</strong></div>
-                    </div>
+        <div class="workspace">
+            <!-- Menubar -->
+            <header class="menubar">
+                <div class="menubar-brand">
+                    <div class="menubar-logo">GO</div>
+                    <h1>GridOS</h1>
                 </div>
-
-                <div class="tab-strip-wrap">
-                    <div class="tab-strip" id="tab-strip"></div>
+                <div class="menubar-menu-group">
+                    <button class="menubar-menu-btn" data-menu="file" type="button">File</button>
+                    <ul class="menu-dropdown" id="menu-file" role="menu">
+                        <li data-menu-action="new-sheet">New sheet<span class="menu-shortcut"></span></li>
+                        <li data-menu-action="save">Save workbook<span class="menu-shortcut">Ctrl+S</span></li>
+                        <li data-menu-action="load">Load workbook<span class="menu-shortcut"></span></li>
+                        <li class="menu-divider" role="separator"></li>
+                        <li data-menu-action="clear-sheet">Clear unlocked cells<span class="menu-shortcut"></span></li>
+                    </ul>
                 </div>
-
-                <div class="toolbar">
-                    <div class="name-box" id="name-box">A1</div>
-                    <input id="formula-input" class="formula-input" type="text" placeholder="Edit a value or enter a formula like =SUM(C3, D3)" />
-                    <div class="toolbar-actions">
-                        <button class="primary-btn" id="save-cell-btn">Save Cell</button>
-                        <button class="ghost-btn" id="clear-sheet-btn">Clear Unlocked</button>
-                    </div>
+                <div class="menubar-menu-group">
+                    <button class="menubar-menu-btn" data-menu="edit" type="button">Edit</button>
+                    <ul class="menu-dropdown" id="menu-edit" role="menu">
+                        <li data-menu-action="undo">Undo<span class="menu-shortcut">Ctrl+Z</span></li>
+                        <li data-menu-action="redo">Redo<span class="menu-shortcut">Ctrl+Y</span></li>
+                        <li class="menu-divider" role="separator"></li>
+                        <li data-menu-action="cut">Cut<span class="menu-shortcut">Ctrl+X</span></li>
+                        <li data-menu-action="copy">Copy<span class="menu-shortcut">Ctrl+C</span></li>
+                        <li data-menu-action="paste">Paste<span class="menu-shortcut">Ctrl+V</span></li>
+                        <li class="menu-divider" role="separator"></li>
+                        <li data-menu-action="clear">Clear selection<span class="menu-shortcut">Del</span></li>
+                    </ul>
                 </div>
+                <div class="menubar-menu-group">
+                    <button class="menubar-menu-btn" data-menu="view" type="button">View</button>
+                    <ul class="menu-dropdown" id="menu-view" role="menu">
+                        <li data-menu-action="toggle-assistant">Toggle assistant panel<span class="menu-shortcut"></span></li>
+                        <li data-menu-action="reset-column-widths">Reset column widths<span class="menu-shortcut"></span></li>
+                    </ul>
+                </div>
+                <div class="menubar-divider"></div>
+                <button class="icon-btn" id="save-btn" title="Save workbook (Ctrl+S)" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                </button>
+                <button class="icon-btn" id="load-btn" title="Load workbook" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                </button>
+                <button class="icon-btn" id="clear-sheet-btn" title="Clear unlocked cells" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                </button>
+                <div class="menubar-divider"></div>
+                <button class="icon-btn" id="undo-btn" title="Undo (Ctrl+Z)" type="button" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></svg>
+                </button>
+                <button class="icon-btn" id="redo-btn" title="Redo (Ctrl+Y)" type="button" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 15-6.7L21 13"/></svg>
+                </button>
+                <div class="menubar-spacer"></div>
+                <button class="menubar-ai-btn" id="assistant-toggle" type="button">
+                    Ask GridOS
+                </button>
+            </header>
 
-                <section class="sheet-panel">
-                    <div class="sheet-header">
-                        <div>
-                            <h3>Workbook Grid</h3>
-                            <span id="grid-meta">60 columns x 300 rows</span>
-                        </div>
-                        <div class="pill-row">
-                            <div class="pill">Scope <strong id="scope-pill">Selected Cells</strong></div>
-                            <div class="pill">Status <strong id="status-pill">Ready</strong></div>
-                        </div>
-                    </div>
-                    <div class="sheet-wrap" id="sheet-wrap">
-                        <table id="spreadsheet"></table>
-                    </div>
-                </section>
-            </main>
+            <!-- Formula bar -->
+            <div class="formula-bar">
+                <div class="name-box" id="name-box">A1</div>
+                <div class="formula-fx">fx</div>
+                <input id="formula-input" class="formula-input" type="text" placeholder="Enter a value or a formula like =SUM(A1, B1)" />
+            </div>
+
+            <!-- Grid -->
+            <div class="grid-wrap" id="sheet-wrap">
+                <table id="spreadsheet" class="spreadsheet"></table>
+            </div>
+
+            <!-- Tabs -->
+            <nav class="tabs">
+                <div class="tab-strip" id="tab-strip"></div>
+            </nav>
+
+            <!-- Status bar -->
+            <footer class="statusbar">
+                <div class="sb-group">
+                    <span>Selection: <strong id="selection-pill">A1</strong></span>
+                </div>
+                <div class="sb-group" id="stats-group">
+                    <span>Sum: <strong id="stats-sum">0</strong></span>
+                    <span>Avg: <strong id="stats-avg">0</strong></span>
+                    <span>Count: <strong id="stats-count">0</strong></span>
+                </div>
+                <div class="sb-spacer"></div>
+                <div class="sb-group">
+                    <span>Cells: <strong id="metric-cells">0</strong></span>
+                </div>
+                <div class="sb-group">
+                    <span>Scope: <strong id="scope-pill">Selected Cells</strong></span>
+                </div>
+                <div class="sb-group">
+                    <span class="status-chip"><strong id="status-pill">Ready</strong></span>
+                </div>
+                <div id="grid-meta" style="display:none;"></div>
+            </footer>
         </div>
+
+        <!-- Assistant -->
+        <aside class="assistant" id="assistant-panel">
+            <div class="assistant-header">
+                <div>
+                    <h3>GridOS Assistant</h3>
+                    <p id="assistant-subtitle">Focused on the selected cells.</p>
+                </div>
+                <button class="icon-btn" id="assistant-close" type="button" title="Close assistant">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div id="preview-card" class="preview-card" style="display:none;"></div>
+            <div class="assistant-body">
+                <div class="scope-row">
+                    <button class="scope-btn active" data-scope="selection" type="button">Selection</button>
+                    <button class="scope-btn" data-scope="sheet" type="button">Whole sheet</button>
+                </div>
+                <label class="mode-toggle" for="chain-mode-toggle">
+                    <input type="checkbox" id="chain-mode-toggle" />
+                    <span>Chain mode &mdash; auto-apply, observe, loop up to 3 steps</span>
+                </label>
+                <div class="selection-summary" id="selection-summary">Selection: A1</div>
+                <div class="quick-prompts">
+                    <button class="quick-prompt" data-prompt="Build a quarterly operating model starting at C3 with revenue, costs, and profit." type="button">Quarterly model</button>
+                    <button class="quick-prompt" data-prompt="Create a hiring tracker in the selected area with role, stage, owner, and notes columns." type="button">Hiring tracker</button>
+                    <button class="quick-prompt" data-prompt="Summarize the selected range into a clean executive header row and totals." type="button">Summarize selection</button>
+                </div>
+                <textarea id="assistant-input" class="assistant-input" placeholder="Ask the assistant to structure, analyze, or generate a block. Preview before you apply it."></textarea>
+                <div class="assistant-actions">
+                    <button class="primary-btn" id="preview-btn" type="button">Preview Change</button>
+                    <button class="ghost-btn" id="cancel-preview-btn" type="button">Clear</button>
+                </div>
+                <div id="assistant-log" class="assistant-log">
+                    <div class="msg system">The assistant is non-destructive by default. Preview first, then approve if it looks right.</div>
+                </div>
+            </div>
+        </aside>
     </div>
 
-    <button class="primary-btn assistant-toggle" id="assistant-toggle">Agent Assistant</button>
+    <!-- Context menu (hidden by default) -->
+    <ul class="ctx-menu" id="ctx-menu" style="display:none;">
+        <li data-action="copy">Copy<span class="ctx-menu-shortcut">Ctrl+C</span></li>
+        <li data-action="cut">Cut<span class="ctx-menu-shortcut">Ctrl+X</span></li>
+        <li data-action="paste">Paste<span class="ctx-menu-shortcut">Ctrl+V</span></li>
+        <li class="ctx-menu-divider" role="separator"></li>
+        <li data-action="clear">Clear contents<span class="ctx-menu-shortcut">Del</span></li>
+    </ul>
 
-    <aside class="assistant-panel" id="assistant-panel">
-        <div class="assistant-header">
-            <div>
-                <h3>Assistant</h3>
-                <p id="assistant-subtitle">Focused on the selected cells.</p>
-            </div>
-            <button class="icon-btn" id="assistant-close">X</button>
-        </div>
-        <div id="preview-card" class="preview-card" style="display:none;"></div>
-        <div class="assistant-body">
-            <div class="scope-row">
-                <button class="scope-btn active" data-scope="selection">Selected Cells</button>
-                <button class="scope-btn" data-scope="sheet">Entire Sheet</button>
-            </div>
-            <label class="mode-toggle" for="chain-mode-toggle">
-                <input type="checkbox" id="chain-mode-toggle" />
-                <span>Chain mode &mdash; auto-apply, observe, loop up to 3 steps</span>
-            </label>
-            <div class="selection-summary" id="selection-summary">Selection: A1</div>
-            <textarea id="assistant-input" class="assistant-input" placeholder="Ask the agent to structure, analyze, or generate a block. Preview appears before you apply it."></textarea>
-            <div class="assistant-actions">
-                <button class="primary-btn" id="preview-btn">Preview Change</button>
-                <button class="ghost-btn" id="cancel-preview-btn">Clear Preview</button>
-            </div>
-            <div id="assistant-log" class="assistant-log">
-                <div class="msg system">The assistant is non-destructive by default. Preview first, then approve if it looks right.</div>
-            </div>
-        </div>
-    </aside>
     <script src="/static/app.js"></script>
 </body>
 </html>

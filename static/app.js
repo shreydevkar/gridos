@@ -1,8 +1,9 @@
 const API_BASE = "http://127.0.0.1:8000";
 const COLUMN_COUNT = 60;
 const ROW_COUNT = 300;
-const DEFAULT_COL_WIDTH = 124;
-const DEFAULT_ROW_HEIGHT = 34;
+const DEFAULT_COL_WIDTH = 112;
+const DEFAULT_ROW_HEIGHT = 24;
+const UNDO_LIMIT = 50;
 
 let workbook = { active_sheet: "Sheet1", sheets: [] };
 let gridData = {};
@@ -19,6 +20,9 @@ let resizeState = null;
 let colWidths = {};
 let rowHeights = {};
 let pendingHistory = [];
+let undoStack = [];
+let redoStack = [];
+let clipboardMatrix = null;
 
 const cellEls = new Map();
 const colEls = new Map();
@@ -110,7 +114,8 @@ function renderTabs() {
 async function fetchWorkbook() {
     const res = await fetch(`${API_BASE}/workbook`);
     workbook = await res.json();
-    document.getElementById("active-sheet-pill").textContent = workbook.active_sheet;
+    const activePill = document.getElementById("active-sheet-pill");
+    if (activePill) activePill.textContent = workbook.active_sheet;
     renderTabs();
 }
 
@@ -136,7 +141,8 @@ async function createSheet() {
     });
     workbook = await res.json();
     renderTabs();
-    document.getElementById("active-sheet-pill").textContent = workbook.active_sheet;
+    const activePill = document.getElementById("active-sheet-pill");
+    if (activePill) activePill.textContent = workbook.active_sheet;
     selectedRange = { start: "A1", end: "A1" };
     await fetchGrid();
 }
@@ -152,7 +158,8 @@ async function renameActiveSheet() {
     });
     workbook = await res.json();
     renderTabs();
-    document.getElementById("active-sheet-pill").textContent = workbook.active_sheet;
+    const activePill = document.getElementById("active-sheet-pill");
+    if (activePill) activePill.textContent = workbook.active_sheet;
 }
 
 function applyDimensions() {
@@ -257,12 +264,29 @@ async function fetchGrid() {
 
 function syncSelectionUI() {
     const anchor = selectedRange.end;
-    document.getElementById("name-box").textContent = anchor;
+    document.getElementById("name-box").textContent = selectionLabel();
     document.getElementById("selection-pill").textContent = selectionLabel();
-    document.getElementById("selection-summary").textContent = `Selection: ${selectionLabel()}${scopeMode === "selection" ? " | Assistant will use the selected cells." : " | Assistant will use the entire sheet."}`;
-    document.getElementById("assistant-subtitle").textContent = scopeMode === "selection" ? "Focused on the selected cells." : "Focused on the active sheet.";
-    document.getElementById("scope-pill").textContent = scopeMode === "selection" ? "Selected Cells" : "Entire Sheet";
+    document.getElementById("selection-summary").textContent = `Selection: ${selectionLabel()}${scopeMode === "selection" ? " · Assistant will use the selected cells." : " · Assistant will use the entire sheet."}`;
+    const subtitleEl = document.getElementById("assistant-subtitle");
+    if (subtitleEl) subtitleEl.textContent = scopeMode === "selection" ? "Focused on the selected cells." : "Focused on the active sheet.";
+    const scopePill = document.getElementById("scope-pill");
+    if (scopePill) scopePill.textContent = scopeMode === "selection" ? "Selected Cells" : "Entire Sheet";
     document.getElementById("formula-input").value = getCellDisplay(gridData[anchor]);
+    updateSelectionStats();
+    highlightHeadersForSelection();
+}
+
+function highlightHeadersForSelection() {
+    document.querySelectorAll(".col-header.col-selected").forEach((el) => el.classList.remove("col-selected"));
+    document.querySelectorAll(".row-header.row-selected").forEach((el) => el.classList.remove("row-selected"));
+    const bounds = getSelectedBounds();
+    for (let col = bounds.left; col <= bounds.right; col++) {
+        const label = colLabel(col);
+        document.querySelectorAll(`th.col-header[data-col="${label}"]`).forEach((el) => el.classList.add("col-selected"));
+    }
+    for (let row = bounds.top; row <= bounds.bottom; row++) {
+        document.querySelectorAll(`th.row-header[data-row="${row + 1}"]`).forEach((el) => el.classList.add("row-selected"));
+    }
 }
 
 function repaintSelection() {
@@ -383,10 +407,12 @@ function extractSelectionMatrix() {
 }
 
 async function saveFormulaBar() {
+    const before = snapshotGrid();
     try {
         setStatus("Saving");
         await persistSingleCell(selectedRange.end, document.getElementById("formula-input").value);
         await fetchGrid();
+        recordAction(before);
         setStatus("Ready");
     } catch (error) {
         addLog("system", escapeHtml(`Save failed: ${error.message}`));
@@ -394,7 +420,7 @@ async function saveFormulaBar() {
     }
 }
 
-function startInlineEdit(cell) {
+function startInlineEdit(cell, seed) {
     const state = gridData[cell] || {};
     if (state.locked) {
         addLog("system", `${cell} is locked and cannot be edited.`);
@@ -403,14 +429,26 @@ function startInlineEdit(cell) {
 
     editingCell = cell;
     const td = cellEls.get(cell);
-    td.innerHTML = `<input class="editing-input" id="inline-editor" value="${escapeHtml(getCellDisplay(state))}" />`;
+    const initial = typeof seed === "string" ? seed : getCellDisplay(state);
+    td.innerHTML = `<input class="editing-input" id="inline-editor" value="${escapeHtml(initial)}" />`;
     const input = document.getElementById("inline-editor");
     input.focus();
-    input.select();
+    if (typeof seed === "string") {
+        const len = input.value.length;
+        input.setSelectionRange(len, len);
+    } else {
+        input.select();
+    }
     input.addEventListener("keydown", async (event) => {
         if (event.key === "Enter") {
             event.preventDefault();
             await commitInlineEdit(cell, input.value);
+            moveSelection(1, 0, false);
+        }
+        if (event.key === "Tab") {
+            event.preventDefault();
+            await commitInlineEdit(cell, input.value);
+            moveSelection(0, event.shiftKey ? -1 : 1, false);
         }
         if (event.key === "Escape") {
             editingCell = null;
@@ -426,11 +464,13 @@ function startInlineEdit(cell) {
 
 async function commitInlineEdit(cell, value) {
     editingCell = null;
+    const before = snapshotGrid();
     try {
         await persistSingleCell(cell, value);
         const td = cellEls.get(cell);
         td.innerHTML = `<div class="cell-content"></div>`;
         await fetchGrid();
+        recordAction(before);
     } catch (error) {
         addLog("system", escapeHtml(`Inline edit failed: ${error.message}`));
         await fetchGrid();
@@ -454,9 +494,11 @@ async function copySelection() {
 async function pasteSelection(text) {
     const matrix = parseClipboardMatrix(text);
     if (!matrix.length) return;
+    const before = snapshotGrid();
     try {
         await persistRange(selectedRange.end, matrix);
         await fetchGrid();
+        recordAction(before);
         addLog("system", `Pasted ${matrix.length} row(s) into ${selectedRange.end}.`);
     } catch (error) {
         addLog("system", escapeHtml(`Paste failed: ${error.message}`));
@@ -489,10 +531,12 @@ async function applyDragFill(targetCell) {
     const fillCols = colEnd - colStart + 1;
     const matrix = buildFillMatrix(source, fillRows, fillCols);
 
+    const before = snapshotGrid();
     try {
         await persistRange(coordsToA1(rowStart, colStart), matrix);
         selectedRange = { start: coordsToA1(rowStart, colStart), end: coordsToA1(rowEnd, colEnd) };
         await fetchGrid();
+        recordAction(before);
         addLog("system", `Filled ${selectionLabel()} from the current pattern.`);
     } catch (error) {
         addLog("system", escapeHtml(`Drag fill failed: ${error.message}`));
@@ -573,6 +617,7 @@ async function runChain(prompt, payload) {
     clearPreview();
     setStatus("Chaining (this can take several seconds)");
     addLog("system", "Chain mode engaged. Each step auto-applies and is observed.");
+    const before = snapshotGrid();
 
     try {
         const res = await fetch(`${API_BASE}/agent/chat/chain`, {
@@ -595,6 +640,7 @@ async function runChain(prompt, payload) {
         }
 
         await fetchGrid();
+        recordAction(before);
         setStatus(`Chain finished (${data.iterations_used} step${data.iterations_used === 1 ? "" : "s"})`);
     } catch (error) {
         addLog("system", escapeHtml(`Chain failed: ${error.message}`));
@@ -639,6 +685,7 @@ function renderChainSteps(data) {
 
 async function applyPreview() {
     if (!previewState) return;
+    const before = snapshotGrid();
     try {
         setStatus("Applying");
         await fetch(`${API_BASE}/agent/apply`, {
@@ -656,6 +703,7 @@ async function applyPreview() {
         if (previewState.target_cell) selectedRange = { start: previewState.target_cell, end: previewState.target_cell };
         clearPreview();
         await fetchGrid();
+        recordAction(before);
         setStatus("Ready");
     } catch (error) {
         addLog("system", escapeHtml(`Apply failed: ${error.message}`));
@@ -782,6 +830,15 @@ function attachGridEvents() {
         const td = event.target.closest("td[data-cell]");
         if (td) startInlineEdit(td.dataset.cell);
     });
+
+    table.addEventListener("contextmenu", (event) => {
+        const td = event.target.closest("td[data-cell]");
+        if (!td) return;
+        event.preventDefault();
+        const a1 = td.dataset.cell;
+        if (!paintedSelection.has(a1)) setSelection(a1, a1);
+        positionCtxMenu(event);
+    });
 }
 
 function attachGlobalEvents() {
@@ -794,6 +851,7 @@ function attachGlobalEvents() {
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c" && !editingText) {
             event.preventDefault();
             await copySelection();
+            return;
         }
         if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v" && !editingText) {
             const text = await navigator.clipboard.readText().catch(() => "");
@@ -801,6 +859,10 @@ function attachGlobalEvents() {
                 event.preventDefault();
                 await pasteSelection(text);
             }
+            return;
+        }
+        if (!editingText) {
+            await handleGridKeydown(event);
         }
     });
 
@@ -813,15 +875,409 @@ function attachGlobalEvents() {
             await pasteSelection(text);
         }
     });
+
+    document.addEventListener("click", (event) => {
+        const menu = document.getElementById("ctx-menu");
+        if (menu && menu.style.display === "block" && !menu.contains(event.target)) {
+            hideCtxMenu();
+        }
+        if (!event.target.closest(".menubar-menu-group")) {
+            closeAllMenus();
+        }
+    });
+
+    document.addEventListener("scroll", () => {
+        hideCtxMenu();
+        closeAllMenus();
+    }, true);
+
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            hideCtxMenu();
+            closeAllMenus();
+        }
+    });
 }
 
 async function clearActiveSheet() {
     const approved = window.confirm("Clear every unlocked cell in this tab?");
     if (!approved) return;
+    const before = snapshotGrid();
     await fetch(`${API_BASE}/system/clear?sheet=${encodeURIComponent(workbook.active_sheet)}`, { method: "POST" });
     clearPreview();
     await fetchGrid();
+    recordAction(before);
 }
+
+// ======== Undo / Redo ========
+
+function snapshotGrid() {
+    const snapshot = {};
+    Object.entries(gridData).forEach(([a1, state]) => {
+        snapshot[a1] = getCellDisplay(state);
+    });
+    return { sheet: workbook.active_sheet, cells: snapshot };
+}
+
+function recordAction(beforeSnapshot) {
+    if (!beforeSnapshot) return;
+    undoStack.push(beforeSnapshot);
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    redoStack = [];
+    refreshUndoRedoButtons();
+}
+
+function refreshUndoRedoButtons() {
+    const undoBtn = document.getElementById("undo-btn");
+    const redoBtn = document.getElementById("redo-btn");
+    if (undoBtn) undoBtn.disabled = undoStack.length === 0;
+    if (redoBtn) redoBtn.disabled = redoStack.length === 0;
+}
+
+async function restoreSnapshot(target) {
+    if (target.sheet && target.sheet !== workbook.active_sheet) {
+        try {
+            await fetch(`${API_BASE}/workbook/sheet/activate`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: target.sheet }),
+            });
+            await fetchWorkbook();
+        } catch {
+            // best-effort; if the sheet no longer exists we'll fall through
+        }
+    }
+
+    const currentCells = {};
+    Object.entries(gridData).forEach(([a1, state]) => {
+        currentCells[a1] = getCellDisplay(state);
+    });
+
+    const allCells = new Set([...Object.keys(target.cells), ...Object.keys(currentCells)]);
+    for (const a1 of allCells) {
+        const desired = target.cells[a1] || "";
+        const current = currentCells[a1] || "";
+        if (desired === current) continue;
+        try {
+            await persistSingleCell(a1, desired);
+        } catch {
+            // skip locked cells or other rejections silently
+        }
+    }
+    await fetchGrid();
+}
+
+async function undo() {
+    if (!undoStack.length) return;
+    const target = undoStack.pop();
+    const redoSnap = snapshotGrid();
+    redoStack.push(redoSnap);
+    setStatus("Undo");
+    await restoreSnapshot(target);
+    setStatus("Ready");
+    refreshUndoRedoButtons();
+}
+
+async function redo() {
+    if (!redoStack.length) return;
+    const target = redoStack.pop();
+    const undoSnap = snapshotGrid();
+    undoStack.push(undoSnap);
+    setStatus("Redo");
+    await restoreSnapshot(target);
+    setStatus("Ready");
+    refreshUndoRedoButtons();
+}
+
+// ======== Selection stats ========
+
+function updateSelectionStats() {
+    const sumEl = document.getElementById("stats-sum");
+    const avgEl = document.getElementById("stats-avg");
+    const countEl = document.getElementById("stats-count");
+    if (!sumEl || !avgEl || !countEl) return;
+
+    let sum = 0;
+    let numericCount = 0;
+    let nonEmptyCount = 0;
+    getSelectedCells().forEach((a1) => {
+        const state = gridData[a1];
+        if (!state) return;
+        if (state.value !== null && state.value !== undefined && state.value !== "") nonEmptyCount++;
+        const num = Number(state.value);
+        if (state.value !== null && state.value !== undefined && state.value !== "" && !Number.isNaN(num)) {
+            sum += num;
+            numericCount++;
+        }
+    });
+
+    const fmt = (n) => {
+        if (!Number.isFinite(n)) return "0";
+        return Math.abs(n) >= 10000 || Number.isInteger(n) ? n.toLocaleString() : n.toFixed(2).replace(/\.?0+$/, "");
+    };
+
+    sumEl.textContent = fmt(sum);
+    avgEl.textContent = numericCount ? fmt(sum / numericCount) : "0";
+    countEl.textContent = String(nonEmptyCount);
+}
+
+// ======== Context menu ========
+
+function positionCtxMenu(event) {
+    const menu = document.getElementById("ctx-menu");
+    if (!menu) return;
+    menu.style.display = "block";
+    const rect = menu.getBoundingClientRect();
+    const maxX = window.innerWidth - rect.width - 4;
+    const maxY = window.innerHeight - rect.height - 4;
+    menu.style.left = `${Math.min(event.clientX, maxX)}px`;
+    menu.style.top = `${Math.min(event.clientY, maxY)}px`;
+}
+
+function hideCtxMenu() {
+    const menu = document.getElementById("ctx-menu");
+    if (menu) menu.style.display = "none";
+}
+
+async function handleCtxAction(action) {
+    hideCtxMenu();
+    if (action === "copy") {
+        await copySelection();
+    } else if (action === "cut") {
+        await copySelection();
+        await clearSelection();
+    } else if (action === "paste") {
+        const text = await navigator.clipboard.readText().catch(() => "");
+        if (text) await pasteSelection(text);
+    } else if (action === "clear") {
+        await clearSelection();
+    }
+}
+
+async function clearSelection() {
+    const cells = getSelectedCells();
+    if (!cells.length) return;
+    const before = snapshotGrid();
+    let changed = false;
+    for (const a1 of cells) {
+        try {
+            await persistSingleCell(a1, "");
+            changed = true;
+        } catch {
+            // ignore locked or failed cells
+        }
+    }
+    if (changed) {
+        await fetchGrid();
+        recordAction(before);
+    }
+}
+
+// ======== Keyboard navigation ========
+
+function moveSelection(rowDelta, colDelta, extend) {
+    const anchor = a1ToCoords(extend ? selectedRange.start : selectedRange.end);
+    const end = a1ToCoords(selectedRange.end);
+    const nextRow = Math.max(0, Math.min(ROW_COUNT - 1, end.row + rowDelta));
+    const nextCol = Math.max(0, Math.min(COLUMN_COUNT - 1, end.col + colDelta));
+    const nextCell = coordsToA1(nextRow, nextCol);
+    if (extend) {
+        setSelection(coordsToA1(anchor.row, anchor.col), nextCell);
+    } else {
+        setSelection(nextCell, nextCell);
+    }
+    scrollCellIntoView(nextCell);
+}
+
+function scrollCellIntoView(a1) {
+    const td = cellEls.get(a1);
+    const wrap = document.getElementById("sheet-wrap");
+    if (!td || !wrap) return;
+    const tdRect = td.getBoundingClientRect();
+    const wrapRect = wrap.getBoundingClientRect();
+    if (tdRect.top < wrapRect.top + 34) wrap.scrollTop -= wrapRect.top + 34 - tdRect.top;
+    if (tdRect.bottom > wrapRect.bottom) wrap.scrollTop += tdRect.bottom - wrapRect.bottom;
+    if (tdRect.left < wrapRect.left + 50) wrap.scrollLeft -= wrapRect.left + 50 - tdRect.left;
+    if (tdRect.right > wrapRect.right) wrap.scrollLeft += tdRect.right - wrapRect.right;
+}
+
+async function handleGridKeydown(event) {
+    const activeTag = document.activeElement?.tagName;
+    const isEditing = activeTag === "TEXTAREA" || activeTag === "INPUT";
+    if (isEditing) return;
+
+    const key = event.key;
+    const meta = event.ctrlKey || event.metaKey;
+
+    if (meta && key.toLowerCase() === "z" && !event.shiftKey) {
+        event.preventDefault();
+        await undo();
+        return;
+    }
+    if (meta && (key.toLowerCase() === "y" || (key.toLowerCase() === "z" && event.shiftKey))) {
+        event.preventDefault();
+        await redo();
+        return;
+    }
+    if (meta && key.toLowerCase() === "s") {
+        event.preventDefault();
+        await saveWorkbook();
+        return;
+    }
+
+    if (key === "ArrowUp") { event.preventDefault(); moveSelection(-1, 0, event.shiftKey); return; }
+    if (key === "ArrowDown") { event.preventDefault(); moveSelection(1, 0, event.shiftKey); return; }
+    if (key === "ArrowLeft") { event.preventDefault(); moveSelection(0, -1, event.shiftKey); return; }
+    if (key === "ArrowRight") { event.preventDefault(); moveSelection(0, 1, event.shiftKey); return; }
+    if (key === "Tab") { event.preventDefault(); moveSelection(0, event.shiftKey ? -1 : 1, false); return; }
+    if (key === "Enter") { event.preventDefault(); startInlineEdit(selectedRange.end); return; }
+    if (key === "F2") { event.preventDefault(); startInlineEdit(selectedRange.end); return; }
+    if (key === "Delete" || key === "Backspace") { event.preventDefault(); await clearSelection(); return; }
+
+    if (key.length === 1 && !meta && !event.altKey) {
+        event.preventDefault();
+        startInlineEdit(selectedRange.end, key);
+    }
+}
+
+// ======== Workbook save/load ========
+
+async function saveWorkbook() {
+    try {
+        setStatus("Saving");
+        const res = await fetch(`${API_BASE}/system/export`, { method: "GET" });
+        if (!res.ok) throw new Error(`Export failed (${res.status})`);
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") || "";
+        const match = disposition.match(/filename="([^"]+)"/);
+        const filename = match ? match[1] : "workbook.gridos";
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = filename;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(url);
+        setStatus("Saved");
+        addLog("system", `Workbook downloaded as ${escapeHtml(filename)}.`);
+    } catch (error) {
+        setStatus("Recover");
+        addLog("system", escapeHtml(`Save failed: ${error.message}`));
+    }
+}
+
+function pickWorkbookFile() {
+    return new Promise((resolve) => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".gridos,.json,application/json";
+        input.addEventListener("change", () => {
+            resolve(input.files && input.files[0] ? input.files[0] : null);
+        });
+        input.addEventListener("cancel", () => resolve(null));
+        input.click();
+    });
+}
+
+async function loadWorkbook() {
+    const file = await pickWorkbookFile();
+    if (!file) return;
+    try {
+        setStatus("Loading");
+        const text = await file.text();
+        let payload;
+        try {
+            payload = JSON.parse(text);
+        } catch (e) {
+            throw new Error("Selected file is not valid JSON.");
+        }
+        const before = snapshotGrid();
+        const res = await fetch(`${API_BASE}/system/import`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Import failed.");
+        await fetchWorkbook();
+        await fetchGrid();
+        recordAction(before);
+        setStatus("Ready");
+        addLog("system", `Workbook loaded from ${escapeHtml(file.name)}.`);
+    } catch (error) {
+        setStatus("Recover");
+        addLog("system", escapeHtml(`Load failed: ${error.message}`));
+    }
+}
+
+// ======== Menubar dropdowns ========
+
+function closeAllMenus() {
+    document.querySelectorAll(".menu-dropdown.open").forEach((el) => el.classList.remove("open"));
+    document.querySelectorAll(".menubar-menu-btn.open").forEach((el) => el.classList.remove("open"));
+}
+
+function toggleMenu(name, anchorBtn) {
+    const dropdown = document.getElementById(`menu-${name}`);
+    if (!dropdown) return;
+    const wasOpen = dropdown.classList.contains("open");
+    closeAllMenus();
+    if (!wasOpen) {
+        dropdown.classList.add("open");
+        anchorBtn?.classList.add("open");
+    }
+}
+
+async function handleMenuAction(action) {
+    closeAllMenus();
+    switch (action) {
+        case "new-sheet":
+            await createSheet();
+            break;
+        case "save":
+            await saveWorkbook();
+            break;
+        case "load":
+            await loadWorkbook();
+            break;
+        case "clear-sheet":
+            await clearActiveSheet();
+            break;
+        case "undo":
+            await undo();
+            break;
+        case "redo":
+            await redo();
+            break;
+        case "cut":
+            await copySelection();
+            await clearSelection();
+            break;
+        case "copy":
+            await copySelection();
+            break;
+        case "paste": {
+            const text = await navigator.clipboard.readText().catch(() => "");
+            if (text) await pasteSelection(text);
+            break;
+        }
+        case "clear":
+            await clearSelection();
+            break;
+        case "toggle-assistant":
+            toggleAssistant();
+            break;
+        case "reset-column-widths":
+            colWidths = {};
+            rowHeights = {};
+            applyDimensions();
+            addLog("system", "Column and row sizes reset.");
+            break;
+    }
+}
+
+// ======== Bootstrap ========
 
 async function bootstrap() {
     renderGridShell();
@@ -831,6 +1287,7 @@ async function bootstrap() {
     await fetchGrid();
     setScope("selection");
     toggleAssistant(true);
+    refreshUndoRedoButtons();
 
     document.querySelectorAll("[data-prompt]").forEach((button) => {
         button.addEventListener("click", () => {
@@ -840,7 +1297,6 @@ async function bootstrap() {
         });
     });
 
-    document.getElementById("save-cell-btn").addEventListener("click", saveFormulaBar);
     document.getElementById("formula-input").addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
             event.preventDefault();
@@ -858,6 +1314,11 @@ async function bootstrap() {
             requestPreview();
         }
     });
+    document.getElementById("save-btn").addEventListener("click", saveWorkbook);
+    document.getElementById("load-btn").addEventListener("click", loadWorkbook);
+    document.getElementById("undo-btn").addEventListener("click", undo);
+    document.getElementById("redo-btn").addEventListener("click", redo);
+
     document.querySelectorAll(".scope-btn").forEach((button) => {
         button.addEventListener("click", () => setScope(button.dataset.scope));
     });
@@ -866,6 +1327,28 @@ async function bootstrap() {
         chainToggle.addEventListener("change", (event) => setChainMode(event.target.checked));
     }
     setChainMode(false);
+
+    document.querySelectorAll("#ctx-menu li[data-action]").forEach((item) => {
+        item.addEventListener("click", () => handleCtxAction(item.dataset.action));
+    });
+
+    document.querySelectorAll(".menubar-menu-btn[data-menu]").forEach((btn) => {
+        btn.addEventListener("click", (event) => {
+            event.stopPropagation();
+            toggleMenu(btn.dataset.menu, btn);
+        });
+        btn.addEventListener("mouseenter", () => {
+            const anyOpen = document.querySelector(".menu-dropdown.open");
+            if (anyOpen) toggleMenu(btn.dataset.menu, btn);
+        });
+    });
+
+    document.querySelectorAll(".menu-dropdown li[data-menu-action]").forEach((item) => {
+        item.addEventListener("click", (event) => {
+            event.stopPropagation();
+            handleMenuAction(item.dataset.menuAction);
+        });
+    });
 }
 
 bootstrap();

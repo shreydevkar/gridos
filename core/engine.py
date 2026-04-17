@@ -342,8 +342,8 @@ class GridOSKernel:
             for (r, c), cell in state["cells"].items()
         }
 
-    def save_state(self, filepath: str = "system_state.gridos"):
-        export_data = {
+    def export_state_dict(self) -> dict:
+        return {
             "active_sheet": self.active_sheet,
             "sheet_order": self.sheet_order,
             "sheets": {
@@ -354,36 +354,39 @@ class GridOSKernel:
                 for name in self.sheet_order
             },
         }
+
+    def save_state(self, filepath: str = "system_state.gridos"):
         with open(filepath, "w") as f:
-            json.dump(export_data, f, indent=2)
+            json.dump(self.export_state_dict(), f, indent=2)
 
     def load_state(self, filepath: str = "system_state.gridos"):
         try:
             with open(filepath, "r") as f:
                 import_data = json.load(f)
-
-            if "sheets" in import_data:
-                self.sheets = {}
-                import_order = import_data.get("sheet_order", list(import_data["sheets"].keys()))
-                self.sheet_order = []
-                for name in import_order:
-                    self._ensure_sheet(name)
-                    self.sheets[name]["cells"] = {}
-                    for a1_key, state_dict in import_data["sheets"].get(name, {}).items():
-                        r, c = a1_to_coords(a1_key)
-                        self.sheets[name]["cells"][(r, c)] = CellState(**state_dict)
-                    self._rebuild_dependencies(name)
-                self.active_sheet = import_data.get("active_sheet", self.sheet_order[0] if self.sheet_order else "Sheet1")
-            else:
-                self.sheets = {}
-                self.sheet_order = []
-                self.active_sheet = "Sheet1"
-                self._ensure_sheet(self.active_sheet)
-                for a1_key, state_dict in import_data.items():
-                    r, c = a1_to_coords(a1_key)
-                    self.cells[(r, c)] = CellState(**state_dict)
-                self._rebuild_dependencies(self.active_sheet)
-
-            return True
         except FileNotFoundError:
             return False
+        self.apply_state_dict(import_data)
+        return True
+
+    def apply_state_dict(self, import_data: dict):
+        if "sheets" in import_data:
+            self.sheets = {}
+            import_order = import_data.get("sheet_order", list(import_data["sheets"].keys()))
+            self.sheet_order = []
+            for name in import_order:
+                self._ensure_sheet(name)
+                self.sheets[name]["cells"] = {}
+                for a1_key, state_dict in import_data["sheets"].get(name, {}).items():
+                    r, c = a1_to_coords(a1_key)
+                    self.sheets[name]["cells"][(r, c)] = CellState(**state_dict)
+                self._rebuild_dependencies(name)
+            self.active_sheet = import_data.get("active_sheet", self.sheet_order[0] if self.sheet_order else "Sheet1")
+        else:
+            self.sheets = {}
+            self.sheet_order = []
+            self.active_sheet = "Sheet1"
+            self._ensure_sheet(self.active_sheet)
+            for a1_key, state_dict in import_data.items():
+                r, c = a1_to_coords(a1_key)
+                self.cells[(r, c)] = CellState(**state_dict)
+            self._rebuild_dependencies(self.active_sheet)

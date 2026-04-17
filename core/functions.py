@@ -50,6 +50,25 @@ def _minus(a, b):
     return a - b
 
 
+@register_tool("MULTIPLY")
+def _multiply(a, b):
+    return a * b
+
+
+@register_tool("DIVIDE")
+def _divide(a, b):
+    if b == 0:
+        return "#DIV/0!"
+    return a / b
+
+
+@register_tool("AVERAGE")
+def _average(*args):
+    if not args:
+        return 0
+    return sum(args) / len(args)
+
+
 class FormulaEvaluator:
     def __init__(self):
         self.registry = _REGISTRY
