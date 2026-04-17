@@ -1,6 +1,6 @@
 const API_BASE = "http://127.0.0.1:8000";
-const COLUMN_COUNT = 60;
-const ROW_COUNT = 300;
+const COLUMN_COUNT = 40;
+const ROW_COUNT = 150;
 const DEFAULT_COL_WIDTH = 112;
 const DEFAULT_ROW_HEIGHT = 24;
 const UNDO_LIMIT = 50;
@@ -172,19 +172,17 @@ async function renameActiveSheet() {
 }
 
 function applyDimensions() {
-    colEls.forEach((nodes, label) => {
+    // colEls now holds one <col> element per column; the browser applies the
+    // width to every <td>/<th> in that column with a single style write.
+    colEls.forEach((node, label) => {
         const width = colWidths[label] || DEFAULT_COL_WIDTH;
-        nodes.forEach((node) => {
-            node.style.width = `${width}px`;
-            node.style.minWidth = `${width}px`;
-        });
+        node.style.width = `${width}px`;
     });
-    rowEls.forEach((nodes, row) => {
+    // rowEls now holds one <tr> element per row; rows auto-size to the tallest
+    // cell, but setting height on <tr> propagates cheaply.
+    rowEls.forEach((node, row) => {
         const height = rowHeights[row] || DEFAULT_ROW_HEIGHT;
-        nodes.forEach((node) => {
-            node.style.height = `${height}px`;
-            node.style.minHeight = `${height}px`;
-        });
+        node.style.height = `${height}px`;
     });
     if (sheetCharts && sheetCharts.length) {
         sheetCharts.forEach(spec => {
@@ -196,7 +194,17 @@ function applyDimensions() {
 
 function renderGridShell() {
     const table = document.getElementById("spreadsheet");
-    let html = `<tr><th class="corner"></th>`;
+
+    // <colgroup> lets us resize a whole column with ONE DOM write (per <col>)
+    // instead of touching every td's inline style.
+    let html = `<colgroup><col class="rowhdr-col" /></colgroup><colgroup id="data-colgroup">`;
+    for (let col = 0; col < COLUMN_COUNT; col++) {
+        const label = colLabel(col);
+        html += `<col data-colgroup-for="${label}" />`;
+    }
+    html += `</colgroup>`;
+
+    html += `<tr><th class="corner"></th>`;
     for (let col = 0; col < COLUMN_COUNT; col++) {
         const label = colLabel(col);
         html += `<th class="col-header" data-col="${label}"><div class="header-inner">${label}<div class="resize-handle-col" data-resize-col="${label}"></div></div></th>`;
@@ -204,25 +212,25 @@ function renderGridShell() {
     html += `</tr>`;
 
     for (let row = 1; row <= ROW_COUNT; row++) {
-        html += `<tr><th class="row-header" data-row="${row}"><div class="header-inner">${row}<div class="resize-handle-row" data-resize-row="${row}"></div></div></th>`;
+        html += `<tr data-row-tr="${row}"><th class="row-header" data-row="${row}"><div class="header-inner">${row}<div class="resize-handle-row" data-resize-row="${row}"></div></div></th>`;
         for (let col = 0; col < COLUMN_COUNT; col++) {
             const label = colLabel(col);
             const a1 = `${label}${row}`;
-            html += `<td data-cell="${a1}" data-col="${label}" data-row="${row}"><div class="cell-content"></div></td>`;
+            html += `<td data-cell="${a1}"><div class="cell-content"></div></td>`;
         }
         html += `</tr>`;
     }
     table.innerHTML = html;
 
-    table.querySelectorAll("[data-col]").forEach((node) => {
-        const label = node.dataset.col;
-        if (!colEls.has(label)) colEls.set(label, []);
-        colEls.get(label).push(node);
+    colEls.clear();
+    rowEls.clear();
+    cellEls.clear();
+
+    table.querySelectorAll("[data-colgroup-for]").forEach((node) => {
+        colEls.set(node.dataset.colgroupFor, node);
     });
-    table.querySelectorAll("[data-row]").forEach((node) => {
-        const row = node.dataset.row;
-        if (!rowEls.has(row)) rowEls.set(row, []);
-        rowEls.get(row).push(node);
+    table.querySelectorAll("tr[data-row-tr]").forEach((node) => {
+        rowEls.set(node.dataset.rowTr, node);
     });
     table.querySelectorAll("td[data-cell]").forEach((node) => {
         cellEls.set(node.dataset.cell, node);
@@ -378,6 +386,9 @@ function repaintPreview(extraCells = null) {
 }
 
 function setSelection(start, end) {
+    // Skip the DOM work when nothing actually changed — common during a selection
+    // drag where the mouse moves inside the same cell across many frames.
+    if (selectedRange.start === start && selectedRange.end === end) return;
     selectedRange = { start, end };
     syncSelectionUI();
     repaintSelection();
@@ -625,6 +636,29 @@ async function applyDragFill(targetCell) {
     }
 }
 
+function renderPlanBlock(plan) {
+    if (!plan || !plan.sections || !plan.sections.length) return "";
+    const title = plan.title ? escapeHtml(plan.title) : "Plan";
+    const anchor = plan.anchor
+        ? `<span style="color:var(--text-muted);">anchored at ${escapeHtml(plan.anchor)}</span>`
+        : "";
+    const items = plan.sections.map((s, i) => {
+        const label = escapeHtml(s.label || `Section ${i + 1}`);
+        const target = s.target ? `<code>${escapeHtml(s.target)}</code>` : "";
+        const notes = s.notes
+            ? `<div style="font-size:11px;color:var(--text-muted);margin-left:18px;">${escapeHtml(s.notes)}</div>`
+            : "";
+        return `<li style="margin-bottom:4px;"><strong>${label}</strong> ${target}${notes}</li>`;
+    }).join("");
+    return `
+        <div class="model-plan" style="margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-soft);">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:var(--accent);">Plan &middot; ${title}</div>
+            <div style="font-size:11px;margin-top:2px;">${anchor}</div>
+            <ol style="margin:6px 0 0;padding-left:20px;font-size:12px;">${items}</ol>
+        </div>
+    `;
+}
+
 function renderProposedMacroBlock(spec, options = {}) {
     if (!spec) return "";
     const paramsText = (spec.params || []).join(", ");
@@ -716,12 +750,14 @@ function renderPreviewCard() {
         ? `<div style="margin-top:8px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(previewState.macro_error)}</div>`
         : "";
     const macroBlock = renderProposedMacroBlock(previewState.proposed_macro, { idSuffix: "card" });
+    const planBlock = renderPlanBlock(previewState.plan);
     card.style.display = "block";
     card.innerHTML = `
         <h4>${escapeHtml((previewState.category || "agent").toUpperCase())} preview</h4>
         <p>${escapeHtml(previewState.reasoning || "Preview ready.")}</p>
         <p>Scope: <strong>${previewState.scope === "selection" ? "Selected cells" : "Entire sheet"}</strong> | Target: <strong>${escapeHtml(previewRange)}</strong></p>
         ${actionsRow}
+        ${planBlock}
         ${macroError}
         ${macroBlock}
     `;
@@ -825,11 +861,13 @@ function renderChainSteps(data) {
         const macroError = step.macro_error
             ? `<div style="margin-top:6px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(step.macro_error)}</div>`
             : "";
+        const planBlock = renderPlanBlock(step.plan);
 
         if (step.completion_signal) {
             const msg = addLog("chain-complete", `
                 <strong>Step ${step.iteration + 1} &middot; complete</strong>
                 <div>${escapeHtml(step.reasoning || "Agent signaled the task is finished.")}</div>
+                ${planBlock}
                 ${macroError}
                 ${macroBlock}
             `);
@@ -840,7 +878,10 @@ function renderChainSteps(data) {
         const valuesJson = JSON.stringify(step.values);
         const obsItems = (step.observations || []).map((obs) => {
             const formula = obs.formula ? ` <em>(formula: ${escapeHtml(obs.formula)})</em>` : "";
-            return `<li>${escapeHtml(obs.cell)} = ${escapeHtml(String(obs.value))}${formula}</li>`;
+            const warn = obs.warning
+                ? `<div style="color:var(--danger);font-size:11px;margin-left:18px;">⚠ ${escapeHtml(obs.warning)}</div>`
+                : "";
+            return `<li>${escapeHtml(obs.cell)} = ${escapeHtml(String(obs.value))}${formula}${warn}</li>`;
         }).join("");
 
         const msg = addLog("chain-step", `
@@ -848,6 +889,7 @@ function renderChainSteps(data) {
             <div>${escapeHtml(step.reasoning || "")}</div>
             <div style="margin-top:6px;">Target: <strong>${escapeHtml(step.target)}</strong> &middot; Wrote: <code>${escapeHtml(valuesJson)}</code></div>
             ${obsItems ? `<ul>${obsItems}</ul>` : ""}
+            ${planBlock}
             ${macroError}
             ${macroBlock}
         `);
@@ -2256,6 +2298,7 @@ async function bootstrap() {
         button.addEventListener("click", () => {
             document.getElementById("assistant-input").value = button.dataset.prompt;
             toggleAssistant(true);
+            if (button.dataset.chain === "true") setChainMode(true);
             document.getElementById("assistant-input").focus();
         });
     });

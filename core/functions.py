@@ -89,6 +89,63 @@ def _abs(value):
     return abs(value)
 
 
+@register_tool("ROUND")
+def _round(value, digits=0):
+    return round(value, int(digits))
+
+
+def _truthy(v):
+    # Empty string / None are falsy; everything else follows Python truthiness.
+    if v is None or v == "":
+        return False
+    return bool(v)
+
+
+@register_tool("IF")
+def _if(condition, when_true, when_false):
+    return when_true if _truthy(condition) else when_false
+
+
+@register_tool("AND")
+def _and(*args):
+    return all(_truthy(a) for a in args)
+
+
+@register_tool("OR")
+def _or(*args):
+    return any(_truthy(a) for a in args)
+
+
+@register_tool("NOT")
+def _not(value):
+    return not _truthy(value)
+
+
+@register_tool("GT")
+def _gt(a, b):
+    return a > b
+
+
+@register_tool("LT")
+def _lt(a, b):
+    return a < b
+
+
+@register_tool("EQ")
+def _eq(a, b):
+    return a == b
+
+
+@register_tool("GTE")
+def _gte(a, b):
+    return a >= b
+
+
+@register_tool("LTE")
+def _lte(a, b):
+    return a <= b
+
+
 class FormulaEvaluator:
     def __init__(self):
         self.registry = _REGISTRY

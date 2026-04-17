@@ -1,6 +1,8 @@
 import json
 import os
+import random
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -25,7 +27,7 @@ load_dotenv()
 client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
 MODEL_NAME = "gemini-3.1-flash-lite-preview"
 TELEMETRY_PATH = Path("telemetry_log.json")
-MAX_CHAIN_ITERATIONS = 3
+MAX_CHAIN_ITERATIONS = 10
 
 DATA_DIR = Path("data")
 TEMPLATES_DIR = DATA_DIR / "templates"
@@ -150,12 +152,41 @@ def _append_telemetry(entry: dict) -> None:
     TELEMETRY_PATH.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
 
-def call_model(agent_id: str, *, contents, config=None):
-    """Wrap generate_content so every call is logged to telemetry_log.json."""
+_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _is_transient_model_error(exc: Exception) -> bool:
+    """Detect Gemini errors that are worth retrying (overload, rate limit, gateway)."""
+    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+    if isinstance(code, int) and code in _TRANSIENT_STATUS_CODES:
+        return True
+    msg = str(exc).lower()
+    return any(s in msg for s in ("503", "429", "unavailable", "overloaded", "rate limit", "resource exhausted"))
+
+
+def call_model(agent_id: str, *, contents, config=None, max_attempts: int = 4):
+    """Wrap generate_content with telemetry + exponential-backoff retry on transient errors."""
     kwargs: dict = {"model": MODEL_NAME, "contents": contents}
     if config is not None:
         kwargs["config"] = config
-    response = client.models.generate_content(**kwargs)
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = client.models.generate_content(**kwargs)
+            break
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= max_attempts or not _is_transient_model_error(exc):
+                raise
+            # Exponential backoff with jitter: ~1s, ~2s, ~4s
+            delay = (2 ** (attempt - 1)) + random.uniform(0, 0.5)
+            time.sleep(delay)
+    else:
+        # unreachable — the for/else runs only if the loop completes without break
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("call_model exhausted retries with no response")
 
     usage = getattr(response, "usage_metadata", None)
     _append_telemetry({
@@ -238,8 +269,21 @@ OUTPUT FORMAT: strictly valid JSON (no markdown fences):
     "target_cell": "A1",
     "values": [["..."]],
     "chart_spec": null,
-    "macro_spec": null
+    "macro_spec": null,
+    "plan": null
 }
+
+If the user is asking for a MULTI-SECTION build (financial model, forecast, 3-statement, operating model, DCF, budget, etc.), emit a `plan` object on the FIRST turn only. It is informational — the system shows it to the user so they can see the full structure before cells are filled:
+{
+    "title": "Quarterly Operating Model",
+    "anchor": "B2",
+    "sections": [
+        {"label": "Header row",          "target": "B2:F2", "notes": "Metric, Q1..Q4"},
+        {"label": "Revenue",             "target": "B3:F3", "notes": "10% QoQ growth from 100"},
+        {"label": "COGS",                "target": "B4:F4", "notes": "=MULTIPLY(revenue, 0.4)"}
+    ]
+}
+On this first turn, `values` contains ONLY the first section. On subsequent chain turns, omit `plan` (set null) and write the NEXT section. Emit values=[[""]] when every section is done.
 
 If the user asks for a chart/graph/visualization, also fill in chart_spec:
 {
@@ -367,6 +411,32 @@ def _parse_ai_response(text: str) -> dict:
     return json.loads(cleaned)
 
 
+def _sanitize_plan(raw: Any) -> Optional[dict]:
+    """Coerce an agent-emitted plan into a shape the UI can render safely. Returns None if empty."""
+    if not isinstance(raw, dict):
+        return None
+    sections_raw = raw.get("sections")
+    if not isinstance(sections_raw, list) or not sections_raw:
+        return None
+    sections = []
+    for item in sections_raw:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        target = str(item.get("target") or "").strip()
+        notes = str(item.get("notes") or "").strip()
+        if not label and not target and not notes:
+            continue
+        sections.append({"label": label, "target": target, "notes": notes})
+    if not sections:
+        return None
+    return {
+        "title": str(raw.get("title") or "").strip(),
+        "anchor": str(raw.get("anchor") or "").strip(),
+        "sections": sections,
+    }
+
+
 def _validate_proposed_macro(raw: Any) -> tuple[Optional[dict], Optional[str]]:
     """Dry-compile an agent-proposed macro. Returns (normalized_spec, error_message)."""
     if not raw or not isinstance(raw, dict):
@@ -423,6 +493,7 @@ def generate_agent_preview(req: ChatRequest) -> dict:
     raw_target = ai_data.get("target_cell")
     chart_spec = ai_data.get("chart_spec")
     proposed_macro, macro_error = _validate_proposed_macro(ai_data.get("macro_spec"))
+    plan = _sanitize_plan(ai_data.get("plan"))
     fallback_target = req.selected_cells[0] if req.selected_cells else "A1"
 
     has_values = isinstance(raw_values, list) and any(
@@ -445,6 +516,7 @@ def generate_agent_preview(req: ChatRequest) -> dict:
             "chart_spec": chart_spec,
             "proposed_macro": proposed_macro,
             "macro_error": macro_error,
+            "plan": plan,
         }
 
     intent = AgentIntent(
@@ -469,6 +541,7 @@ def generate_agent_preview(req: ChatRequest) -> dict:
         "chart_spec": chart_spec,
         "proposed_macro": proposed_macro,
         "macro_error": macro_error,
+        "plan": plan,
     }
 
 
@@ -495,6 +568,11 @@ async def chat_with_agent(req: ChatRequest):
     try:
         return generate_agent_preview(req)
     except Exception as e:
+        if _is_transient_model_error(e):
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini is temporarily overloaded (tried 4x with backoff). Wait a moment and try again.",
+            )
         raise HTTPException(status_code=500, detail=f"Agent Error: {str(e)}")
 
 
@@ -526,8 +604,37 @@ async def apply_agent_preview(req: PreviewApplyRequest):
     }
 
 
+_CELL_REF_RE = re.compile(r"[A-Z]+\d+")
+
+
+def _formula_references_text_cell(formula: str, sheet_state: dict) -> list[str]:
+    """Scan cell references inside a formula; return the A1 names of any that
+    resolve to a non-numeric value (typical off-by-one symptom: formula pointing
+    at a row-label column). Empty list means all refs look numeric."""
+    bad_refs: list[str] = []
+    for ref in _CELL_REF_RE.findall(formula.upper()):
+        try:
+            r, c = a1_to_coords(ref)
+        except ValueError:
+            continue
+        cell = sheet_state["cells"].get((r, c))
+        if cell is None:
+            continue  # empty cell is fine (coerced to 0, intentional)
+        v = cell.value
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, (int, float)):
+            continue
+        if v in ("", None):
+            continue
+        bad_refs.append(ref)
+    return bad_refs
+
+
 def _observe_written_cells(preview_cells: list[dict], sheet: str) -> list[dict]:
-    """After applying, collect the computed values for any cells the agent just wrote."""
+    """After applying, collect computed values for each just-written cell. Attach a
+    'warning' field when the formula dereferenced a text-valued cell — the classic
+    off-by-one-column mistake the agent makes on labeled rows."""
     state = kernel._sheet_state(sheet)
     observations = []
     for item in preview_cells:
@@ -539,10 +646,22 @@ def _observe_written_cells(preview_cells: list[dict], sheet: str) -> list[dict]:
         cell = state["cells"].get((r, c))
         if cell is None:
             continue
+        warning = None
+        if cell.formula:
+            bad_refs = _formula_references_text_cell(cell.formula, state)
+            if bad_refs:
+                labels = ", ".join(f"{ref}={state['cells'][a1_to_coords(ref)].value!r}" for ref in bad_refs)
+                warning = (
+                    f"Formula in {a1} references non-numeric cell(s): {labels}. "
+                    f"This is the COLUMN ALIGNMENT bug — the formula in column "
+                    f"{a1.rstrip('0123456789')} must reference cells in column "
+                    f"{a1.rstrip('0123456789')}, not a label column."
+                )
         observations.append({
             "cell": a1,
             "value": cell.value,
             "formula": cell.formula,
+            "warning": warning,
         })
     return observations
 
@@ -568,6 +687,11 @@ async def chat_chain(req: ChainRequest):
         current_prompt = req.prompt
         max_iters = max(1, min(req.max_iterations, MAX_CHAIN_ITERATIONS))
 
+        # Plan-level state persists across iterations: the agent declares its plan
+        # once on turn 1, then subsequent turns omit it. We need to remember it so
+        # the chain keeps running until every section is written (or max_iters).
+        active_plan: Optional[dict] = None
+
         for iteration in range(max_iters):
             chat_req = ChatRequest(
                 prompt=current_prompt,
@@ -581,6 +705,9 @@ async def chat_chain(req: ChainRequest):
             chart_spec = preview.get("chart_spec")
             proposed_macro = preview.get("proposed_macro")
             macro_error = preview.get("macro_error")
+            plan = preview.get("plan")
+            if plan and active_plan is None:
+                active_plan = plan
             skip_cell_write = preview["values"] is None and (chart_spec is not None or proposed_macro is not None)
 
             if _is_completion_signal(values) and not skip_cell_write:
@@ -594,6 +721,7 @@ async def chat_chain(req: ChainRequest):
                     "completion_signal": True,
                     "proposed_macro": proposed_macro,
                     "macro_error": macro_error,
+                    "plan": plan,
                 })
                 break
 
@@ -632,25 +760,86 @@ async def chat_chain(req: ChainRequest):
                 "chart_error": chart_error,
                 "proposed_macro": proposed_macro,
                 "macro_error": macro_error,
+                "plan": plan,
             })
 
-            history.append({"role": "user", "content": current_prompt})
-            history.append({"role": "assistant", "content": json.dumps({
+            assistant_payload = {
                 "reasoning": preview["reasoning"],
                 "target": actual_target,
                 "values": values,
-            })})
+            }
+            if plan:
+                assistant_payload["plan"] = plan
 
-            if not formula_observations:
+            history.append({"role": "user", "content": current_prompt})
+            history.append({"role": "assistant", "content": json.dumps(assistant_payload)})
+
+            # Continue the chain while an active plan still has sections left, or while we're
+            # seeing formulas (legacy follow-up heuristic). Break only when neither applies.
+            # Only count a section as "written" if the step had no column-alignment warnings —
+            # otherwise the agent needs to retry the SAME section, not advance.
+            non_completion_steps = [s for s in steps if not s.get("completion_signal")]
+            sections_written = sum(
+                1
+                for s in non_completion_steps
+                if not any(o.get("warning") for o in s.get("observations", []))
+            )
+            plan_sections_total = len(active_plan.get("sections", [])) if active_plan else 0
+            plan_remaining = plan_sections_total - sections_written
+            has_plan_work = plan_remaining > 0
+            has_retry_work = any(o.get("warning") for o in observations)
+            if not formula_observations and not has_plan_work and not has_retry_work:
                 break
 
-            summary = ", ".join(f"{o['cell']}={o['value']}" for o in formula_observations)
+            obs_part = ""
+            if formula_observations:
+                summary = ", ".join(f"{o['cell']}={o['value']}" for o in formula_observations)
+                obs_part = f"Observed after last write: [{summary}]. "
+
+            warning_obs = [o for o in observations if o.get("warning")]
+            warning_part = ""
+            if warning_obs:
+                bullets = "\n".join(f"- {o['warning']}" for o in warning_obs)
+                warning_part = (
+                    "\n\n*** COLUMN ALIGNMENT WARNINGS — YOU MUST FIX THESE BEFORE MOVING ON ***\n"
+                    f"{bullets}\n"
+                    "Re-emit the SAME section (same target cell) with corrected formulas. "
+                    "Each formula in column X must reference cells in column X, not a label column. "
+                    "Do NOT move to the next section until the current section has no warnings.\n\n"
+                )
+
+            plan_part = ""
+            if has_plan_work:
+                next_section = active_plan["sections"][sections_written] if sections_written < plan_sections_total else None
+                next_hint = ""
+                if next_section:
+                    bits = []
+                    if next_section.get("label"):
+                        bits.append(f"label \"{next_section['label']}\"")
+                    if next_section.get("target"):
+                        bits.append(f"target range {next_section['target']}")
+                    if next_section.get("notes"):
+                        bits.append(f"notes: {next_section['notes']}")
+                    if bits:
+                        label = "The section to (re-)write is" if has_retry_work else "The next section is"
+                        next_hint = f" {label}: " + "; ".join(bits) + "."
+                verb = "re-emit" if has_retry_work else "write"
+                plan_part = (
+                    f"You declared a {plan_sections_total}-section plan on turn 1. "
+                    f"{sections_written} section(s) have been written cleanly so far. "
+                    f"{plan_remaining} section(s) remain (or need retry).{next_hint} "
+                    f"{verb.capitalize()} ONLY that one section now. "
+                    "Do NOT re-emit the plan (set plan=null). "
+                    "When every section is done, signal completion by returning values=[[\"\"]]."
+                )
+
             current_prompt = (
-                f"The previous operation resulted in [{summary}]. "
-                "If the ORIGINAL task (see the user message at the top of this conversation) has more targets "
-                "left to write, produce the next one now and do NOT repeat cells you have already written. "
-                "If every part of the original task is done, signal completion by returning values=[[\"\"]] "
-                "with target_cell equal to the last written cell."
+                warning_part
+                + obs_part
+                + plan_part
+                + " If the ORIGINAL task has more targets left to write, produce the next one now and do NOT "
+                "repeat cells you have already written. If every part of the original task is done, signal "
+                "completion by returning values=[[\"\"]] with target_cell equal to the last written cell."
             )
 
         return {
@@ -660,6 +849,11 @@ async def chat_chain(req: ChainRequest):
             "terminated_early": len(steps) < max_iters,
         }
     except Exception as e:
+        if _is_transient_model_error(e):
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini is temporarily overloaded (tried 4x with backoff). Wait a moment and try again.",
+            )
         raise HTTPException(status_code=500, detail=f"Chain Error: {str(e)}")
 
 

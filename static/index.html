@@ -767,6 +767,8 @@
             table-layout: fixed;
         }
 
+        col.rowhdr-col { width: var(--rowhdr-w); }
+
         th, td {
             border-right: 1px solid var(--border-soft);
             border-bottom: 1px solid var(--border-soft);
@@ -1520,11 +1522,12 @@
                 </div>
                 <label class="mode-toggle" for="chain-mode-toggle">
                     <input type="checkbox" id="chain-mode-toggle" />
-                    <span>Chain mode &mdash; auto-apply, observe, loop up to 3 steps</span>
+                    <span>Chain mode &mdash; auto-apply, observe, loop up to 10 steps</span>
                 </label>
                 <div class="selection-summary" id="selection-summary">Selection: A1</div>
                 <div class="quick-prompts">
-                    <button class="quick-prompt" data-prompt="Build a quarterly operating model starting at C3 with revenue, costs, and profit." type="button">Quarterly model</button>
+                    <button class="quick-prompt" data-prompt="Build a quarterly operating model starting at B2 with revenue growing 10% QoQ from 100, COGS at 40% of revenue, OpEx flat at 30, gross profit, and operating income. Plan the full model first, then fill section by section." data-chain="true" type="button">Operating model</button>
+                    <button class="quick-prompt" data-prompt="Build a simple DCF starting at B2: 5 years of FCF growing 15% from 100, a 10% discount rate row, present value of each year using DIVIDE and POWER, and a total PV. Plan first, then fill." data-chain="true" type="button">Simple DCF</button>
                     <button class="quick-prompt" data-prompt="Create a hiring tracker in the selected area with role, stage, owner, and notes columns." type="button">Hiring tracker</button>
                     <button class="quick-prompt" data-prompt="Summarize the selected range into a clean executive header row and totals." type="button">Summarize selection</button>
                 </div>

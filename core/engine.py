@@ -21,6 +21,7 @@ _TOKEN_PATTERN = re.compile(
     r"|(?P<LPAREN>\()"
     r"|(?P<RPAREN>\))"
     r"|(?P<COMMA>,)"
+    r"|(?P<COLON>:)"
     r"|(?P<WS>\s+)"
 )
 
@@ -45,12 +46,14 @@ class _ExpressionEvaluator:
     """Recursive-descent evaluator for GridOS cell formulas.
 
     Grammar (standard precedence):
-        expression -> term (('+' | '-') term)*
-        term       -> unary (('*' | '/') unary)*
-        unary      -> ('+' | '-') unary | power
-        power      -> primary (('^' | '**') unary)?   # right-associative
-        primary    -> NUMBER | CELL | NAME '(' args? ')' | '(' expression ')'
-        args       -> expression (',' expression)*
+        expression  -> term (('+' | '-') term)*
+        term        -> unary (('*' | '/') unary)*
+        unary       -> ('+' | '-') unary | power
+        power       -> primary (('^' | '**') unary)?   # right-associative
+        primary     -> NUMBER | CELL | NAME '(' args? ')' | '(' expression ')'
+        args        -> arg (',' arg)*
+        arg         -> CELL ':' CELL   // range, valid only as a direct function arg
+                     | expression       // scalar
     """
 
     def __init__(self, func_registry: FormulaEvaluator, state: dict, target_coords: tuple[int, int]):
@@ -133,10 +136,10 @@ class _ExpressionEvaluator:
             self._expect("LPAREN")
             args: list = []
             if self._peek()[0] != "RPAREN":
-                args.append(self._parse_expression())
+                args.extend(self._parse_arg())
                 while self._peek()[0] == "COMMA":
                     self._advance()
-                    args.append(self._parse_expression())
+                    args.extend(self._parse_arg())
             self._expect("RPAREN")
             return self.func_registry.evaluate(text, args)
 
@@ -147,6 +150,43 @@ class _ExpressionEvaluator:
             return value
 
         raise _FormulaParseError(f"Unexpected token {kind} ({text!r})")
+
+    def _parse_arg(self) -> list:
+        """Parse a single function argument. Returns a list — length 1 for a scalar,
+        length N for a range literal like A1:A5 (expanded to N cell values)."""
+        if self._peek()[0] == "CELL":
+            saved = self.pos
+            start_tok = self._advance()
+            if self._peek()[0] == "COLON":
+                self._advance()
+                if self._peek()[0] != "CELL":
+                    raise _FormulaParseError("Expected cell reference after ':'")
+                end_tok = self._advance()
+                return self._resolve_range_values(start_tok[1], end_tok[1])
+            self.pos = saved  # not a range — rewind and parse as a normal expression
+        return [self._parse_expression()]
+
+    def _resolve_range_values(self, start_ref: str, end_ref: str) -> list:
+        r1, c1 = a1_to_coords(start_ref)
+        r2, c2 = a1_to_coords(end_ref)
+        top, bottom = min(r1, r2), max(r1, r2)
+        left, right = min(c1, c2), max(c1, c2)
+        values: list = []
+        for r in range(top, bottom + 1):
+            for c in range(left, right + 1):
+                self.state["dependencies"].setdefault((r, c), set()).add(self.target_coords)
+                ref_cell = self.state["cells"].get((r, c))
+                if ref_cell is None:
+                    values.append(0.0)
+                    continue
+                v = ref_cell.value
+                if isinstance(v, bool):
+                    values.append(1.0 if v else 0.0)
+                elif isinstance(v, (int, float)):
+                    values.append(float(v))
+                else:
+                    values.append(0.0)
+        return values
 
     def _resolve_cell_ref(self, ref: str):
         ref_r, ref_c = a1_to_coords(ref)
