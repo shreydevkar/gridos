@@ -11,8 +11,6 @@ from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from google import genai
-from google.genai import types
 from pydantic import BaseModel
 
 from agents import load_agents
@@ -20,12 +18,20 @@ from core.engine import GridOSKernel
 from core.functions import FormulaEvaluator
 from core.macros import MacroError, compile_macro
 from core.models import AgentIntent, WriteResponse
+from core.providers import (
+    AnthropicProvider,
+    GeminiProvider,
+    MODEL_CATALOG,
+    Provider,
+    ProviderAuthError,
+    ProviderTransientError,
+    default_model_id,
+    get_model_entry,
+)
 from core.utils import a1_to_coords
 
 
 load_dotenv()
-client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
-MODEL_NAME = "gemini-3.1-flash-lite-preview"
 TELEMETRY_PATH = Path("telemetry_log.json")
 MAX_CHAIN_ITERATIONS = 10
 
@@ -33,6 +39,7 @@ DATA_DIR = Path("data")
 TEMPLATES_DIR = DATA_DIR / "templates"
 MACROS_PATH = DATA_DIR / "user_macros.json"
 HERO_TOOLS_PATH = DATA_DIR / "hero_tools.json"
+API_KEYS_PATH = DATA_DIR / "api_keys.json"
 
 HERO_TOOLS_CATALOG = [
     {
@@ -136,6 +143,92 @@ _load_user_macros()
 _load_hero_tools()
 
 
+# ---------- Provider registry + API-key storage ----------
+
+PROVIDER_CLASSES: dict[str, type[Provider]] = {
+    "gemini": GeminiProvider,
+    "anthropic": AnthropicProvider,
+}
+PROVIDER_DISPLAY_NAMES = {
+    "gemini": "Google Gemini",
+    "anthropic": "Anthropic Claude",
+}
+PROVIDERS: dict[str, Provider] = {}
+API_KEYS: dict[str, str] = {}
+
+
+def _load_api_keys_from_disk() -> dict[str, str]:
+    if not API_KEYS_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(API_KEYS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {k: v for k, v in raw.items() if isinstance(k, str) and isinstance(v, str) and v.strip()}
+
+
+def _persist_api_keys() -> None:
+    # Only write after ensuring parent dir exists and data/ is gitignored (it is).
+    API_KEYS_PATH.write_text(json.dumps(API_KEYS, indent=2), encoding="utf-8")
+
+
+def _seed_keys_from_env(keys: dict[str, str]) -> dict[str, str]:
+    """Fall back to environment variables for any provider not already present on disk.
+    This preserves the old behaviour where GOOGLE_API_KEY came from .env."""
+    env_map = {
+        "gemini": os.environ.get("GOOGLE_API_KEY"),
+        "anthropic": os.environ.get("ANTHROPIC_API_KEY"),
+    }
+    for pid, env_val in env_map.items():
+        if pid not in keys and env_val:
+            keys[pid] = env_val
+    return keys
+
+
+def _rebuild_providers() -> None:
+    """Instantiate provider clients for every key currently configured. Failures are
+    isolated — a bad key for one provider doesn't block others."""
+    PROVIDERS.clear()
+    for provider_id, key in API_KEYS.items():
+        cls = PROVIDER_CLASSES.get(provider_id)
+        if not cls or not key:
+            continue
+        try:
+            PROVIDERS[provider_id] = cls(api_key=key)
+        except Exception as e:
+            # Keep the key on disk but don't register a broken client.
+            print(f"[providers] Failed to init {provider_id}: {e}")
+
+
+API_KEYS.update(_seed_keys_from_env(_load_api_keys_from_disk()))
+_rebuild_providers()
+
+
+def _configured_provider_ids() -> set[str]:
+    return set(PROVIDERS.keys())
+
+
+def _resolve_model(model_id: Optional[str]) -> tuple[str, Provider]:
+    """Pick a model + provider. Falls back to a sensible default if model_id is
+    missing or its provider has no key configured."""
+    configured = _configured_provider_ids()
+    if not configured:
+        raise HTTPException(
+            status_code=400,
+            detail="No LLM provider is configured. Add an API key in Settings.",
+        )
+    entry = get_model_entry(model_id) if model_id else None
+    if entry and entry["provider"] in PROVIDERS:
+        return entry["id"], PROVIDERS[entry["provider"]]
+    fallback_id = default_model_id(configured)
+    if not fallback_id:
+        raise HTTPException(status_code=400, detail="No usable model available.")
+    fallback_entry = get_model_entry(fallback_id)
+    return fallback_entry["id"], PROVIDERS[fallback_entry["provider"]]
+
+
 # ---------- Telemetry ----------
 
 
@@ -152,52 +245,59 @@ def _append_telemetry(entry: dict) -> None:
     TELEMETRY_PATH.write_text(json.dumps(existing, indent=2), encoding="utf-8")
 
 
-_TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
-
-
-def _is_transient_model_error(exc: Exception) -> bool:
-    """Detect Gemini errors that are worth retrying (overload, rate limit, gateway)."""
-    code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
-    if isinstance(code, int) and code in _TRANSIENT_STATUS_CODES:
-        return True
-    msg = str(exc).lower()
-    return any(s in msg for s in ("503", "429", "unavailable", "overloaded", "rate limit", "resource exhausted"))
-
-
-def call_model(agent_id: str, *, contents, config=None, max_attempts: int = 4):
-    """Wrap generate_content with telemetry + exponential-backoff retry on transient errors."""
-    kwargs: dict = {"model": MODEL_NAME, "contents": contents}
-    if config is not None:
-        kwargs["config"] = config
+def call_model(
+    agent_id: str,
+    *,
+    system_instruction: str,
+    user_message: str,
+    model_id: Optional[str] = None,
+    max_attempts: int = 4,
+):
+    """Route the call through the configured provider for the requested model.
+    Retries on transient errors with exponential backoff (~1s, ~2s, ~4s)."""
+    model, provider = _resolve_model(model_id)
 
     last_exc: Optional[Exception] = None
+    response = None
     for attempt in range(1, max_attempts + 1):
         try:
-            response = client.models.generate_content(**kwargs)
+            response = provider.generate(
+                model=model,
+                system_instruction=system_instruction,
+                user_message=user_message,
+            )
             break
         except Exception as exc:
             last_exc = exc
-            if attempt >= max_attempts or not _is_transient_model_error(exc):
+            if attempt >= max_attempts or not provider.is_transient_error(exc):
                 raise
-            # Exponential backoff with jitter: ~1s, ~2s, ~4s
             delay = (2 ** (attempt - 1)) + random.uniform(0, 0.5)
             time.sleep(delay)
-    else:
-        # unreachable — the for/else runs only if the loop completes without break
+    if response is None:
         if last_exc:
             raise last_exc
         raise RuntimeError("call_model exhausted retries with no response")
 
-    usage = getattr(response, "usage_metadata", None)
     _append_telemetry({
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "agent_id": agent_id,
-        "model": MODEL_NAME,
-        "prompt_token_count": getattr(usage, "prompt_token_count", None) if usage else None,
-        "candidates_token_count": getattr(usage, "candidates_token_count", None) if usage else None,
-        "total_token_count": getattr(usage, "total_token_count", None) if usage else None,
+        "provider": provider.id,
+        "model": response.model,
+        "prompt_token_count": response.prompt_tokens,
+        "candidates_token_count": response.candidates_tokens,
+        "total_token_count": response.total_tokens,
     })
     return response
+
+
+def _classify_model_error(exc: Exception) -> str:
+    """Return 'transient' | 'auth' | 'other' based on the best provider heuristic we can apply."""
+    for provider in PROVIDERS.values():
+        if provider.is_auth_error(exc):
+            return "auth"
+        if provider.is_transient_error(exc):
+            return "transient"
+    return "other"
 
 
 # ---------- Request models ----------
@@ -209,10 +309,16 @@ class ChatRequest(BaseModel):
     scope: str = "sheet"
     selected_cells: List[str] = []
     sheet: Optional[str] = None
+    model_id: Optional[str] = None
 
 
 class ChainRequest(ChatRequest):
     max_iterations: int = MAX_CHAIN_ITERATIONS
+
+
+class ApiKeySaveRequest(BaseModel):
+    provider: str
+    api_key: str
 
 
 class FormulaRequest(BaseModel):
@@ -312,7 +418,7 @@ Proposed macros are NOT saved automatically — the user reviews and approves th
 """.strip()
 
 
-def route_prompt(prompt: str, history_context: str) -> str:
+def route_prompt(prompt: str, history_context: str, model_id: Optional[str] = None) -> str:
     if len(AGENTS) == 1:
         return next(iter(AGENTS))
 
@@ -330,7 +436,12 @@ Available agent profiles:
 Return ONLY the lowercase agent id that best fits the task. No other text.
 """.strip()
 
-    res = call_model("router", contents=instruction)
+    res = call_model(
+        "router",
+        system_instruction="You are a routing classifier. Respond with only a lowercase agent id.",
+        user_message=instruction,
+        model_id=model_id,
+    )
     candidate = res.text.strip().lower().split()[0] if res.text else "general"
     return candidate if candidate in AGENTS else "general"
 
@@ -482,14 +593,15 @@ def generate_agent_preview(req: ChatRequest) -> dict:
     context = kernel.get_context_for_ai(sheet, req.selected_cells, req.scope)
     history_context = "\n".join([f"{h['role'].upper()}: {h['content']}" for h in req.history])
 
-    agent_id = route_prompt(req.prompt, history_context)
+    agent_id = route_prompt(req.prompt, history_context, model_id=req.model_id)
     agent = AGENTS[agent_id]
     system_instruction = build_system_instruction(agent, context, req)
 
     final_response = call_model(
         agent_id,
-        contents=req.prompt,
-        config=types.GenerateContentConfig(system_instruction=system_instruction),
+        system_instruction=system_instruction,
+        user_message=req.prompt,
+        model_id=req.model_id,
     )
     ai_data = _parse_ai_response(final_response.text or "")
 
@@ -576,11 +688,19 @@ async def list_agents():
 async def chat_with_agent(req: ChatRequest):
     try:
         return generate_agent_preview(req)
+    except HTTPException:
+        raise
     except Exception as e:
-        if _is_transient_model_error(e):
+        kind = _classify_model_error(e)
+        if kind == "transient":
             raise HTTPException(
                 status_code=503,
-                detail="Gemini is temporarily overloaded (tried 4x with backoff). Wait a moment and try again.",
+                detail="Model provider is temporarily overloaded (tried 4x with backoff). Wait a moment and try again.",
+            )
+        if kind == "auth":
+            raise HTTPException(
+                status_code=401,
+                detail="The API key for this model was rejected. Update it in Settings.",
             )
         raise HTTPException(status_code=500, detail=f"Agent Error: {str(e)}")
 
@@ -857,11 +977,19 @@ async def chat_chain(req: ChainRequest):
             "iterations_used": len(steps),
             "terminated_early": len(steps) < max_iters,
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        if _is_transient_model_error(e):
+        kind = _classify_model_error(e)
+        if kind == "transient":
             raise HTTPException(
                 status_code=503,
-                detail="Gemini is temporarily overloaded (tried 4x with backoff). Wait a moment and try again.",
+                detail="Model provider is temporarily overloaded (tried 4x with backoff). Wait a moment and try again.",
+            )
+        if kind == "auth":
+            raise HTTPException(
+                status_code=401,
+                detail="The API key for this model was rejected. Update it in Settings.",
             )
         raise HTTPException(status_code=500, detail=f"Chain Error: {str(e)}")
 
@@ -1199,6 +1327,88 @@ async def delete_template(template_id: str):
         raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found.")
     path.unlink()
     return {"status": "Success"}
+
+
+# ---------- Settings: API keys + model catalog ----------
+
+
+def _mask_key(key: str) -> str:
+    if not key:
+        return ""
+    if len(key) <= 8:
+        return "•" * len(key)
+    return f"{key[:4]}…{key[-4:]}"
+
+
+@app.get("/settings/providers")
+async def list_providers():
+    """Describe every known provider and whether a key is configured for it."""
+    providers = []
+    for pid, cls in PROVIDER_CLASSES.items():
+        key = API_KEYS.get(pid, "")
+        providers.append({
+            "id": pid,
+            "display_name": PROVIDER_DISPLAY_NAMES.get(pid, pid),
+            "configured": bool(key and pid in PROVIDERS),
+            "masked_key": _mask_key(key) if key else "",
+        })
+    return {"providers": providers}
+
+
+@app.post("/settings/keys/save")
+async def save_api_key(req: ApiKeySaveRequest):
+    provider_id = (req.provider or "").strip().lower()
+    cls = PROVIDER_CLASSES.get(provider_id)
+    if cls is None:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {req.provider}")
+    api_key = (req.api_key or "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="API key is empty.")
+
+    # Try to instantiate the provider before persisting — catches missing SDKs
+    # (e.g. `anthropic` not installed) and gives the user an actionable message.
+    try:
+        cls(api_key=api_key)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not initialize {provider_id}: {e}")
+
+    API_KEYS[provider_id] = api_key
+    _persist_api_keys()
+    _rebuild_providers()
+    return {
+        "status": "Success",
+        "provider": provider_id,
+        "configured": provider_id in PROVIDERS,
+    }
+
+
+@app.delete("/settings/keys/{provider_id}")
+async def delete_api_key(provider_id: str):
+    provider_id = (provider_id or "").strip().lower()
+    if provider_id not in PROVIDER_CLASSES:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_id}")
+    if provider_id in API_KEYS:
+        del API_KEYS[provider_id]
+        _persist_api_keys()
+    _rebuild_providers()
+    return {"status": "Success", "provider": provider_id}
+
+
+@app.get("/models/available")
+async def list_available_models():
+    """Every model whose provider currently has a working key. The UI uses this to
+    populate the per-chat model picker."""
+    configured = _configured_provider_ids()
+    default_id = default_model_id(configured)
+    models = [
+        {**entry, "available": entry["provider"] in configured}
+        for entry in MODEL_CATALOG
+    ]
+    return {
+        "models": models,
+        "default_model_id": default_id,
+        "configured_providers": sorted(configured),
+    }
 
 
 # ---------- Library: tools ----------

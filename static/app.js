@@ -24,6 +24,9 @@ let pendingHistory = [];
 let undoStack = [];
 let redoStack = [];
 let clipboardMatrix = null;
+let modelCatalog = { models: [], default_model_id: null, configured_providers: [] };
+let selectedModelId = null;
+const MODEL_PREF_KEY = "gridos.selectedModelId";
 
 const cellEls = new Map();
 const colEls = new Map();
@@ -890,6 +893,7 @@ async function requestPreview() {
         scope: scopeMode,
         selected_cells: scopeMode === "selection" ? getSelectedCells() : [],
         sheet: workbook.active_sheet,
+        model_id: selectedModelId || null,
     };
 
     if (chainMode) {
@@ -1673,6 +1677,198 @@ async function handleMenuAction(action) {
     }
 }
 
+// ======== LLM providers: model picker + settings modal ========
+
+async function refreshModelCatalog() {
+    try {
+        const res = await fetch(`${API_BASE}/models/available`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        modelCatalog = await res.json();
+    } catch (e) {
+        modelCatalog = { models: [], default_model_id: null, configured_providers: [] };
+    }
+    const saved = localStorage.getItem(MODEL_PREF_KEY);
+    const savedAvailable = modelCatalog.models.some((m) => m.id === saved && m.available);
+    if (savedAvailable) {
+        selectedModelId = saved;
+    } else {
+        selectedModelId = modelCatalog.default_model_id;
+    }
+    renderModelSelect();
+}
+
+function renderModelSelect() {
+    const select = document.getElementById("model-select");
+    if (!select) return;
+    select.innerHTML = "";
+    const available = modelCatalog.models.filter((m) => m.available);
+    if (available.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "No key configured";
+        opt.disabled = true;
+        opt.selected = true;
+        select.appendChild(opt);
+        select.classList.add("unset");
+        select.disabled = true;
+        return;
+    }
+    select.classList.remove("unset");
+    select.disabled = false;
+    available.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = m.display_name;
+        if (m.id === selectedModelId) opt.selected = true;
+        select.appendChild(opt);
+    });
+    if (!selectedModelId || !available.some((m) => m.id === selectedModelId)) {
+        selectedModelId = available[0].id;
+        select.value = selectedModelId;
+    }
+}
+
+function onModelSelectChange(event) {
+    const id = event.target.value;
+    if (!id) return;
+    selectedModelId = id;
+    localStorage.setItem(MODEL_PREF_KEY, id);
+}
+
+async function openSettingsModal() {
+    const backdrop = document.getElementById("settings-modal-backdrop");
+    if (!backdrop) return;
+    backdrop.removeAttribute("hidden");
+    await renderSettingsProviders();
+}
+
+function closeSettingsModal() {
+    const backdrop = document.getElementById("settings-modal-backdrop");
+    if (backdrop) backdrop.setAttribute("hidden", "");
+}
+
+async function renderSettingsProviders() {
+    const container = document.getElementById("settings-providers-list");
+    if (!container) return;
+    container.innerHTML = `<div class="hint">Loading…</div>`;
+    try {
+        const res = await fetch(`${API_BASE}/settings/providers`);
+        const data = await res.json();
+        const providers = data.providers || [];
+        container.innerHTML = "";
+        providers.forEach((p) => container.appendChild(renderProviderRow(p)));
+    } catch (e) {
+        container.innerHTML = `<div class="settings-provider-error">Could not load providers: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function renderProviderRow(provider) {
+    const wrap = document.createElement("div");
+    wrap.className = "settings-provider";
+    const statusClass = provider.configured ? "on" : "off";
+    const statusText = provider.configured ? "Configured" : "Not configured";
+
+    wrap.innerHTML = `
+        <div class="settings-provider-head">
+            <h4>${escapeHtml(provider.display_name)}</h4>
+            <span class="settings-provider-status ${statusClass}">${statusText}</span>
+        </div>
+        ${provider.configured
+            ? `<div class="settings-provider-row">
+                   <div class="settings-provider-masked">${escapeHtml(provider.masked_key || "•••••••")}</div>
+                   <button type="button" class="ghost-btn" data-action="replace">Replace</button>
+                   <button type="button" class="ghost-btn" data-action="delete">Remove</button>
+               </div>`
+            : `<div class="settings-provider-row">
+                   <input type="password" placeholder="Paste API key" autocomplete="off" spellcheck="false" />
+                   <button type="button" class="primary-btn" data-action="save">Save</button>
+               </div>`
+        }
+        <div class="settings-provider-error" data-role="error"></div>
+    `;
+
+    const errEl = wrap.querySelector('[data-role="error"]');
+    const setErr = (msg) => { errEl.textContent = msg || ""; };
+
+    wrap.querySelector('[data-action="save"]')?.addEventListener("click", async () => {
+        const input = wrap.querySelector('input[type="password"]');
+        const key = (input?.value || "").trim();
+        if (!key) { setErr("Paste an API key first."); return; }
+        setErr("Saving…");
+        try {
+            const res = await fetch(`${API_BASE}/settings/keys/save`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ provider: provider.id, api_key: key }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || "Save failed.");
+            setErr("");
+            await renderSettingsProviders();
+            await refreshModelCatalog();
+        } catch (e) {
+            setErr(e.message);
+        }
+    });
+
+    wrap.querySelector('[data-action="replace"]')?.addEventListener("click", () => {
+        const head = wrap.querySelector(".settings-provider-row");
+        head.innerHTML = `
+            <input type="password" placeholder="Paste new API key" autocomplete="off" spellcheck="false" />
+            <button type="button" class="primary-btn" data-action="save">Save</button>
+            <button type="button" class="ghost-btn" data-action="cancel">Cancel</button>
+        `;
+        head.querySelector('[data-action="save"]').addEventListener("click", async () => {
+            const input = head.querySelector('input[type="password"]');
+            const key = (input?.value || "").trim();
+            if (!key) { setErr("Paste an API key first."); return; }
+            setErr("Saving…");
+            try {
+                const res = await fetch(`${API_BASE}/settings/keys/save`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ provider: provider.id, api_key: key }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Save failed.");
+                setErr("");
+                await renderSettingsProviders();
+                await refreshModelCatalog();
+            } catch (e) {
+                setErr(e.message);
+            }
+        });
+        head.querySelector('[data-action="cancel"]').addEventListener("click", renderSettingsProviders);
+    });
+
+    wrap.querySelector('[data-action="delete"]')?.addEventListener("click", async () => {
+        if (!confirm(`Remove the ${provider.display_name} API key?`)) return;
+        setErr("Removing…");
+        try {
+            const res = await fetch(`${API_BASE}/settings/keys/${encodeURIComponent(provider.id)}`, { method: "DELETE" });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || "Delete failed.");
+            setErr("");
+            await renderSettingsProviders();
+            await refreshModelCatalog();
+        } catch (e) {
+            setErr(e.message);
+        }
+    });
+
+    return wrap;
+}
+
+function attachSettingsEvents() {
+    document.getElementById("settings-btn")?.addEventListener("click", openSettingsModal);
+    document.getElementById("settings-modal-close")?.addEventListener("click", closeSettingsModal);
+    document.getElementById("settings-modal-backdrop")?.addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) closeSettingsModal();
+    });
+    document.getElementById("composer-settings-link")?.addEventListener("click", openSettingsModal);
+    document.getElementById("model-select")?.addEventListener("change", onModelSelectChange);
+}
+
 // ======== Library ========
 
 let libraryToolsCache = null;
@@ -2448,6 +2644,8 @@ async function bootstrap() {
     setScope("selection");
     toggleAssistant(true);
     refreshUndoRedoButtons();
+    await refreshModelCatalog();
+    attachSettingsEvents();
 
     document.querySelectorAll("[data-prompt]").forEach((button) => {
         button.addEventListener("click", () => {

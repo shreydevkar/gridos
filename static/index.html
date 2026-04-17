@@ -651,6 +651,118 @@
             gap: 4px;
             font-size: 12px;
         }
+        /* Composer model picker */
+        .composer-model-picker {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            margin-left: auto;
+            padding: 0;
+        }
+        .composer-model-select {
+            font: inherit;
+            font-size: 11px;
+            padding: 3px 6px;
+            border-radius: 999px;
+            border: 1px solid var(--border-soft);
+            background: #fff;
+            color: #3c4043;
+            cursor: pointer;
+            max-width: 180px;
+        }
+        .composer-model-select:focus-visible { outline: 2px solid #1a73e8; outline-offset: 1px; }
+        .composer-model-select.unset {
+            color: #b3261e;
+            border-color: #f2b4ae;
+        }
+        .composer-model-settings {
+            font: inherit;
+            font-size: 10px;
+            padding: 3px 8px;
+            border-radius: 999px;
+            border: 1px solid var(--border-soft);
+            background: #fff;
+            color: #1a73e8;
+            cursor: pointer;
+            letter-spacing: 0.2px;
+        }
+        .composer-model-settings:hover { background: #f1f3f4; }
+
+        /* Settings modal */
+        .settings-providers {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .settings-provider {
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            padding: 12px 14px;
+            background: #fafafa;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .settings-provider-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .settings-provider-head h4 { margin: 0; font-size: 13px; }
+        .settings-provider-status {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 999px;
+        }
+        .settings-provider-status.on {
+            background: #e6f4ea;
+            color: #137333;
+            border: 1px solid #ceead6;
+        }
+        .settings-provider-status.off {
+            background: #fce8e6;
+            color: #b3261e;
+            border: 1px solid #f4c7c3;
+        }
+        .settings-provider-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .settings-provider-row input[type="password"],
+        .settings-provider-row input[type="text"] {
+            flex: 1;
+            min-width: 200px;
+            font: inherit;
+            font-size: 12px;
+            padding: 6px 10px;
+            border-radius: 4px;
+            border: 1px solid var(--border-soft);
+            background: #fff;
+        }
+        .settings-provider-row input:focus {
+            outline: none;
+            border-color: #1a73e8;
+            box-shadow: 0 0 0 1px #1a73e8;
+        }
+        .settings-provider-masked {
+            font-family: var(--font-mono, monospace);
+            font-size: 11px;
+            color: #5f6368;
+            padding: 6px 10px;
+            border: 1px dashed var(--border-soft);
+            border-radius: 4px;
+            background: #fff;
+            flex: 1;
+        }
+        .settings-provider-error {
+            font-size: 11px;
+            color: #b3261e;
+            min-height: 14px;
+        }
+
         .library-list-item.is-preset {
             border-left: 3px solid #1a73e8;
             background: #f4f8ff;
@@ -1698,6 +1810,10 @@
                 <button class="icon-btn" id="redo-btn" title="Redo (Ctrl+Y)" type="button" disabled>
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 15-6.7L21 13"/></svg>
                 </button>
+                <div class="menubar-divider"></div>
+                <button class="icon-btn" id="settings-btn" title="Settings (API keys)" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                </button>
                 <div class="menubar-spacer"></div>
                 <button class="menubar-ai-btn" id="assistant-toggle" type="button">
                     Ask GridOS
@@ -1788,6 +1904,10 @@
                         <input type="checkbox" id="chain-mode-toggle" />
                         <span>Chain</span>
                     </label>
+                    <div class="composer-model-picker" id="composer-model-picker">
+                        <select class="composer-model-select" id="model-select" title="Choose which LLM handles this request"></select>
+                        <button type="button" class="composer-model-settings" id="composer-settings-link" title="Add or update API keys">Keys</button>
+                    </div>
                 </div>
                 <div class="composer-input-row">
                     <textarea id="assistant-input" class="assistant-input" rows="1" placeholder="Ask GridOS…"></textarea>
@@ -1956,6 +2076,26 @@
                     </div>
                 </div>
                 <div id="hero-tools-list"></div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Settings modal: API keys + provider status -->
+    <div class="chart-modal-backdrop" id="settings-modal-backdrop" hidden>
+        <div class="library-modal" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
+            <div class="library-modal-header">
+                <h3 id="settings-modal-title">Settings — LLM providers</h3>
+                <button class="icon-btn" id="settings-modal-close" type="button" title="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <section class="library-tab-panel active">
+                <p class="hint" style="margin-top:0;">
+                    Add API keys for any providers you want to use. Keys are stored locally in
+                    <code>data/api_keys.json</code> (gitignored). Models only appear in the chat picker
+                    after you save a valid key.
+                </p>
+                <div id="settings-providers-list" class="settings-providers"></div>
             </section>
         </div>
     </div>
