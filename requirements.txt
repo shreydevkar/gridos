@@ -1,5 +1,5 @@
 fastapi>=0.110
 uvicorn>=0.30
 pydantic>=2.5
-google-generativeai
+google-genai
 python-dotenv

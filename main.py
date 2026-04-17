@@ -1,34 +1,75 @@
 import json
 import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-import google.generativeai as genai
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from google import genai
+from google.genai import types
 from pydantic import BaseModel
-from typing import Dict, List, Optional
 
+from agents import load_agents
 from core.engine import GridOSKernel
 from core.functions import FormulaEvaluator
 from core.models import AgentIntent, WriteResponse
+from core.utils import a1_to_coords
 
 
 load_dotenv()
-genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-model = genai.GenerativeModel("gemini-3.1-flash-lite-preview")
+client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+MODEL_NAME = "gemini-3.1-flash-lite-preview"
+TELEMETRY_PATH = Path("telemetry_log.json")
+MAX_CHAIN_ITERATIONS = 3
 
 app = FastAPI(title="GridOS - Agentic Workbook")
 kernel = GridOSKernel()
 kernel.lock_range("B2", "B10")
+AGENTS = load_agents()
 
 os.makedirs("static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
-@app.get("/")
-async def serve_frontend():
-    return FileResponse("static/index.html")
+# ---------- Telemetry ----------
+
+
+def _append_telemetry(entry: dict) -> None:
+    existing: list = []
+    if TELEMETRY_PATH.exists():
+        try:
+            existing = json.loads(TELEMETRY_PATH.read_text(encoding="utf-8"))
+            if not isinstance(existing, list):
+                existing = []
+        except json.JSONDecodeError:
+            existing = []
+    existing.append(entry)
+    TELEMETRY_PATH.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+
+
+def call_model(agent_id: str, *, contents, config=None):
+    """Wrap generate_content so every call is logged to telemetry_log.json."""
+    kwargs: dict = {"model": MODEL_NAME, "contents": contents}
+    if config is not None:
+        kwargs["config"] = config
+    response = client.models.generate_content(**kwargs)
+
+    usage = getattr(response, "usage_metadata", None)
+    _append_telemetry({
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "agent_id": agent_id,
+        "model": MODEL_NAME,
+        "prompt_token_count": getattr(usage, "prompt_token_count", None) if usage else None,
+        "candidates_token_count": getattr(usage, "candidates_token_count", None) if usage else None,
+        "total_token_count": getattr(usage, "total_token_count", None) if usage else None,
+    })
+    return response
+
+
+# ---------- Request models ----------
 
 
 class ChatRequest(BaseModel):
@@ -37,6 +78,10 @@ class ChatRequest(BaseModel):
     scope: str = "sheet"
     selected_cells: List[str] = []
     sheet: Optional[str] = None
+
+
+class ChainRequest(ChatRequest):
+    max_iterations: int = MAX_CHAIN_ITERATIONS
 
 
 class FormulaRequest(BaseModel):
@@ -77,83 +122,90 @@ class SheetActivateRequest(BaseModel):
     name: str
 
 
-def build_system_instruction(task_category: str, context: dict, req: ChatRequest) -> str:
+# ---------- Agent routing & prompts ----------
+
+
+BASE_SYSTEM_RULES = (
+    "You are operating within GridOS. Check the \"locked\" metadata for every cell "
+    "before proposing a write. Do not attempt to overwrite locked cells."
+)
+
+OUTPUT_FORMAT_SPEC = """
+OUTPUT FORMAT: strictly valid JSON (no markdown fences):
+{
+    "reasoning": "Short explanation.",
+    "target_cell": "A1",
+    "values": [["..."]]
+}
+""".strip()
+
+
+def route_prompt(prompt: str, history_context: str) -> str:
+    if len(AGENTS) == 1:
+        return next(iter(AGENTS))
+
+    options = "\n".join(
+        f"- {agent['id']}: {agent.get('router_description', agent.get('display_name', agent['id']))}"
+        for agent in AGENTS.values()
+    )
+    instruction = f"""
+Analyze this user task: "{prompt}".
+Previous context: {history_context}
+
+Available agent profiles:
+{options}
+
+Return ONLY the lowercase agent id that best fits the task. No other text.
+""".strip()
+
+    res = call_model("router", contents=instruction)
+    candidate = res.text.strip().lower().split()[0] if res.text else "general"
+    return candidate if candidate in AGENTS else "general"
+
+
+def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> str:
     selected_summary = ", ".join(req.selected_cells) if req.selected_cells else "No cells selected."
     scope_line = "Selected cells only" if req.scope == "selection" else "Entire active sheet"
+    bounds = context.get("occupied_bounds")
+    bounds_line = (
+        f"Occupied region: {bounds['top_left']} -> {bounds['bottom_right']} "
+        f"({bounds['rows']} rows x {bounds['cols']} cols)"
+        if bounds else "Occupied region: empty"
+    )
 
-    if "finance" in task_category:
-        return f"""
-        You are a Senior Financial Analyst Agent.
-
-        ACTIVE SHEET: {req.sheet or kernel.active_sheet}
-        VIEW SCOPE: {scope_line}
-        SELECTED CELLS: {selected_summary}
-        CONTEXT (Current Grid State):
-        {context['formatted_data']}
-
-        ALREADY OCCUPIED CELLS IN SCOPE: {context['occupied_info']}
-
-        RULES:
-        1. If the scope is "selection", prioritize editing or building near the selected cells unless the user explicitly asks otherwise.
-        2. If the user asks to place raw numbers, place them. If they ask for math, calculate it.
-        3. Use GridOS supported formulas: =SUM(A, B), =MAX(A, B), =MIN(A, B), =MINUS(A, B).
-        4. Return a 2D 'values' array. Horizontal writes use [[A, B]], vertical writes use [[A], [B]].
-        5. Keep the response preview-safe. Do not describe that changes were already committed.
-
-        OUTPUT FORMAT: strictly valid JSON
-        {{
-            "reasoning": "Short explanation.",
-            "target_cell": "C3",
-            "values": [[1000]]
-        }}
-        """
-
-    return f"""
-    You are a General Data Assistant.
-
-    ACTIVE SHEET: {req.sheet or kernel.active_sheet}
-    VIEW SCOPE: {scope_line}
-    SELECTED CELLS: {selected_summary}
-    CONTEXT (Current Grid State):
-    {context['formatted_data']}
-
-    RULES:
-    1. If the scope is "selection", focus on the selected cells unless the user clearly wants a full-sheet action.
-    2. Follow the user's instructions for text manipulation, clearing, labeling, or basic data entry.
-    3. Return a 2D 'values' array and a single top-left target_cell.
-    4. Keep the response preview-safe. Do not claim anything was already written.
-
-    OUTPUT FORMAT: strictly valid JSON
-    {{
-        "reasoning": "Short explanation.",
-        "target_cell": "A1",
-        "values": [["Q1 Report"]]
-    }}
-    """
+    return "\n\n".join([
+        BASE_SYSTEM_RULES,
+        f"ACTIVE SHEET: {req.sheet or kernel.active_sheet}\nVIEW SCOPE: {scope_line}\nSELECTED CELLS: {selected_summary}\n{bounds_line}",
+        f"CELL METADATA (a1 -> {{val, locked, type}}):\n{context['cell_metadata_json']}",
+        f"READABLE GRID STATE:\n{context['formatted_data']}",
+        agent["system_prompt"],
+        OUTPUT_FORMAT_SPEC,
+    ])
 
 
-def generate_agent_preview(req: ChatRequest):
+def _parse_ai_response(text: str) -> dict:
+    cleaned = text.replace("```json", "").replace("```", "").strip()
+    return json.loads(cleaned)
+
+
+def generate_agent_preview(req: ChatRequest) -> dict:
     sheet = req.sheet or kernel.active_sheet
     context = kernel.get_context_for_ai(sheet, req.selected_cells, req.scope)
     history_context = "\n".join([f"{h['role'].upper()}: {h['content']}" for h in req.history])
 
-    router_instruction = f"""
-    Analyze this user task: "{req.prompt}".
-    Previous context: {history_context}
-    Is this task "general" or "finance"?
-    Return ONLY the word "general" or "finance".
-    """
+    agent_id = route_prompt(req.prompt, history_context)
+    agent = AGENTS[agent_id]
+    system_instruction = build_system_instruction(agent, context, req)
 
-    router_res = model.generate_content(router_instruction)
-    task_category = router_res.text.strip().lower()
-    system_instruction = build_system_instruction(task_category, context, req)
-
-    final_response = model.generate_content([system_instruction, req.prompt])
-    clean_json = final_response.text.replace("```json", "").replace("```", "").strip()
-    ai_data = json.loads(clean_json)
+    final_response = call_model(
+        agent_id,
+        contents=req.prompt,
+        config=types.GenerateContentConfig(system_instruction=system_instruction),
+    )
+    ai_data = _parse_ai_response(final_response.text or "")
 
     intent = AgentIntent(
-        agent_id="Finance-Bot" if "finance" in task_category else "General-Bot",
+        agent_id=agent_id,
         target_start_a1=ai_data.get("target_cell", req.selected_cells[0] if req.selected_cells else "C2"),
         data_payload=ai_data.get("values", [["Error"]]),
         shift_direction="right",
@@ -161,16 +213,34 @@ def generate_agent_preview(req: ChatRequest):
 
     preview = kernel.preview_agent_intent(intent, sheet)
     return {
-        "category": task_category,
+        "category": agent_id,
         "reasoning": ai_data.get("reasoning"),
         "sheet": sheet,
         "scope": req.scope,
         "selected_cells": req.selected_cells,
-        "agent_id": intent.agent_id,
+        "agent_id": agent_id,
         "target_cell": preview["actual_target"],
         "original_request": preview["original_target"],
         "preview_cells": preview["preview_cells"],
         "values": ai_data.get("values"),
+    }
+
+
+# ---------- Endpoints ----------
+
+
+@app.get("/")
+async def serve_frontend():
+    return FileResponse("static/index.html")
+
+
+@app.get("/agents")
+async def list_agents():
+    return {
+        "agents": [
+            {"id": a["id"], "display_name": a.get("display_name", a["id"]), "router_description": a.get("router_description", "")}
+            for a in AGENTS.values()
+        ]
     }
 
 
@@ -196,6 +266,118 @@ async def apply_agent_preview(req: PreviewApplyRequest):
         "sheet": req.sheet or kernel.active_sheet,
         "actual_target": actual,
     }
+
+
+def _observe_written_cells(preview_cells: list[dict], sheet: str) -> list[dict]:
+    """After applying, collect the computed values for any cells the agent just wrote."""
+    state = kernel._sheet_state(sheet)
+    observations = []
+    for item in preview_cells:
+        a1 = item["cell"]
+        try:
+            r, c = a1_to_coords(a1)
+        except ValueError:
+            continue
+        cell = state["cells"].get((r, c))
+        if cell is None:
+            continue
+        observations.append({
+            "cell": a1,
+            "value": cell.value,
+            "formula": cell.formula,
+        })
+    return observations
+
+
+def _is_completion_signal(values) -> bool:
+    """An agent signals 'task complete' by returning an empty-string grid."""
+    if not values:
+        return True
+    for row in values:
+        for v in row:
+            if v not in ("", None):
+                return False
+    return True
+
+
+@app.post("/agent/chat/chain")
+async def chat_chain(req: ChainRequest):
+    """Auto-apply the agent's writes, observe formula results, and loop up to max_iterations times."""
+    try:
+        sheet = req.sheet or kernel.active_sheet
+        history = list(req.history)
+        steps: list[dict] = []
+        current_prompt = req.prompt
+        max_iters = max(1, min(req.max_iterations, MAX_CHAIN_ITERATIONS))
+
+        for iteration in range(max_iters):
+            chat_req = ChatRequest(
+                prompt=current_prompt,
+                history=history,
+                scope=req.scope,
+                selected_cells=req.selected_cells,
+                sheet=sheet,
+            )
+            preview = generate_agent_preview(chat_req)
+            values = preview["values"] or [[""]]
+
+            if _is_completion_signal(values):
+                steps.append({
+                    "iteration": iteration,
+                    "agent_id": preview["agent_id"],
+                    "reasoning": preview["reasoning"],
+                    "target": preview["original_request"],
+                    "values": values,
+                    "observations": [],
+                    "completion_signal": True,
+                })
+                break
+
+            intent = AgentIntent(
+                agent_id=preview["agent_id"],
+                target_start_a1=preview["original_request"],
+                data_payload=values,
+                shift_direction="right",
+            )
+            _, actual_target = kernel.process_agent_intent(intent, sheet)
+            observations = _observe_written_cells(preview["preview_cells"], sheet)
+            formula_observations = [o for o in observations if o["formula"]]
+
+            steps.append({
+                "iteration": iteration,
+                "agent_id": preview["agent_id"],
+                "reasoning": preview["reasoning"],
+                "target": actual_target,
+                "values": values,
+                "observations": observations,
+                "completion_signal": False,
+            })
+
+            history.append({"role": "user", "content": current_prompt})
+            history.append({"role": "assistant", "content": json.dumps({
+                "reasoning": preview["reasoning"],
+                "target": actual_target,
+                "values": values,
+            })})
+
+            if not formula_observations:
+                break
+
+            summary = ", ".join(f"{o['cell']}={o['value']}" for o in formula_observations)
+            current_prompt = (
+                f"The previous operation resulted in [{summary}]. "
+                "Do you have a follow-up action, or is the task complete? "
+                "If complete, return values=[[\"\"]] and target_cell equal to the last written cell."
+            )
+
+        return {
+            "sheet": sheet,
+            "steps": steps,
+            "iterations_used": len(steps),
+            "terminated_early": len(steps) < max_iters,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chain Error: {str(e)}")
 
 
 @app.post("/agent/write", response_model=WriteResponse)

@@ -277,6 +277,9 @@ class GridOSKernel:
             return {
                 "occupied_info": "The grid is currently empty.",
                 "formatted_data": "No data present.",
+                "cell_metadata": {},
+                "cell_metadata_json": "{}",
+                "occupied_bounds": None,
                 "scope": scope,
             }
 
@@ -293,15 +296,41 @@ class GridOSKernel:
             occupied_info = ", ".join(coords_to_a1(r, c) for (r, c), _ in entries)
 
         grid_lines = []
+        cell_metadata: dict[str, dict] = {}
+        rows_coords = []
+        cols_coords = []
         for (r, c), cell in entries:
             a1 = coords_to_a1(r, c)
             formula = f" (Formula: {cell.formula})" if cell.formula else ""
             lock = " [LOCKED]" if cell.locked else ""
             grid_lines.append(f"{a1}: {cell.value}{formula}{lock}")
+            cell_metadata[a1] = {
+                "val": cell.value,
+                "locked": bool(cell.locked),
+                "type": "formula" if cell.formula else "static",
+            }
+            rows_coords.append(r)
+            cols_coords.append(c)
+
+        occupied_bounds = None
+        if rows_coords:
+            top = min(rows_coords)
+            bottom = max(rows_coords)
+            left = min(cols_coords)
+            right = max(cols_coords)
+            occupied_bounds = {
+                "top_left": coords_to_a1(top, left),
+                "bottom_right": coords_to_a1(bottom, right),
+                "rows": bottom - top + 1,
+                "cols": right - left + 1,
+            }
 
         return {
             "occupied_info": occupied_info or "No occupied cells in scope.",
             "formatted_data": "\n".join(grid_lines) if grid_lines else "No data present.",
+            "cell_metadata": cell_metadata,
+            "cell_metadata_json": json.dumps(cell_metadata, default=str),
+            "occupied_bounds": occupied_bounds,
             "scope": scope,
         }
 

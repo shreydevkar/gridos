@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import pydantic\")",
+      "Bash(python3 -c \"import fastapi\")",
+      "Bash(python3 -m pip --version)",
+      "Bash(python3 -m py_compile main.py core/engine.py core/functions.py core/models.py core/utils.py agents/__init__.py test_platform.py)",
+      "Bash(python3 -c \"import json; print\\(json.load\\(open\\('agents/finance.json'\\)\\)['id'], '|', json.load\\(open\\('agents/general.json'\\)\\)['id']\\)\")"
+    ]
+  }
+}

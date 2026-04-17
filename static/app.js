@@ -302,17 +302,35 @@ function repaintSelection() {
 function repaintPreview(extraCells = null) {
     paintedPreview.forEach((a1) => {
         const td = cellEls.get(a1);
-        if (td) td.classList.remove("preview", "preview-active");
+        if (td) {
+            td.classList.remove("preview", "preview-active");
+            updateCellDom(a1);
+        }
     });
     paintedPreview.clear();
 
-    const cells = extraCells || previewState?.preview_cells?.map((item) => item.cell) || [];
-    cells.forEach((a1, index) => {
-        const td = cellEls.get(a1);
+    if (extraCells) {
+        extraCells.forEach((a1, index) => {
+            const td = cellEls.get(a1);
+            if (!td) return;
+            td.classList.add("preview");
+            if (index === 0) td.classList.add("preview-active");
+            paintedPreview.add(a1);
+        });
+        return;
+    }
+
+    const items = previewState?.preview_cells || [];
+    items.forEach((item, index) => {
+        const td = cellEls.get(item.cell);
         if (!td) return;
         td.classList.add("preview");
         if (index === 0) td.classList.add("preview-active");
-        paintedPreview.add(a1);
+        const content = td.firstElementChild;
+        const display = item.value === null || item.value === undefined ? "" : String(item.value);
+        content.textContent = display;
+        content.classList.add("cell-preview-text");
+        paintedPreview.add(item.cell);
     });
 }
 
