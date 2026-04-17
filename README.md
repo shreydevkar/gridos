@@ -1,129 +1,81 @@
-# GridOS: Agentic Spreadsheet Operating System
+# GridOS: Agentic Spreadsheet
 
-GridOS is a high-performance spreadsheet engine architecture that integrates Large Language Models (LLMs) with a deterministic logic kernel. Unlike standard chatbots, GridOS agents possess **spatial awareness** and **transactional integrity**, allowing them to reason over two-dimensional data structures while adhering to strict mathematical and safety constraints.
+GridOS pairs a deterministic Python kernel with an LLM (Google Gemini) to build a spreadsheet you can edit by talking to it. Agents read the current grid state, return structured JSON write-intents, and the kernel previews, collision-checks, and applies them — so the AI can edit the sheet without clobbering locked or occupied cells.
 
+## Architecture
 
+### `/core` — Deterministic kernel
+The source of truth for cell state.
+- `engine.py` — coordinate mapping, write collisions, shift logic, lock enforcement, persistence.
+- `models.py` — Pydantic schemas for `AgentIntent` and `WriteResponse`.
+- `functions.py` — registry of atomic formula operations (`SUM`, `MAX`, `MIN`, `MINUS`).
+- `utils.py` — A1 notation ↔ (row, col) coordinate translation.
 
-## 🏗️ System Architecture
+### `main.py` — Orchestration
+A FastAPI app that:
+- Streams a live grid snapshot into the LLM prompt.
+- Routes prompts to either a finance-specialized or general-purpose agent.
+- Validates model output against locked ranges before applying.
+- Exposes REST endpoints for chat, preview/apply, direct cell writes, sheet management, and save/load.
 
-The platform is engineered using a decoupled, three-tier architecture to ensure reliability and scalability:
+### `/static` — Frontend
+Minimal HTML + vanilla JS + Tailwind UI for editing cells, previewing AI suggestions, and managing sheets.
 
-### 1. The Deterministic Kernel (`/core`)
-The "Source of Truth" for the system. It manages state persistence and enforces grid-level constraints.
-* **`engine.py`**: Handles memory allocation, coordinate mapping, and the resolution of write-collisions.
-* **`models.py`**: Defines the strict Pydantic schemas for Agent Intents and Cell States.
-* **`functions.py`**: A registry of atomic, validated mathematical operations.
-* **`utils.py`**: Manages bidirectional translation between A1 notation and Cartesian coordinates.
+## Capabilities
 
-### 2. The Orchestration Layer (`main.py`)
-A FastAPI-driven middleware that acts as the system's "Thalamus."
-* **Contextual Injection**: Streams live grid snapshots into the LLM context window.
-* **Sandbox Routing**: Classifies incoming natural language into specialized agent domains (e.g., Financial Analysis vs. General Operations).
-* **Safety Guardrails**: Validates AI-generated JSON payloads against physical cell locks before execution.
+- **Formula synthesis** — natural-language prompts become executable grid formulas (e.g. `=MINUS(C3, D3)`).
+- **Collision resolution** — shifts data to avoid overwriting occupied or locked cells.
+- **Cell locking** — users can mark ranges read-only so the AI can't touch them.
+- **State persistence** — workbooks serialize to `.gridos` files.
+- **Preview/apply flow** — AI writes go through a preview step before committing.
 
-### 3. The Reactive Interface (`/static`)
-A low-latency web interface designed for hybrid interaction.
-* **Bi-directional Sync**: Reflects AI-driven changes in real-time while allowing manual user overrides.
-* **Human-in-the-Loop**: Users can manually lock specific ranges to prevent AI modifications to critical templates.
+## Tech stack
 
-
-
----
-
-## 🚀 Key Capabilities
-
-* **Agentic Spatial Awareness**: Agents analyze occupied vs. vacant cells to optimize data placement.
-* **Formula Synthesis**: Converts natural language prompts into executable grid formulas (e.g., `=MINUS(C3, D3)`).
-* **Collision Resolution**: Intelligent shifting logic ensures data integrity when multiple agents or users target the same coordinates.
-* **State Persistence**: Session data is serialized to `.gridos` files for long-term storage and recovery.
-
----
-
-## 🛠️ Technical Specifications
-
-| Layer | Technology |
+| Layer | Tech |
 | :--- | :--- |
-| **Logic Kernel** | Python 3.10+ |
-| **Inference Engine** | Google Gemini 1.5 Flash / Pro |
-| **API Framework** | FastAPI (Asynchronous) |
-| **Frontend** | HTML5 / Tailwind CSS / Vanilla JS |
-| **Persistence** | Custom Serialization (.gridos) |
+| Kernel | Python 3.10+ |
+| LLM | Google Gemini (via `google-generativeai`) |
+| API | FastAPI + Uvicorn |
+| Frontend | HTML + Tailwind + vanilla JS |
+| Persistence | Custom `.gridos` file format |
 
----
+## Running locally
 
-## 🧩 Developer Ecosystem & Telemetry
+Prerequisites: Python 3.10+ and a Google Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 
-GridOS is designed as a modular platform, prioritizing transparency and extensibility.
+```bash
+git clone https://github.com/shreydevkar/gridos_kernel.git
+cd gridos_kernel
 
-### 📊 Telemetry & Governance
-To support enterprise-grade deployments and cost management, GridOS includes built-in telemetry:
-* **Token Attribution**: Every agent interaction is logged with precise metadata regarding Prompt and Completion tokens.
-* **Resource Costing**: Enables administrators to track the USD cost of LLM inference per user or per specialized agent.
-* **Audit Trails**: Maintains a ledger of all "Agent Intents" versus "Actual Writes," providing a clear history of how the grid reached its current state.
+python -m venv .venv
+source .venv/bin/activate   # Windows PowerShell: .venv\Scripts\Activate.ps1
 
-### 🔌 Extensibility (The SDK)
-* **Agent Profiles**: Define new expertise by dropping JSON schemas into the `/agents` directory.
-* **Custom Formula Registry**: Developers can register Python-backed formulas that the AI can then utilize within the grid logic.
----
+pip install -r requirements.txt
+```
 
-## 🚦 Deployment Guide
+Create a `.env` file in the repo root (see `.env.example`):
 
-### Prerequisites
-* Python 3.10 or higher
-* Valid Gemini API Credentials
+```
+GOOGLE_API_KEY=your_key_here
+```
 
-### Installation
-1.  **Clone the Repository:**
-    ```bash
-    git clone [https://github.com/your-org/gridos-kernel.git](https://github.com/your-org/gridos-kernel.git)
-    cd gridos-kernel
-    ```
+Then run the server:
 
-2.  **Install Dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+```bash
+uvicorn main:app --reload
+```
 
-3.  **Environment Setup:**
-    Configure your `GOOGLE_API_KEY` in the `main.py` configuration or as an environment variable.
+Open http://127.0.0.1:8000.
 
-4.  **Launch the Application:**
-    ```bash
-    uvicorn main:app --reload
-    ```
-    Access the interface at `http://127.0.0.1:8000`.
+## Roadmap
 
----
+- [x] Deterministic core — grid memory, locking, collision resolution
+- [x] Agentic routing — intent classification, JSON-based writes
+- [x] Hybrid interface — reactive UI with AI + manual control
+- [ ] Multi-step chaining — agent observes formula results and takes follow-up actions
+- [ ] Range-based vector operations and cross-sheet referencing
+- [ ] External connectors (stock / weather / etc.)
 
-## 🗺️ Development Roadmap
+## License
 
-- [x] **Phase 1: Deterministic Core** – Grid memory and collision logic.
-- [x] **Phase 2: Agentic Routing** – Intent classification and JSON-based command execution.
-- [x] **Phase 3: Hybrid Interface** – Reactive UI with manual/AI shared control.
-- [ ] **Phase 4: Multi-Agent Swarm** – Integration of specialized "Scout" agents for real-time web data fetching.
-- [ ] **Phase 5: Advanced Computation** – Range-based vector operations and cross-sheet referencing.
-
----
-
-## 🗺️ Next Steps & Roadmap
-
-1. **The Agentic Loop**: Implementing "Multi-Step Chaining" where an agent can write a value, observe the result of a formula, and then execute a follow-up action autonomously.
-2. **The Marketplace Interface**: A UI gallery for users to browse, test, and activate community-contributed agents.
-3. **External Connectors**: Direct REST API integration for pulling live data (Stock prices, Weather, CRM data) into grid cells.
-
----
-
-## 🤝 Contributing
-
-We welcome contributions from the community! 
-
-* **Feature Requests**: Open an issue to suggest new core functions or agent types.
-* **Pull Requests**: Ensure all core logic changes are accompanied by updates to the `test_harness.py`.
-* **Agent Marketplace**: Submit your specialized `.json` agent profiles to our community gallery.
-
----
-© 2024 GridOS Architecture Group. Licensed under the MIT License.
-
----
-
-© 2024 GridOS Architecture Group. Licensed under the MIT License.
+MIT.
