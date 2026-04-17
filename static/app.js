@@ -32,6 +32,13 @@ let paintedSelection = new Set();
 let paintedPreview = new Set();
 let activeCellId = null;
 
+// Charts state
+let sheetCharts = [];
+const chartInstances = new Map();
+const chartOverlayEls = new Map();
+let editingChartId = null;
+const CHART_PALETTE = ["#4285f4", "#ea4335", "#fbbc04", "#34a853", "#a142f4", "#00acc1", "#ff7043", "#8d6e63"];
+
 function colLabel(index) {
     let label = "";
     let value = index + 1;
@@ -177,6 +184,12 @@ function applyDimensions() {
             node.style.minHeight = `${height}px`;
         });
     });
+    if (sheetCharts && sheetCharts.length) {
+        sheetCharts.forEach(spec => {
+            const el = chartOverlayEls.get(spec.id);
+            if (el) positionChartOverlay(el, spec);
+        });
+    }
 }
 
 function renderGridShell() {
@@ -256,10 +269,13 @@ async function fetchGrid() {
     const res = await fetch(`${API_BASE}/debug/grid?sheet=${encodeURIComponent(workbook.active_sheet)}`);
     const payload = await res.json();
     gridData = payload.cells || {};
+    sheetCharts = payload.charts || [];
     refreshPopulatedCells();
     syncSelectionUI();
     repaintSelection();
     repaintPreview();
+    renderCharts();
+    refreshChartsList();
 }
 
 function syncSelectionUI() {
@@ -697,9 +713,10 @@ async function applyPreview() {
                 target_cell: previewState.original_request || previewState.target_cell,
                 values: previewState.values,
                 shift_direction: "right",
+                chart_spec: previewState.chart_spec || null,
             }),
         });
-        addLog("agent", `Applied preview into <strong>${escapeHtml(previewState.target_cell)}</strong>.`);
+        addLog("agent", `Applied preview into <strong>${escapeHtml(previewState.target_cell)}</strong>.${previewState.chart_spec ? " Chart added." : ""}`);
         if (previewState.target_cell) selectedRange = { start: previewState.target_cell, end: previewState.target_cell };
         clearPreview();
         await fetchGrid();
@@ -1268,12 +1285,388 @@ async function handleMenuAction(action) {
         case "toggle-assistant":
             toggleAssistant();
             break;
+        case "toggle-charts":
+            toggleChartsPanel();
+            break;
+        case "insert-chart":
+            openChartModal();
+            break;
         case "reset-column-widths":
             colWidths = {};
             rowHeights = {};
             applyDimensions();
             addLog("system", "Column and row sizes reset.");
             break;
+    }
+}
+
+// ======== Charts ========
+
+function parseA1Range(rangeStr) {
+    if (!rangeStr) return null;
+    const clean = rangeStr.trim().toUpperCase();
+    const [startRaw, endRaw] = clean.includes(":") ? clean.split(":") : [clean, clean];
+    const startMatch = /^([A-Z]+)(\d+)$/.exec(startRaw);
+    const endMatch = /^([A-Z]+)(\d+)$/.exec(endRaw);
+    if (!startMatch || !endMatch) return null;
+    const start = a1ToCoords(startRaw);
+    const end = a1ToCoords(endRaw);
+    return {
+        top: Math.min(start.row, end.row),
+        bottom: Math.max(start.row, end.row),
+        left: Math.min(start.col, end.col),
+        right: Math.max(start.col, end.col),
+    };
+}
+
+function cellNumeric(a1) {
+    const state = gridData[a1];
+    if (!state) return 0;
+    const v = state.value;
+    if (typeof v === "number") return v;
+    if (v === null || v === undefined || v === "") return 0;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+}
+
+function cellText(a1) {
+    const state = gridData[a1];
+    if (!state || state.value === null || state.value === undefined) return "";
+    return String(state.value);
+}
+
+function buildChartData(spec) {
+    const range = parseA1Range(spec.data_range);
+    if (!range) return null;
+    const byColumns = (spec.orientation || "columns") === "columns";
+
+    if (byColumns) {
+        // First column: labels. Remaining columns: series. Each row = one label.
+        const labels = [];
+        for (let r = range.top; r <= range.bottom; r++) {
+            labels.push(cellText(coordsToA1(r, range.left)));
+        }
+        const datasets = [];
+        for (let c = range.left + 1; c <= range.right; c++) {
+            const seriesName = cellText(coordsToA1(range.top, c)) || coordsToA1(range.top, c);
+            // If the first row looks like a header (non-numeric), skip it.
+            const firstCellVal = gridData[coordsToA1(range.top, c)]?.value;
+            const headerIsText = typeof firstCellVal === "string" && isNaN(Number(firstCellVal));
+            const startRow = headerIsText ? range.top + 1 : range.top;
+            const data = [];
+            for (let r = startRow; r <= range.bottom; r++) {
+                data.push(cellNumeric(coordsToA1(r, c)));
+            }
+            if (headerIsText) {
+                // drop the header label from labels for this dataset only — but Chart.js shares labels,
+                // so instead slice labels once (outside the loop) when any series has a header.
+            }
+            datasets.push({
+                label: seriesName,
+                data,
+                backgroundColor: CHART_PALETTE[(datasets.length) % CHART_PALETTE.length],
+                borderColor: CHART_PALETTE[(datasets.length) % CHART_PALETTE.length],
+            });
+        }
+        // If the first label cell itself looks like a header for the label column, drop the first label.
+        const firstLabelState = gridData[coordsToA1(range.top, range.left)];
+        const firstLabelIsText = firstLabelState && typeof firstLabelState.value === "string" && isNaN(Number(firstLabelState.value));
+        if (firstLabelIsText && datasets.some(ds => ds.data.length === labels.length - 1)) {
+            labels.shift();
+        }
+        // Normalize: if some datasets skipped header and others didn't, trim all to min length.
+        const minLen = Math.min(labels.length, ...datasets.map(ds => ds.data.length));
+        datasets.forEach(ds => { ds.data = ds.data.slice(0, minLen); });
+        return { labels: labels.slice(0, minLen), datasets };
+    } else {
+        // orientation = rows. First row: labels. Remaining rows: series.
+        const labels = [];
+        for (let c = range.left; c <= range.right; c++) {
+            labels.push(cellText(coordsToA1(range.top, c)));
+        }
+        const datasets = [];
+        for (let r = range.top + 1; r <= range.bottom; r++) {
+            const seriesName = cellText(coordsToA1(r, range.left)) || coordsToA1(r, range.left);
+            const firstCellVal = gridData[coordsToA1(r, range.left)]?.value;
+            const headerIsText = typeof firstCellVal === "string" && isNaN(Number(firstCellVal));
+            const startCol = headerIsText ? range.left + 1 : range.left;
+            const data = [];
+            for (let c = startCol; c <= range.right; c++) {
+                data.push(cellNumeric(coordsToA1(r, c)));
+            }
+            datasets.push({
+                label: seriesName,
+                data,
+                backgroundColor: CHART_PALETTE[(datasets.length) % CHART_PALETTE.length],
+                borderColor: CHART_PALETTE[(datasets.length) % CHART_PALETTE.length],
+            });
+        }
+        const firstLabelState = gridData[coordsToA1(range.top, range.left)];
+        const firstLabelIsText = firstLabelState && typeof firstLabelState.value === "string" && isNaN(Number(firstLabelState.value));
+        if (firstLabelIsText && datasets.some(ds => ds.data.length === labels.length - 1)) {
+            labels.shift();
+        }
+        const minLen = Math.min(labels.length, ...datasets.map(ds => ds.data.length));
+        datasets.forEach(ds => { ds.data = ds.data.slice(0, minLen); });
+        return { labels: labels.slice(0, minLen), datasets };
+    }
+}
+
+function positionChartOverlay(el, spec) {
+    const anchor = cellEls.get(spec.anchor_cell);
+    if (!anchor) {
+        el.style.display = "none";
+        return;
+    }
+    el.style.display = "flex";
+    el.style.left = `${anchor.offsetLeft}px`;
+    el.style.top = `${anchor.offsetTop}px`;
+    el.style.width = `${spec.width || 400}px`;
+    el.style.height = `${spec.height || 280}px`;
+}
+
+function destroyChartInstance(id) {
+    const inst = chartInstances.get(id);
+    if (inst) {
+        inst.destroy();
+        chartInstances.delete(id);
+    }
+    const el = chartOverlayEls.get(id);
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    chartOverlayEls.delete(id);
+}
+
+function renderSingleChart(spec) {
+    const layer = document.getElementById("chart-layer");
+    if (!layer || typeof Chart === "undefined") return;
+
+    destroyChartInstance(spec.id);
+
+    const overlay = document.createElement("div");
+    overlay.className = "chart-overlay";
+    overlay.dataset.chartId = spec.id;
+
+    const header = document.createElement("div");
+    header.className = "chart-overlay-header";
+    const titleEl = document.createElement("div");
+    titleEl.className = "chart-overlay-title";
+    titleEl.textContent = spec.title || "(untitled chart)";
+    titleEl.title = `${spec.data_range} · ${spec.chart_type}`;
+    const actions = document.createElement("div");
+    actions.className = "chart-overlay-actions";
+    const editBtn = document.createElement("button");
+    editBtn.className = "chart-overlay-btn";
+    editBtn.type = "button";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => openChartModal(spec.id));
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "chart-overlay-btn";
+    closeBtn.type = "button";
+    closeBtn.textContent = "×";
+    closeBtn.title = "Delete chart";
+    closeBtn.addEventListener("click", () => deleteChartById(spec.id));
+    actions.appendChild(editBtn);
+    actions.appendChild(closeBtn);
+    header.appendChild(titleEl);
+    header.appendChild(actions);
+
+    const canvasWrap = document.createElement("div");
+    canvasWrap.className = "chart-overlay-canvas-wrap";
+    const canvas = document.createElement("canvas");
+    canvasWrap.appendChild(canvas);
+
+    overlay.appendChild(header);
+    overlay.appendChild(canvasWrap);
+    layer.appendChild(overlay);
+
+    positionChartOverlay(overlay, spec);
+    chartOverlayEls.set(spec.id, overlay);
+
+    const data = buildChartData(spec);
+    if (!data) {
+        titleEl.textContent = `${spec.title || "(untitled)"} — invalid range`;
+        return;
+    }
+
+    const isPie = spec.chart_type === "pie";
+    const chartConfig = {
+        type: spec.chart_type,
+        data: isPie
+            ? {
+                  labels: data.labels,
+                  datasets: data.datasets.length
+                      ? [{
+                            label: data.datasets[0].label,
+                            data: data.datasets[0].data,
+                            backgroundColor: data.labels.map((_, i) => CHART_PALETTE[i % CHART_PALETTE.length]),
+                        }]
+                      : [],
+              }
+            : data,
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: !isPie ? data.datasets.length > 1 : true, position: isPie ? "right" : "top" },
+                title: { display: false },
+            },
+            scales: isPie ? {} : {
+                y: { beginAtZero: true },
+            },
+        },
+    };
+
+    try {
+        const inst = new Chart(canvas.getContext("2d"), chartConfig);
+        chartInstances.set(spec.id, inst);
+    } catch (e) {
+        titleEl.textContent = `${spec.title || "(untitled)"} — render error`;
+        console.error("Chart render error", e);
+    }
+}
+
+function renderCharts() {
+    const layer = document.getElementById("chart-layer");
+    if (!layer) return;
+    const keepIds = new Set(sheetCharts.map(c => c.id));
+    Array.from(chartInstances.keys()).forEach(id => {
+        if (!keepIds.has(id)) destroyChartInstance(id);
+    });
+    sheetCharts.forEach(spec => renderSingleChart(spec));
+}
+
+function refreshChartsList() {
+    const list = document.getElementById("charts-list");
+    const subtitle = document.getElementById("charts-panel-subtitle");
+    if (!list) return;
+    list.innerHTML = "";
+    if (!sheetCharts.length) {
+        if (subtitle) subtitle.textContent = "No charts on this sheet yet.";
+        return;
+    }
+    if (subtitle) subtitle.textContent = `${sheetCharts.length} chart${sheetCharts.length === 1 ? "" : "s"} on this sheet.`;
+    sheetCharts.forEach(spec => {
+        const li = document.createElement("li");
+        li.className = "charts-list-item";
+        const name = document.createElement("div");
+        name.innerHTML = `<strong>${escapeHtml(spec.title || "(untitled)")}</strong>`;
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = `${spec.chart_type} · ${spec.data_range} · anchor ${spec.anchor_cell}`;
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.textContent = "Edit";
+        editBtn.addEventListener("click", () => openChartModal(spec.id));
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.textContent = "Delete";
+        delBtn.className = "danger";
+        delBtn.addEventListener("click", () => deleteChartById(spec.id));
+        actions.appendChild(editBtn);
+        actions.appendChild(delBtn);
+        li.appendChild(name);
+        li.appendChild(meta);
+        li.appendChild(actions);
+        list.appendChild(li);
+    });
+}
+
+function toggleChartsPanel(force) {
+    const panel = document.getElementById("charts-panel");
+    if (!panel) return;
+    const want = force !== undefined ? force : panel.hasAttribute("hidden");
+    if (want) panel.removeAttribute("hidden");
+    else panel.setAttribute("hidden", "");
+}
+
+function openChartModal(existingId) {
+    editingChartId = existingId || null;
+    const backdrop = document.getElementById("chart-modal-backdrop");
+    const titleHeader = document.getElementById("chart-modal-title");
+    const submitBtn = document.getElementById("chart-form-submit");
+    const existing = existingId ? sheetCharts.find(c => c.id === existingId) : null;
+    const defaults = existing || {
+        title: "",
+        data_range: selectionLabel().includes(":") ? selectionLabel() : `${selectedRange.start}:${selectedRange.end}`,
+        chart_type: "bar",
+        orientation: "columns",
+        anchor_cell: "F2",
+        width: 400,
+        height: 280,
+    };
+    document.getElementById("chart-form-title").value = defaults.title || "";
+    document.getElementById("chart-form-range").value = defaults.data_range || "";
+    document.getElementById("chart-form-type").value = defaults.chart_type || "bar";
+    document.getElementById("chart-form-orientation").value = defaults.orientation || "columns";
+    document.getElementById("chart-form-anchor").value = defaults.anchor_cell || "F2";
+    document.getElementById("chart-form-width").value = defaults.width || 400;
+    document.getElementById("chart-form-height").value = defaults.height || 280;
+    if (titleHeader) titleHeader.textContent = existingId ? "Edit chart" : "New chart";
+    if (submitBtn) submitBtn.textContent = existingId ? "Save changes" : "Create chart";
+    backdrop.removeAttribute("hidden");
+    document.getElementById("chart-form-range").focus();
+}
+
+function closeChartModal() {
+    editingChartId = null;
+    document.getElementById("chart-modal-backdrop").setAttribute("hidden", "");
+}
+
+async function submitChartForm(event) {
+    event.preventDefault();
+    const payload = {
+        title: document.getElementById("chart-form-title").value.trim(),
+        data_range: document.getElementById("chart-form-range").value.trim().toUpperCase(),
+        chart_type: document.getElementById("chart-form-type").value,
+        orientation: document.getElementById("chart-form-orientation").value,
+        anchor_cell: document.getElementById("chart-form-anchor").value.trim().toUpperCase() || "F2",
+        width: Number(document.getElementById("chart-form-width").value) || 400,
+        height: Number(document.getElementById("chart-form-height").value) || 280,
+        sheet: workbook.active_sheet,
+    };
+    if (!parseA1Range(payload.data_range)) {
+        addLog("system", escapeHtml(`Invalid data range: ${payload.data_range}`));
+        return;
+    }
+    try {
+        if (editingChartId) {
+            const res = await fetch(`${API_BASE}/system/charts/${editingChartId}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (!res.ok) throw new Error((await res.json()).detail || "Update failed");
+            addLog("system", `Chart updated: <strong>${escapeHtml(payload.title || payload.data_range)}</strong>.`);
+        } else {
+            const res = await fetch(`${API_BASE}/system/charts`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            if (!res.ok) throw new Error((await res.json()).detail || "Create failed");
+            addLog("system", `Chart created: <strong>${escapeHtml(payload.title || payload.data_range)}</strong>.`);
+        }
+        closeChartModal();
+        await fetchGrid();
+        toggleChartsPanel(true);
+    } catch (error) {
+        addLog("system", escapeHtml(`Chart save failed: ${error.message}`));
+    }
+}
+
+async function deleteChartById(id) {
+    try {
+        const res = await fetch(`${API_BASE}/system/charts/${id}?sheet=${encodeURIComponent(workbook.active_sheet)}`, {
+            method: "DELETE",
+        });
+        if (!res.ok) throw new Error((await res.json()).detail || "Delete failed");
+        addLog("system", "Chart deleted.");
+        destroyChartInstance(id);
+        await fetchGrid();
+    } catch (error) {
+        addLog("system", escapeHtml(`Chart delete failed: ${error.message}`));
     }
 }
 
@@ -1349,6 +1742,26 @@ async function bootstrap() {
             handleMenuAction(item.dataset.menuAction);
         });
     });
+
+    // Charts panel + modal wiring
+    document.getElementById("charts-panel-close")?.addEventListener("click", () => toggleChartsPanel(false));
+    document.getElementById("charts-panel-add")?.addEventListener("click", () => openChartModal());
+    document.getElementById("chart-modal-close")?.addEventListener("click", closeChartModal);
+    document.getElementById("chart-form-cancel")?.addEventListener("click", closeChartModal);
+    document.getElementById("chart-form")?.addEventListener("submit", submitChartForm);
+    document.getElementById("chart-modal-backdrop")?.addEventListener("click", (event) => {
+        if (event.target.id === "chart-modal-backdrop") closeChartModal();
+    });
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !document.getElementById("chart-modal-backdrop").hasAttribute("hidden")) {
+            closeChartModal();
+        }
+    });
+    // Reposition chart overlays whenever column/row sizes change.
+    window.addEventListener("resize", () => sheetCharts.forEach(spec => {
+        const el = chartOverlayEls.get(spec.id);
+        if (el) positionChartOverlay(el, spec);
+    }));
 }
 
 bootstrap();

@@ -107,6 +107,7 @@ class PreviewApplyRequest(BaseModel):
     target_cell: str
     values: list[list]
     shift_direction: str = "right"
+    chart_spec: Optional[Dict[str, Any]] = None
 
 
 class SheetCreateRequest(BaseModel):
@@ -135,8 +136,19 @@ OUTPUT FORMAT: strictly valid JSON (no markdown fences):
 {
     "reasoning": "Short explanation.",
     "target_cell": "A1",
-    "values": [["..."]]
+    "values": [["..."]],
+    "chart_spec": null
 }
+
+If the user asks for a chart/graph/visualization, also fill in chart_spec:
+{
+    "data_range": "A1:B6",        // rectangular range covering labels + values
+    "chart_type": "bar",          // one of: bar, line, pie
+    "title": "Scores",
+    "anchor_cell": "D2",          // top-left cell where the chart overlay appears; pick an empty area
+    "orientation": "columns"      // "columns" = first column is labels (typical); "rows" = first row is labels
+}
+Omit chart_spec (leave as null) when the user is only writing data or editing cells.
 """.strip()
 
 
@@ -231,6 +243,7 @@ def generate_agent_preview(req: ChatRequest) -> dict:
         "original_request": preview["original_target"],
         "preview_cells": preview["preview_cells"],
         "values": ai_data.get("values"),
+        "chart_spec": ai_data.get("chart_spec"),
     }
 
 
@@ -269,10 +282,22 @@ async def apply_agent_preview(req: PreviewApplyRequest):
         shift_direction=req.shift_direction,
     )
     requested, actual = kernel.process_agent_intent(intent, req.sheet)
+    chart = None
+    if req.chart_spec:
+        try:
+            chart = kernel.add_chart(req.chart_spec, sheet_name=req.sheet)
+        except Exception as e:
+            return {
+                "status": "Partial",
+                "sheet": req.sheet or kernel.active_sheet,
+                "actual_target": actual,
+                "chart_error": f"Chart skipped: {e}",
+            }
     return {
         "status": "Success" if requested == actual else "Collision Resolved",
         "sheet": req.sheet or kernel.active_sheet,
         "actual_target": actual,
+        "chart": chart,
     }
 
 
@@ -351,6 +376,14 @@ async def chat_chain(req: ChainRequest):
             observations = _observe_written_cells(preview["preview_cells"], sheet)
             formula_observations = [o for o in observations if o["formula"]]
 
+            chart = None
+            chart_error = None
+            if preview.get("chart_spec"):
+                try:
+                    chart = kernel.add_chart(preview["chart_spec"], sheet_name=sheet)
+                except Exception as e:
+                    chart_error = str(e)
+
             steps.append({
                 "iteration": iteration,
                 "agent_id": preview["agent_id"],
@@ -359,6 +392,8 @@ async def chat_chain(req: ChainRequest):
                 "values": values,
                 "observations": observations,
                 "completion_signal": False,
+                "chart": chart,
+                "chart_error": chart_error,
             })
 
             history.append({"role": "user", "content": current_prompt})
@@ -412,7 +447,11 @@ async def agent_write(intent: AgentIntent):
 @app.get("/debug/grid")
 async def get_grid(sheet: Optional[str] = None):
     target = sheet or kernel.active_sheet
-    return {"sheet": target, "cells": kernel.export_sheet(target)}
+    return {
+        "sheet": target,
+        "cells": kernel.export_sheet(target),
+        "charts": kernel.list_charts(target),
+    }
 
 
 @app.get("/workbook")
@@ -506,3 +545,62 @@ async def evaluate_formula(req: FormulaRequest):
 async def clear_grid(sheet: Optional[str] = None):
     kernel.clear_unlocked(sheet)
     return {"status": "Success", "sheet": sheet or kernel.active_sheet}
+
+
+# ---------- Charts ----------
+
+
+class ChartCreateRequest(BaseModel):
+    anchor_cell: str = "F2"
+    data_range: str
+    chart_type: str = "bar"
+    title: str = ""
+    width: int = 400
+    height: int = 280
+    orientation: str = "columns"
+    sheet: Optional[str] = None
+
+
+class ChartUpdateRequest(BaseModel):
+    anchor_cell: Optional[str] = None
+    data_range: Optional[str] = None
+    chart_type: Optional[str] = None
+    title: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    orientation: Optional[str] = None
+    sheet: Optional[str] = None
+
+
+@app.get("/system/charts")
+async def list_charts(sheet: Optional[str] = None):
+    return {"charts": kernel.list_charts(sheet)}
+
+
+@app.post("/system/charts")
+async def create_chart(req: ChartCreateRequest):
+    spec = req.model_dump(exclude={"sheet"})
+    try:
+        chart = kernel.add_chart(spec, sheet_name=req.sheet)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not create chart: {e}")
+    return {"status": "Success", "chart": chart}
+
+
+@app.patch("/system/charts/{chart_id}")
+async def update_chart(chart_id: str, req: ChartUpdateRequest):
+    updates = req.model_dump(exclude={"sheet"}, exclude_none=True)
+    try:
+        chart = kernel.update_chart(chart_id, updates, sheet_name=req.sheet)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not update chart: {e}")
+    return {"status": "Success", "chart": chart}
+
+
+@app.delete("/system/charts/{chart_id}")
+async def delete_chart(chart_id: str, sheet: Optional[str] = None):
+    if not kernel.delete_chart(chart_id, sheet_name=sheet):
+        raise HTTPException(status_code=404, detail=f"Chart '{chart_id}' not found.")
+    return {"status": "Success"}

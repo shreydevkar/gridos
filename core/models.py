@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Literal
 
 class CellState(BaseModel):
     value: Any = None
@@ -20,3 +20,13 @@ class WriteResponse(BaseModel):
     original_target: str
     actual_target: str
     message: str
+
+class ChartSpec(BaseModel):
+    id: str
+    anchor_cell: str = "F2"
+    data_range: str  # e.g. "A1:B6"
+    chart_type: Literal["bar", "line", "pie"] = "bar"
+    title: str = ""
+    width: int = 400
+    height: int = 280
+    orientation: Literal["columns", "rows"] = "columns"  # whether series run down columns or across rows

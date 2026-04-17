@@ -315,6 +315,209 @@
             position: relative;
         }
 
+        /* ===== Chart overlays ===== */
+        .chart-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0;
+            height: 0;
+            pointer-events: none;
+            z-index: 5;
+        }
+        .chart-overlay {
+            position: absolute;
+            pointer-events: auto;
+            background: #fff;
+            border: 1px solid #dadce0;
+            border-radius: 6px;
+            box-shadow: 0 6px 18px rgba(16, 24, 40, 0.12);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .chart-overlay-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 10px;
+            border-bottom: 1px solid #ececec;
+            font-size: 12px;
+            font-weight: 600;
+            color: #202124;
+            background: #f8f9fa;
+            gap: 8px;
+            min-height: 28px;
+        }
+        .chart-overlay-title {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .chart-overlay-actions {
+            display: flex;
+            gap: 2px;
+            flex-shrink: 0;
+        }
+        .chart-overlay-btn {
+            background: none;
+            border: none;
+            padding: 2px 6px;
+            font-size: 12px;
+            color: #5f6368;
+            cursor: pointer;
+            border-radius: 3px;
+        }
+        .chart-overlay-btn:hover {
+            background: #eaeaea;
+            color: #202124;
+        }
+        .chart-overlay-canvas-wrap {
+            flex: 1;
+            padding: 8px;
+            min-height: 0;
+            position: relative;
+        }
+        .chart-overlay canvas {
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        /* ===== Charts panel ===== */
+        .charts-panel {
+            width: 280px;
+            border-left: 1px solid var(--border-soft);
+            background: #fff;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+        .charts-panel[hidden] { display: none; }
+        .charts-panel-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .charts-panel-header h3 { margin: 0; font-size: 14px; }
+        .charts-panel-subtitle {
+            margin: 2px 0 0;
+            font-size: 11px;
+            color: #5f6368;
+        }
+        .charts-panel-body {
+            padding: 12px 14px;
+            overflow: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            flex: 1;
+        }
+        .charts-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .charts-list-item {
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            padding: 10px 12px;
+            background: #fafafa;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 12px;
+        }
+        .charts-list-item .meta {
+            color: #5f6368;
+            font-size: 11px;
+        }
+        .charts-list-item .actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .charts-list-item button {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 3px;
+            border: 1px solid var(--border-soft);
+            background: #fff;
+            cursor: pointer;
+        }
+        .charts-list-item button:hover { background: #f1f3f4; }
+        .charts-list-item button.danger { color: #b3261e; }
+
+        /* ===== Chart modal ===== */
+        .chart-modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(32, 33, 36, 0.45);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .chart-modal-backdrop[hidden] { display: none; }
+        .chart-modal {
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(16, 24, 40, 0.25);
+            width: 460px;
+            max-width: calc(100vw - 32px);
+            display: flex;
+            flex-direction: column;
+        }
+        .chart-modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .chart-modal-header h3 { margin: 0; font-size: 15px; }
+        .chart-form {
+            padding: 16px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .chart-form label {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 12px;
+            color: #3c4043;
+        }
+        .chart-form input,
+        .chart-form select {
+            font: inherit;
+            padding: 6px 8px;
+            border: 1px solid var(--border-soft);
+            border-radius: 4px;
+        }
+        .chart-form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .chart-form-size {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .chart-form-size input { width: 80px; }
+        .chart-form-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 4px;
+        }
+
         table.spreadsheet {
             border-collapse: separate;
             border-spacing: 0;
@@ -974,7 +1177,14 @@
                     <button class="menubar-menu-btn" data-menu="view" type="button">View</button>
                     <ul class="menu-dropdown" id="menu-view" role="menu">
                         <li data-menu-action="toggle-assistant">Toggle assistant panel<span class="menu-shortcut"></span></li>
+                        <li data-menu-action="toggle-charts">Toggle charts panel<span class="menu-shortcut"></span></li>
                         <li data-menu-action="reset-column-widths">Reset column widths<span class="menu-shortcut"></span></li>
+                    </ul>
+                </div>
+                <div class="menubar-menu-group">
+                    <button class="menubar-menu-btn" data-menu="insert" type="button">Insert</button>
+                    <ul class="menu-dropdown" id="menu-insert" role="menu">
+                        <li data-menu-action="insert-chart">Chart...<span class="menu-shortcut"></span></li>
                     </ul>
                 </div>
                 <div class="menubar-divider"></div>
@@ -1010,6 +1220,7 @@
             <!-- Grid -->
             <div class="grid-wrap" id="sheet-wrap">
                 <table id="spreadsheet" class="spreadsheet"></table>
+                <div id="chart-layer" class="chart-layer"></div>
             </div>
 
             <!-- Tabs -->
@@ -1078,6 +1289,74 @@
                 </div>
             </div>
         </aside>
+
+        <!-- Charts sidebar -->
+        <aside class="charts-panel" id="charts-panel" hidden>
+            <div class="charts-panel-header">
+                <div>
+                    <h3>Charts</h3>
+                    <p class="charts-panel-subtitle" id="charts-panel-subtitle">No charts on this sheet yet.</p>
+                </div>
+                <button class="icon-btn" id="charts-panel-close" type="button" title="Close charts panel">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="charts-panel-body">
+                <button class="primary-btn" id="charts-panel-add" type="button">+ New chart</button>
+                <ul class="charts-list" id="charts-list"></ul>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Chart modal -->
+    <div class="chart-modal-backdrop" id="chart-modal-backdrop" hidden>
+        <div class="chart-modal" role="dialog" aria-modal="true">
+            <div class="chart-modal-header">
+                <h3 id="chart-modal-title">New chart</h3>
+                <button class="icon-btn" id="chart-modal-close" type="button" title="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <form id="chart-form" class="chart-form">
+                <label>Title
+                    <input type="text" id="chart-form-title" placeholder="Quarterly Revenue" />
+                </label>
+                <label>Data range (A1 notation)
+                    <input type="text" id="chart-form-range" placeholder="A1:B6" required />
+                </label>
+                <div class="chart-form-row">
+                    <label>Type
+                        <select id="chart-form-type">
+                            <option value="bar">Bar</option>
+                            <option value="line">Line</option>
+                            <option value="pie">Pie</option>
+                        </select>
+                    </label>
+                    <label>Orientation
+                        <select id="chart-form-orientation">
+                            <option value="columns">Labels in first column</option>
+                            <option value="rows">Labels in first row</option>
+                        </select>
+                    </label>
+                </div>
+                <div class="chart-form-row">
+                    <label>Anchor cell
+                        <input type="text" id="chart-form-anchor" placeholder="F2" value="F2" />
+                    </label>
+                    <label>Size (px)
+                        <div class="chart-form-size">
+                            <input type="number" id="chart-form-width" min="160" max="1200" value="400" />
+                            <span>&times;</span>
+                            <input type="number" id="chart-form-height" min="120" max="800" value="280" />
+                        </div>
+                    </label>
+                </div>
+                <div class="chart-form-actions">
+                    <button type="button" class="ghost-btn" id="chart-form-cancel">Cancel</button>
+                    <button type="submit" class="primary-btn" id="chart-form-submit">Create chart</button>
+                </div>
+            </form>
+        </div>
     </div>
 
     <!-- Context menu (hidden by default) -->
@@ -1089,6 +1368,7 @@
         <li data-action="clear">Clear contents<span class="ctx-menu-shortcut">Del</span></li>
     </ul>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

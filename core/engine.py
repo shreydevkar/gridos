@@ -1,9 +1,10 @@
 import json
 import re
+import uuid
 from copy import deepcopy
 
 from core.functions import FormulaEvaluator
-from core.models import AgentIntent, CellState
+from core.models import AgentIntent, CellState, ChartSpec
 from core.utils import a1_to_coords, coords_to_a1
 
 
@@ -25,8 +26,10 @@ class GridOSKernel:
 
     def _ensure_sheet(self, sheet_name: str):
         if sheet_name not in self.sheets:
-            self.sheets[sheet_name] = {"cells": {}, "dependencies": {}}
+            self.sheets[sheet_name] = {"cells": {}, "dependencies": {}, "charts": []}
             self.sheet_order.append(sheet_name)
+        elif "charts" not in self.sheets[sheet_name]:
+            self.sheets[sheet_name]["charts"] = []
 
     def _sheet_state(self, sheet_name: str | None = None):
         target = sheet_name or self.active_sheet
@@ -348,8 +351,11 @@ class GridOSKernel:
             "sheet_order": self.sheet_order,
             "sheets": {
                 name: {
-                    coords_to_a1(r, c): cell.model_dump()
-                    for (r, c), cell in self.sheets[name]["cells"].items()
+                    "cells": {
+                        coords_to_a1(r, c): cell.model_dump()
+                        for (r, c), cell in self.sheets[name]["cells"].items()
+                    },
+                    "charts": [chart.model_dump() for chart in self.sheets[name].get("charts", [])],
                 }
                 for name in self.sheet_order
             },
@@ -375,10 +381,20 @@ class GridOSKernel:
             self.sheet_order = []
             for name in import_order:
                 self._ensure_sheet(name)
+                sheet_payload = import_data["sheets"].get(name, {})
+                # Backward compat: older files stored cells directly at the sheet level
+                # (no "cells" key), so treat the whole dict as cells in that case.
+                if "cells" in sheet_payload or "charts" in sheet_payload:
+                    cell_payload = sheet_payload.get("cells", {})
+                    chart_payload = sheet_payload.get("charts", [])
+                else:
+                    cell_payload = sheet_payload
+                    chart_payload = []
                 self.sheets[name]["cells"] = {}
-                for a1_key, state_dict in import_data["sheets"].get(name, {}).items():
+                for a1_key, state_dict in cell_payload.items():
                     r, c = a1_to_coords(a1_key)
                     self.sheets[name]["cells"][(r, c)] = CellState(**state_dict)
+                self.sheets[name]["charts"] = [ChartSpec(**c) for c in chart_payload]
                 self._rebuild_dependencies(name)
             self.active_sheet = import_data.get("active_sheet", self.sheet_order[0] if self.sheet_order else "Sheet1")
         else:
@@ -390,3 +406,35 @@ class GridOSKernel:
                 r, c = a1_to_coords(a1_key)
                 self.cells[(r, c)] = CellState(**state_dict)
             self._rebuild_dependencies(self.active_sheet)
+
+    # ---------- Charts ----------
+
+    def list_charts(self, sheet_name: str | None = None) -> list[dict]:
+        state = self._sheet_state(sheet_name)
+        return [chart.model_dump() for chart in state.get("charts", [])]
+
+    def add_chart(self, spec: dict, sheet_name: str | None = None) -> dict:
+        state = self._sheet_state(sheet_name)
+        payload = dict(spec)
+        if not payload.get("id"):
+            payload["id"] = f"chart_{uuid.uuid4().hex[:8]}"
+        chart = ChartSpec(**payload)
+        state["charts"].append(chart)
+        return chart.model_dump()
+
+    def update_chart(self, chart_id: str, updates: dict, sheet_name: str | None = None) -> dict:
+        state = self._sheet_state(sheet_name)
+        for idx, chart in enumerate(state["charts"]):
+            if chart.id == chart_id:
+                merged = chart.model_dump()
+                merged.update({k: v for k, v in updates.items() if v is not None})
+                updated = ChartSpec(**merged)
+                state["charts"][idx] = updated
+                return updated.model_dump()
+        raise ValueError(f"Chart '{chart_id}' not found on sheet '{sheet_name or self.active_sheet}'.")
+
+    def delete_chart(self, chart_id: str, sheet_name: str | None = None) -> bool:
+        state = self._sheet_state(sheet_name)
+        before = len(state["charts"])
+        state["charts"] = [c for c in state["charts"] if c.id != chart_id]
+        return len(state["charts"]) < before
