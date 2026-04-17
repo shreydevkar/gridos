@@ -44,8 +44,8 @@ Minimal HTML + vanilla JS + Tailwind UI for editing cells, previewing AI suggest
 Prerequisites: Python 3.10+ and a Google Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 
 ```bash
-git clone https://github.com/shreydevkar/gridos_kernel.git
-cd gridos_kernel
+git clone https://github.com/shreydevkar/gridos.git
+cd gridos
 
 python -m venv .venv
 source .venv/bin/activate   # Windows PowerShell: .venv\Scripts\Activate.ps1
