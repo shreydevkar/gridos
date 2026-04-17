@@ -2,6 +2,7 @@ import json
 import os
 
 import google.generativeai as genai
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,7 +14,8 @@ from core.functions import FormulaEvaluator
 from core.models import AgentIntent, WriteResponse
 
 
-genai.configure(api_key="REDACTED")
+load_dotenv()
+genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
 model = genai.GenerativeModel("gemini-3.1-flash-lite-preview")
 
 app = FastAPI(title="GridOS - Agentic Workbook")
