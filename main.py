@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +16,7 @@ from pydantic import BaseModel
 from agents import load_agents
 from core.engine import GridOSKernel
 from core.functions import FormulaEvaluator
+from core.macros import MacroError, compile_macro
 from core.models import AgentIntent, WriteResponse
 from core.utils import a1_to_coords
 
@@ -25,13 +27,111 @@ MODEL_NAME = "gemini-3.1-flash-lite-preview"
 TELEMETRY_PATH = Path("telemetry_log.json")
 MAX_CHAIN_ITERATIONS = 3
 
+DATA_DIR = Path("data")
+TEMPLATES_DIR = DATA_DIR / "templates"
+MACROS_PATH = DATA_DIR / "user_macros.json"
+HERO_TOOLS_PATH = DATA_DIR / "hero_tools.json"
+
+HERO_TOOLS_CATALOG = [
+    {
+        "id": "web_search",
+        "display_name": "Web Search",
+        "description": "(placeholder) Advises the agent that live web lookups are available. Actual fetching is not wired up.",
+    },
+    {
+        "id": "live_data",
+        "display_name": "Live Data Puller",
+        "description": "(placeholder) Advises the agent that external API/data feeds are available. Actual fetching is not wired up.",
+    },
+]
+
 app = FastAPI(title="GridOS - Agentic Workbook")
 kernel = GridOSKernel()
-kernel.lock_range("B2", "B10")
 AGENTS = load_agents()
 
+USER_MACROS: list[dict] = []
+HERO_TOOLS_STATE: dict[str, bool] = {t["id"]: False for t in HERO_TOOLS_CATALOG}
+
 os.makedirs("static", exist_ok=True)
+TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+# ---------- Library persistence ----------
+
+
+def _builtin_primitive_names() -> list[str]:
+    return sorted(kernel.evaluator.registry.keys())
+
+
+def _macro_names() -> set[str]:
+    return {m["name"].upper() for m in USER_MACROS}
+
+
+def _register_macro(spec: dict) -> None:
+    """Compile a macro spec and insert the resulting callable into the evaluator."""
+    # Exclude any previously-registered version of this macro from the primitive pool
+    # so macros can be updated safely and so a macro can't (accidentally) recurse into itself.
+    macro_name = spec["name"].upper()
+    primitive_registry = {
+        k: v for k, v in kernel.evaluator.registry.items() if k.upper() != macro_name
+    }
+    fn = compile_macro(
+        name=spec["name"],
+        params=spec.get("params", []),
+        body=spec["body"],
+        registry=primitive_registry,
+    )
+    kernel.evaluator.register_custom(macro_name, fn)
+
+
+def _load_user_macros() -> None:
+    if not MACROS_PATH.exists():
+        return
+    try:
+        raw = json.loads(MACROS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+    if not isinstance(raw, list):
+        return
+    for spec in raw:
+        try:
+            _register_macro(spec)
+        except MacroError:
+            # Drop invalid stored macros silently; they're user-authored and may
+            # predate schema changes. They'll reappear on the next successful save.
+            continue
+        USER_MACROS.append({
+            "name": spec["name"].upper(),
+            "description": spec.get("description", ""),
+            "params": [p.upper() for p in spec.get("params", [])],
+            "body": spec["body"],
+        })
+
+
+def _persist_user_macros() -> None:
+    MACROS_PATH.write_text(json.dumps(USER_MACROS, indent=2), encoding="utf-8")
+
+
+def _load_hero_tools() -> None:
+    if not HERO_TOOLS_PATH.exists():
+        return
+    try:
+        raw = json.loads(HERO_TOOLS_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return
+    if not isinstance(raw, dict):
+        return
+    for tool in HERO_TOOLS_CATALOG:
+        HERO_TOOLS_STATE[tool["id"]] = bool(raw.get(tool["id"], False))
+
+
+def _persist_hero_tools() -> None:
+    HERO_TOOLS_PATH.write_text(json.dumps(HERO_TOOLS_STATE, indent=2), encoding="utf-8")
+
+
+_load_user_macros()
+_load_hero_tools()
 
 
 # ---------- Telemetry ----------
@@ -137,7 +237,8 @@ OUTPUT FORMAT: strictly valid JSON (no markdown fences):
     "reasoning": "Short explanation.",
     "target_cell": "A1",
     "values": [["..."]],
-    "chart_spec": null
+    "chart_spec": null,
+    "macro_spec": null
 }
 
 If the user asks for a chart/graph/visualization, also fill in chart_spec:
@@ -151,6 +252,15 @@ If the user asks for a chart/graph/visualization, also fill in chart_spec:
 Omit chart_spec (leave as null) when the user is only writing data or editing cells.
 
 If the user wants to MOVE, RESIZE, RETYPE, or RENAME an EXISTING chart (e.g. "place the performance chart at F16", "make the scores chart a pie"), reuse the SAME title as the existing chart in chart_spec — the system will update it in place. In that case set "values": null and set "target_cell" to the new anchor_cell. Do NOT invent placeholder data.
+
+If the user asks for a NEW named formula/metric that is not already listed in USER MACROS or the built-in primitives, you MAY propose a new macro by filling in macro_spec:
+{
+    "name": "MARGIN",                    // unique identifier, letters/digits/underscore only
+    "params": ["A", "B"],                // parameter names (uppercase letters)
+    "description": "Gross margin: (A - B) / A",
+    "body": "=DIVIDE(MINUS(A, B), A)"   // MUST only call registered primitives. Nested primitive calls ARE allowed here (this is the one place nesting is permitted — macro bodies are composed expressions). No infix operators, no references to other user macros.
+}
+Proposed macros are NOT saved automatically — the user reviews and approves them. In the SAME response, do NOT write any cell values that call the proposed macro (it isn't registered yet). Keep "values" null or write unrelated cells. The user will re-ask after approval to use the new macro.
 """.strip()
 
 
@@ -197,12 +307,48 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
     else:
         charts_section = "EXISTING CHARTS ON THIS SHEET: none"
 
+    if USER_MACROS:
+        macro_lines = [
+            f"- {m['name']}({', '.join(m['params'])}) — {m.get('description') or 'user macro'}"
+            for m in USER_MACROS
+        ]
+        macros_section = (
+            "USER MACROS (callable like built-in formulas, single flat call, no nesting in the grid):\n"
+            + "\n".join(macro_lines)
+        )
+    else:
+        macros_section = "USER MACROS: none"
+
+    enabled_hero_ids = [t["id"] for t in HERO_TOOLS_CATALOG if HERO_TOOLS_STATE.get(t["id"])]
+    if enabled_hero_ids:
+        hero_lines = [
+            f"- {t['display_name']}: {t['description']}"
+            for t in HERO_TOOLS_CATALOG
+            if t["id"] in enabled_hero_ids
+        ]
+        hero_section = (
+            "HERO TOOLS ENABLED (advisory — they are not wired up yet, mention capability only if the user asks):\n"
+            + "\n".join(hero_lines)
+        )
+    else:
+        hero_section = "HERO TOOLS ENABLED: none"
+
+    primitive_names = _builtin_primitive_names()
+    primitives_section = (
+        "AVAILABLE PRIMITIVES (authoritative — if a function is not in this list, it does NOT exist; "
+        "do not invent names like POWER, LN, IF, etc. unless they appear here):\n"
+        + ", ".join(primitive_names)
+    )
+
     sections = [
         BASE_SYSTEM_RULES,
         f"ACTIVE SHEET: {req.sheet or kernel.active_sheet}\nVIEW SCOPE: {scope_line}\nSELECTED CELLS: {selected_summary}\n{bounds_line}",
         f"CELL METADATA (a1 -> {{val, locked, type}}):\n{context['cell_metadata_json']}",
         f"READABLE GRID STATE:\n{context['formatted_data']}",
         charts_section,
+        primitives_section,
+        macros_section,
+        hero_section,
     ]
 
     if req.history:
@@ -219,6 +365,42 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
 def _parse_ai_response(text: str) -> dict:
     cleaned = text.replace("```json", "").replace("```", "").strip()
     return json.loads(cleaned)
+
+
+def _validate_proposed_macro(raw: Any) -> tuple[Optional[dict], Optional[str]]:
+    """Dry-compile an agent-proposed macro. Returns (normalized_spec, error_message)."""
+    if not raw or not isinstance(raw, dict):
+        return None, None
+    name = str(raw.get("name") or "").strip()
+    body = str(raw.get("body") or "").strip()
+    if not name or not body:
+        return None, "Macro proposal missing name or body."
+    params_raw = raw.get("params") or []
+    if not isinstance(params_raw, list):
+        return None, "Macro params must be a list."
+    params = [str(p).strip() for p in params_raw if str(p).strip()]
+
+    # Exclude the same name from the registry ONLY if it's currently a user macro
+    # (so proposing an update to an existing macro is allowed). Built-in primitives
+    # must still collision-check, because macros can't shadow them.
+    upper = name.upper()
+    existing_macro_names = _macro_names()
+    if upper in existing_macro_names:
+        registry = {k: v for k, v in kernel.evaluator.registry.items() if k.upper() != upper}
+    else:
+        registry = dict(kernel.evaluator.registry)
+    try:
+        compile_macro(name=name, params=params, body=body, registry=registry)
+    except MacroError as e:
+        return None, str(e)
+
+    return {
+        "name": upper,
+        "params": [p.upper() for p in params],
+        "description": str(raw.get("description") or "").strip(),
+        "body": body,
+        "replaces_existing": upper in _macro_names(),
+    }, None
 
 
 def generate_agent_preview(req: ChatRequest) -> dict:
@@ -240,14 +422,15 @@ def generate_agent_preview(req: ChatRequest) -> dict:
     raw_values = ai_data.get("values")
     raw_target = ai_data.get("target_cell")
     chart_spec = ai_data.get("chart_spec")
+    proposed_macro, macro_error = _validate_proposed_macro(ai_data.get("macro_spec"))
     fallback_target = req.selected_cells[0] if req.selected_cells else "A1"
 
     has_values = isinstance(raw_values, list) and any(
         any(v not in ("", None) for v in row) for row in raw_values if isinstance(row, list)
     )
 
-    if not has_values and chart_spec:
-        # Chart-only operation: no cells to write, skip the preview intent.
+    if not has_values and (chart_spec or proposed_macro):
+        # No-cells operation: just a chart update and/or a macro proposal.
         return {
             "category": agent_id,
             "reasoning": ai_data.get("reasoning"),
@@ -260,6 +443,8 @@ def generate_agent_preview(req: ChatRequest) -> dict:
             "preview_cells": [],
             "values": None,
             "chart_spec": chart_spec,
+            "proposed_macro": proposed_macro,
+            "macro_error": macro_error,
         }
 
     intent = AgentIntent(
@@ -282,6 +467,8 @@ def generate_agent_preview(req: ChatRequest) -> dict:
         "preview_cells": preview["preview_cells"],
         "values": raw_values,
         "chart_spec": chart_spec,
+        "proposed_macro": proposed_macro,
+        "macro_error": macro_error,
     }
 
 
@@ -392,9 +579,11 @@ async def chat_chain(req: ChainRequest):
             preview = generate_agent_preview(chat_req)
             values = preview["values"] or [[""]]
             chart_spec = preview.get("chart_spec")
-            is_chart_only = preview["values"] is None and chart_spec is not None
+            proposed_macro = preview.get("proposed_macro")
+            macro_error = preview.get("macro_error")
+            skip_cell_write = preview["values"] is None and (chart_spec is not None or proposed_macro is not None)
 
-            if _is_completion_signal(values) and not is_chart_only:
+            if _is_completion_signal(values) and not skip_cell_write:
                 steps.append({
                     "iteration": iteration,
                     "agent_id": preview["agent_id"],
@@ -403,10 +592,12 @@ async def chat_chain(req: ChainRequest):
                     "values": values,
                     "observations": [],
                     "completion_signal": True,
+                    "proposed_macro": proposed_macro,
+                    "macro_error": macro_error,
                 })
                 break
 
-            if is_chart_only:
+            if skip_cell_write:
                 actual_target = preview["original_request"]
                 observations = []
                 formula_observations = []
@@ -439,6 +630,8 @@ async def chat_chain(req: ChainRequest):
                 "completion_signal": False,
                 "chart": chart,
                 "chart_error": chart_error,
+                "proposed_macro": proposed_macro,
+                "macro_error": macro_error,
             })
 
             history.append({"role": "user", "content": current_prompt})
@@ -510,7 +703,6 @@ async def get_workbook():
 @app.post("/workbook/sheet")
 async def create_sheet(req: SheetCreateRequest):
     name = kernel.create_sheet(req.name)
-    kernel.lock_range("B2", "B10", sheet_name=name)
     return {"sheet": name, "sheets": kernel.list_sheets(), "active_sheet": kernel.active_sheet}
 
 
@@ -649,3 +841,212 @@ async def delete_chart(chart_id: str, sheet: Optional[str] = None):
     if not kernel.delete_chart(chart_id, sheet_name=sheet):
         raise HTTPException(status_code=404, detail=f"Chart '{chart_id}' not found.")
     return {"status": "Success"}
+
+
+# ---------- Library: templates ----------
+
+
+_TEMPLATE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+_SAFE_SLUG_RE = re.compile(r"[^A-Za-z0-9_\-]+")
+
+
+def _slugify_template_name(name: str) -> str:
+    slug = _SAFE_SLUG_RE.sub("-", name.strip().lower()).strip("-")
+    return slug or "template"
+
+
+def _template_path(template_id: str) -> Path:
+    if not _TEMPLATE_ID_RE.match(template_id):
+        raise HTTPException(status_code=400, detail="Invalid template id.")
+    return TEMPLATES_DIR / f"{template_id}.json"
+
+
+class TemplateSaveRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+
+
+class MacroSaveRequest(BaseModel):
+    name: str
+    description: Optional[str] = ""
+    params: List[str] = []
+    body: str
+
+
+class HeroToolToggleRequest(BaseModel):
+    tool_id: str
+    enabled: bool
+
+
+@app.post("/templates/save")
+async def save_template(req: TemplateSaveRequest):
+    if not req.name or not req.name.strip():
+        raise HTTPException(status_code=400, detail="Template name is required.")
+
+    base_slug = _slugify_template_name(req.name)
+    candidate = base_slug
+    counter = 2
+    while (TEMPLATES_DIR / f"{candidate}.json").exists():
+        candidate = f"{base_slug}-{counter}"
+        counter += 1
+
+    created_at = datetime.now(timezone.utc).isoformat()
+    snapshot = {
+        "id": candidate,
+        "name": req.name.strip(),
+        "description": (req.description or "").strip(),
+        "created_at": created_at,
+        "state": kernel.export_state_dict(),
+    }
+    (TEMPLATES_DIR / f"{candidate}.json").write_text(
+        json.dumps(snapshot, indent=2), encoding="utf-8"
+    )
+    return {"status": "Success", "template": _template_summary(snapshot)}
+
+
+def _template_summary(payload: dict) -> dict:
+    state = payload.get("state") or {}
+    sheets = state.get("sheets") or {}
+    cell_count = 0
+    for sheet in sheets.values():
+        cell_count += len((sheet or {}).get("cells") or {})
+    return {
+        "id": payload.get("id"),
+        "name": payload.get("name"),
+        "description": payload.get("description", ""),
+        "created_at": payload.get("created_at"),
+        "sheet_count": len(sheets),
+        "cell_count": cell_count,
+    }
+
+
+@app.get("/templates/list")
+async def list_templates():
+    templates: list[dict] = []
+    for path in sorted(TEMPLATES_DIR.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        templates.append(_template_summary(payload))
+    templates.sort(key=lambda t: t.get("created_at") or "", reverse=True)
+    return {"templates": templates}
+
+
+@app.get("/templates/load/{template_id}")
+async def load_template(template_id: str):
+    path = _template_path(template_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found.")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.post("/templates/apply/{template_id}")
+async def apply_template(template_id: str):
+    path = _template_path(template_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found.")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        result = kernel.apply_template_respecting_locks(payload.get("state") or {})
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not apply template: {e}")
+    return {"status": "Success", **result}
+
+
+@app.delete("/templates/{template_id}")
+async def delete_template(template_id: str):
+    path = _template_path(template_id)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found.")
+    path.unlink()
+    return {"status": "Success"}
+
+
+# ---------- Library: tools ----------
+
+
+@app.get("/tools/list")
+async def list_tools():
+    return {
+        "primitives": [
+            {"name": name, "builtin": True}
+            for name in _builtin_primitive_names()
+            if name.upper() not in _macro_names()
+        ],
+        "macros": [dict(m) for m in USER_MACROS],
+        "hero_tools": [
+            {
+                "id": t["id"],
+                "display_name": t["display_name"],
+                "description": t["description"],
+                "enabled": bool(HERO_TOOLS_STATE.get(t["id"], False)),
+            }
+            for t in HERO_TOOLS_CATALOG
+        ],
+    }
+
+
+@app.post("/tools/save_macro")
+async def save_macro(req: MacroSaveRequest):
+    clean_name = (req.name or "").strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Macro name is required.")
+    clean_body = (req.body or "").strip()
+    if not clean_body:
+        raise HTTPException(status_code=400, detail="Macro body is required.")
+
+    spec = {
+        "name": clean_name,
+        "description": (req.description or "").strip(),
+        "params": list(req.params or []),
+        "body": clean_body,
+    }
+
+    try:
+        _register_macro(spec)
+    except MacroError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    normalized = {
+        "name": clean_name.upper(),
+        "description": spec["description"],
+        "params": [p.upper() for p in spec["params"]],
+        "body": clean_body,
+    }
+    replaced = False
+    for idx, existing in enumerate(USER_MACROS):
+        if existing["name"] == normalized["name"]:
+            USER_MACROS[idx] = normalized
+            replaced = True
+            break
+    if not replaced:
+        USER_MACROS.append(normalized)
+
+    _persist_user_macros()
+    return {"status": "Success", "macro": normalized, "replaced": replaced}
+
+
+@app.delete("/tools/macros/{macro_name}")
+async def delete_macro(macro_name: str):
+    upper = macro_name.upper()
+    removed = False
+    for idx, existing in enumerate(list(USER_MACROS)):
+        if existing["name"] == upper:
+            USER_MACROS.pop(idx)
+            removed = True
+            break
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"Macro '{macro_name}' not found.")
+    kernel.evaluator.registry.pop(upper, None)
+    _persist_user_macros()
+    return {"status": "Success"}
+
+
+@app.post("/tools/hero/toggle")
+async def toggle_hero_tool(req: HeroToolToggleRequest):
+    if req.tool_id not in HERO_TOOLS_STATE:
+        raise HTTPException(status_code=404, detail=f"Unknown hero tool '{req.tool_id}'.")
+    HERO_TOOLS_STATE[req.tool_id] = bool(req.enabled)
+    _persist_hero_tools()
+    return {"status": "Success", "tool_id": req.tool_id, "enabled": HERO_TOOLS_STATE[req.tool_id]}

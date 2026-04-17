@@ -8,6 +8,160 @@ from core.models import AgentIntent, CellState, ChartSpec
 from core.utils import a1_to_coords, coords_to_a1
 
 
+class _FormulaParseError(Exception):
+    pass
+
+
+_TOKEN_PATTERN = re.compile(
+    r"(?P<NUMBER>\d+\.\d*|\.\d+|\d+)"
+    r"|(?P<CELL>[A-Z]+\d+)"
+    r"|(?P<NAME>[A-Z_][A-Z0-9_]*)"
+    r"|(?P<POW>\*\*|\^)"
+    r"|(?P<OP>[+\-*/])"
+    r"|(?P<LPAREN>\()"
+    r"|(?P<RPAREN>\))"
+    r"|(?P<COMMA>,)"
+    r"|(?P<WS>\s+)"
+)
+
+
+def _tokenize_formula(src: str):
+    tokens = []
+    pos = 0
+    upper_src = src.upper()
+    while pos < len(upper_src):
+        match = _TOKEN_PATTERN.match(upper_src, pos)
+        if not match:
+            raise _FormulaParseError(f"Unexpected character at position {pos}: {src[pos]!r}")
+        kind = match.lastgroup
+        if kind != "WS":
+            tokens.append((kind, match.group()))
+        pos = match.end()
+    tokens.append(("EOF", ""))
+    return tokens
+
+
+class _ExpressionEvaluator:
+    """Recursive-descent evaluator for GridOS cell formulas.
+
+    Grammar (standard precedence):
+        expression -> term (('+' | '-') term)*
+        term       -> unary (('*' | '/') unary)*
+        unary      -> ('+' | '-') unary | power
+        power      -> primary (('^' | '**') unary)?   # right-associative
+        primary    -> NUMBER | CELL | NAME '(' args? ')' | '(' expression ')'
+        args       -> expression (',' expression)*
+    """
+
+    def __init__(self, func_registry: FormulaEvaluator, state: dict, target_coords: tuple[int, int]):
+        self.func_registry = func_registry
+        self.state = state
+        self.target_coords = target_coords
+        self.tokens: list = []
+        self.pos = 0
+
+    def run(self, expression: str):
+        self.tokens = _tokenize_formula(expression)
+        self.pos = 0
+        result = self._parse_expression()
+        if self._peek()[0] != "EOF":
+            raise _FormulaParseError(f"Unexpected token after expression: {self._peek()[1]!r}")
+        return result
+
+    def _peek(self):
+        return self.tokens[self.pos]
+
+    def _advance(self):
+        tok = self.tokens[self.pos]
+        self.pos += 1
+        return tok
+
+    def _expect(self, kind: str):
+        tok = self._peek()
+        if tok[0] != kind:
+            raise _FormulaParseError(f"Expected {kind}, got {tok[0]} ({tok[1]!r})")
+        return self._advance()
+
+    def _parse_expression(self):
+        result = self._parse_term()
+        while self._peek()[0] == "OP" and self._peek()[1] in ("+", "-"):
+            op = self._advance()[1]
+            right = self._parse_term()
+            result = result + right if op == "+" else result - right
+        return result
+
+    def _parse_term(self):
+        result = self._parse_unary()
+        while self._peek()[0] == "OP" and self._peek()[1] in ("*", "/"):
+            op = self._advance()[1]
+            right = self._parse_unary()
+            if op == "*":
+                result = result * right
+            else:
+                result = result / right  # ZeroDivisionError propagates
+        return result
+
+    def _parse_unary(self):
+        if self._peek()[0] == "OP" and self._peek()[1] in ("+", "-"):
+            op = self._advance()[1]
+            value = self._parse_unary()
+            return -value if op == "-" else +value
+        return self._parse_power()
+
+    def _parse_power(self):
+        base = self._parse_primary()
+        if self._peek()[0] == "POW":
+            self._advance()
+            exponent = self._parse_unary()  # right-associative
+            return base ** exponent
+        return base
+
+    def _parse_primary(self):
+        tok = self._peek()
+        kind, text = tok
+
+        if kind == "NUMBER":
+            self._advance()
+            return float(text) if "." in text else int(text)
+
+        if kind == "CELL":
+            self._advance()
+            return self._resolve_cell_ref(text)
+
+        if kind == "NAME":
+            self._advance()
+            self._expect("LPAREN")
+            args: list = []
+            if self._peek()[0] != "RPAREN":
+                args.append(self._parse_expression())
+                while self._peek()[0] == "COMMA":
+                    self._advance()
+                    args.append(self._parse_expression())
+            self._expect("RPAREN")
+            return self.func_registry.evaluate(text, args)
+
+        if kind == "LPAREN":
+            self._advance()
+            value = self._parse_expression()
+            self._expect("RPAREN")
+            return value
+
+        raise _FormulaParseError(f"Unexpected token {kind} ({text!r})")
+
+    def _resolve_cell_ref(self, ref: str):
+        ref_r, ref_c = a1_to_coords(ref)
+        self.state["dependencies"].setdefault((ref_r, ref_c), set()).add(self.target_coords)
+        ref_cell = self.state["cells"].get((ref_r, ref_c))
+        if ref_cell is None:
+            return 0.0
+        value = ref_cell.value
+        if isinstance(value, bool):
+            return 1.0 if value else 0.0
+        if isinstance(value, (int, float)):
+            return float(value)
+        return 0.0
+
+
 class GridOSKernel:
     def __init__(self):
         self.evaluator = FormulaEvaluator()
@@ -200,32 +354,20 @@ class GridOSKernel:
             self._recalculate(r, c, sheet_name=sheet_name)
 
     def _evaluate_formula_string(self, formula: str, target_r: int, target_c: int, sheet_name: str | None = None):
-        match = re.match(r"^=([A-Z_]+)\((.*)\)$", formula.strip().upper())
-        if not match:
+        expr = formula.strip()
+        if not expr.startswith("="):
             return "#PARSE_ERROR!"
 
-        func_name = match.group(1)
-        raw_args_list = [x.strip() for x in match.group(2).split(",") if x.strip()]
-        resolved_args = []
         state = self._sheet_state(sheet_name)
-
+        parser = _ExpressionEvaluator(self.evaluator, state, (target_r, target_c))
         try:
-            for arg in raw_args_list:
-                if re.match(r"^[A-Z]+[0-9]+$", arg):
-                    ref_r, ref_c = a1_to_coords(arg)
-                    if (ref_r, ref_c) not in state["dependencies"]:
-                        state["dependencies"][(ref_r, ref_c)] = set()
-                    state["dependencies"][(ref_r, ref_c)].add((target_r, target_c))
-
-                    ref_cell = state["cells"].get((ref_r, ref_c))
-                    if ref_cell and isinstance(ref_cell.value, (int, float)):
-                        resolved_args.append(float(ref_cell.value))
-                    else:
-                        resolved_args.append(0.0)
-                else:
-                    resolved_args.append(float(arg))
-
-            return self.evaluator.evaluate(func_name, resolved_args)
+            return parser.run(expr[1:])
+        except _FormulaParseError:
+            return "#PARSE_ERROR!"
+        except TypeError:
+            return "#VALUE!"
+        except ZeroDivisionError:
+            return "#DIV/0!"
         except ValueError:
             return "#VALUE! (Invalid Arguments)"
 
@@ -443,6 +585,56 @@ class GridOSKernel:
                 state["charts"][idx] = updated
                 return updated.model_dump()
         raise ValueError(f"Chart '{chart_id}' not found on sheet '{sheet_name or self.active_sheet}'.")
+
+    def apply_template_respecting_locks(self, template: dict) -> dict:
+        """Apply a template snapshot in place, preserving locked cells.
+
+        For each sheet in the template:
+          * keep every currently-locked cell in its current state
+          * clear all other (unlocked) cells
+          * write template cells into non-locked targets (skip locked collisions)
+          * replace charts wholesale (charts have no lock concept)
+        """
+        sheets_payload = template.get("sheets") or {}
+        applied = 0
+        skipped_locked = 0
+        sheet_order = template.get("sheet_order") or list(sheets_payload.keys())
+
+        for sheet_name in sheet_order:
+            if not sheet_name:
+                continue
+            self._ensure_sheet(sheet_name)
+            state = self._sheet_state(sheet_name)
+            sheet_payload = sheets_payload.get(sheet_name, {}) or {}
+            cell_payload = sheet_payload.get("cells", {}) if isinstance(sheet_payload, dict) else {}
+            chart_payload = sheet_payload.get("charts", []) if isinstance(sheet_payload, dict) else []
+
+            locked_cells = {
+                coords: cell for coords, cell in state["cells"].items() if cell.locked
+            }
+
+            state["cells"] = dict(locked_cells)
+            state["dependencies"] = {}
+
+            for a1_key, cell_dict in cell_payload.items():
+                try:
+                    r, c = a1_to_coords(a1_key)
+                except ValueError:
+                    continue
+                if (r, c) in locked_cells:
+                    skipped_locked += 1
+                    continue
+                state["cells"][(r, c)] = CellState(**cell_dict)
+                applied += 1
+
+            state["charts"] = [ChartSpec(**c) for c in chart_payload]
+            self._rebuild_dependencies(sheet_name)
+
+        active = template.get("active_sheet")
+        if active and active in self.sheets:
+            self.active_sheet = active
+
+        return {"applied": applied, "skipped_locked": skipped_locked}
 
     def delete_chart(self, chart_id: str, sheet_name: str | None = None) -> bool:
         state = self._sheet_state(sheet_name)

@@ -17,6 +17,7 @@ let chainMode = false;
 let assistantOpen = true;
 let dragFillState = null;
 let resizeState = null;
+let formulaPickState = null;
 let colWidths = {};
 let rowHeights = {};
 let pendingHistory = [];
@@ -384,8 +385,12 @@ function setSelection(start, end) {
 
 function addLog(kind, html) {
     const log = document.getElementById("assistant-log");
-    log.innerHTML += `<div class="msg ${kind}">${html}</div>`;
+    const msg = document.createElement("div");
+    msg.className = `msg ${kind}`;
+    msg.innerHTML = html;
+    log.appendChild(msg);
     log.scrollTop = log.scrollHeight;
+    return msg;
 }
 
 async function persistSingleCell(cell, value) {
@@ -437,6 +442,65 @@ async function saveFormulaBar() {
     }
 }
 
+function getInlineEditor() {
+    return document.getElementById("inline-editor");
+}
+
+function isEditingFormula() {
+    if (!editingCell) return false;
+    const input = getInlineEditor();
+    return !!input && input.value.trimStart().startsWith("=");
+}
+
+function rangeRefText(anchorA1, endA1) {
+    if (anchorA1 === endA1) return anchorA1;
+    const a = a1ToCoords(anchorA1);
+    const b = a1ToCoords(endA1);
+    const top = Math.min(a.row, b.row);
+    const bottom = Math.max(a.row, b.row);
+    const left = Math.min(a.col, b.col);
+    const right = Math.max(a.col, b.col);
+    return `${coordsToA1(top, left)}:${coordsToA1(bottom, right)}`;
+}
+
+function startFormulaPick(cellA1) {
+    const input = getInlineEditor();
+    if (!input) return;
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.value = input.value.slice(0, start) + cellA1 + input.value.slice(end);
+    const caret = start + cellA1.length;
+    input.setSelectionRange(caret, caret);
+    input.focus();
+    formulaPickState = {
+        insertStart: start,
+        insertLen: cellA1.length,
+        anchor: cellA1,
+        end: cellA1,
+    };
+}
+
+function extendFormulaPick(cellA1) {
+    if (!formulaPickState || cellA1 === formulaPickState.end) return;
+    const input = getInlineEditor();
+    if (!input) return;
+    const ref = rangeRefText(formulaPickState.anchor, cellA1);
+    const { insertStart, insertLen } = formulaPickState;
+    input.value = input.value.slice(0, insertStart) + ref + input.value.slice(insertStart + insertLen);
+    const caret = insertStart + ref.length;
+    input.setSelectionRange(caret, caret);
+    input.focus();
+    formulaPickState.insertLen = ref.length;
+    formulaPickState.end = cellA1;
+}
+
+function finishFormulaPick() {
+    if (!formulaPickState) return;
+    formulaPickState = null;
+    const input = getInlineEditor();
+    if (input) input.focus();
+}
+
 function startInlineEdit(cell, seed) {
     const state = gridData[cell] || {};
     if (state.locked) {
@@ -475,6 +539,7 @@ function startInlineEdit(cell, seed) {
         }
     });
     input.addEventListener("blur", async () => {
+        if (formulaPickState) return;
         if (editingCell === cell) await commitInlineEdit(cell, input.value);
     });
 }
@@ -560,6 +625,73 @@ async function applyDragFill(targetCell) {
     }
 }
 
+function renderProposedMacroBlock(spec, options = {}) {
+    if (!spec) return "";
+    const paramsText = (spec.params || []).join(", ");
+    const replaceNote = spec.replaces_existing
+        ? ` <em style="color:#b06000;">(replaces existing ${escapeHtml(spec.name)})</em>`
+        : "";
+    const idSuffix = options.idSuffix || "card";
+    const descLine = spec.description
+        ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${escapeHtml(spec.description)}</div>`
+        : "";
+    return `
+        <div class="proposed-macro" data-macro-spec='${escapeHtml(JSON.stringify(spec))}' style="margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-soft);">
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em;color:var(--accent);">Proposed macro</div>
+            <div style="font-family:var(--font-mono);margin-top:4px;"><strong>${escapeHtml(spec.name)}(${escapeHtml(paramsText)})</strong>${replaceNote}</div>
+            ${descLine}
+            <div style="font-family:var(--font-mono);margin-top:6px;color:var(--text);"><code>${escapeHtml(spec.body)}</code></div>
+            <div class="assistant-actions" style="margin-top:8px;">
+                <button class="primary-btn" data-macro-save="${idSuffix}" type="button">Save macro</button>
+                <button class="ghost-btn" data-macro-dismiss="${idSuffix}" type="button">Dismiss</button>
+            </div>
+        </div>
+    `;
+}
+
+function wireProposedMacroButtons(container, onDismiss) {
+    container.querySelectorAll("[data-macro-save]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            const block = btn.closest(".proposed-macro");
+            if (!block) return;
+            const spec = JSON.parse(block.dataset.macroSpec || "null");
+            if (!spec) return;
+            await saveProposedMacro(spec, block);
+        });
+    });
+    container.querySelectorAll("[data-macro-dismiss]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+            const block = btn.closest(".proposed-macro");
+            if (block) block.remove();
+            if (onDismiss) onDismiss();
+        });
+    });
+}
+
+async function saveProposedMacro(spec, block) {
+    try {
+        const res = await fetch(`${API_BASE}/tools/save_macro`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                name: spec.name,
+                description: spec.description || "",
+                params: spec.params || [],
+                body: spec.body,
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Save failed.");
+        block.innerHTML = `<div style="color:var(--success);font-size:12px;">Saved macro <strong>${escapeHtml(spec.name)}</strong>. It's now callable from any cell.</div>`;
+        addLog("system", `Saved user macro <code>${escapeHtml(spec.name)}</code>.`);
+        if (typeof refreshToolsTab === "function") {
+            try { await refreshToolsTab(); } catch (_) { /* library panel may not be open */ }
+        }
+    } catch (error) {
+        addLog("system", escapeHtml(`Save macro failed: ${error.message}`));
+    }
+}
+
 function renderPreviewCard() {
     const card = document.getElementById("preview-card");
     if (!previewState) {
@@ -567,21 +699,37 @@ function renderPreviewCard() {
         card.innerHTML = "";
         return;
     }
-    const previewRange = previewState.preview_cells.length
+    const hasCells = previewState.preview_cells && previewState.preview_cells.length;
+    const previewRange = hasCells
         ? `${previewState.preview_cells[0].cell} -> ${previewState.preview_cells[previewState.preview_cells.length - 1].cell}`
         : previewState.target_cell;
+    const hasValues = Array.isArray(previewState.values) && previewState.values.length > 0;
+    const actionsRow = hasValues
+        ? `<div class="assistant-actions" style="margin-top:10px;">
+            <button class="primary-btn" id="apply-preview-btn">Apply Preview</button>
+            <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
+        </div>`
+        : `<div class="assistant-actions" style="margin-top:10px;">
+            <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
+        </div>`;
+    const macroError = previewState.macro_error
+        ? `<div style="margin-top:8px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(previewState.macro_error)}</div>`
+        : "";
+    const macroBlock = renderProposedMacroBlock(previewState.proposed_macro, { idSuffix: "card" });
     card.style.display = "block";
     card.innerHTML = `
         <h4>${escapeHtml((previewState.category || "agent").toUpperCase())} preview</h4>
         <p>${escapeHtml(previewState.reasoning || "Preview ready.")}</p>
         <p>Scope: <strong>${previewState.scope === "selection" ? "Selected cells" : "Entire sheet"}</strong> | Target: <strong>${escapeHtml(previewRange)}</strong></p>
-        <div class="assistant-actions" style="margin-top:10px;">
-            <button class="primary-btn" id="apply-preview-btn">Apply Preview</button>
-            <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
-        </div>
+        ${actionsRow}
+        ${macroError}
+        ${macroBlock}
     `;
-    document.getElementById("apply-preview-btn").addEventListener("click", applyPreview);
+    if (hasValues) {
+        document.getElementById("apply-preview-btn").addEventListener("click", applyPreview);
+    }
     document.getElementById("dismiss-preview-btn").addEventListener("click", clearPreview);
+    wireProposedMacroButtons(card);
 }
 
 function clearPreview() {
@@ -672,12 +820,20 @@ function renderChainSteps(data) {
         return;
     }
 
-    steps.forEach((step) => {
+    steps.forEach((step, idx) => {
+        const macroBlock = renderProposedMacroBlock(step.proposed_macro, { idSuffix: `chain-${idx}` });
+        const macroError = step.macro_error
+            ? `<div style="margin-top:6px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(step.macro_error)}</div>`
+            : "";
+
         if (step.completion_signal) {
-            addLog("chain-complete", `
+            const msg = addLog("chain-complete", `
                 <strong>Step ${step.iteration + 1} &middot; complete</strong>
                 <div>${escapeHtml(step.reasoning || "Agent signaled the task is finished.")}</div>
+                ${macroError}
+                ${macroBlock}
             `);
+            if (msg) wireProposedMacroButtons(msg);
             return;
         }
 
@@ -687,12 +843,15 @@ function renderChainSteps(data) {
             return `<li>${escapeHtml(obs.cell)} = ${escapeHtml(String(obs.value))}${formula}</li>`;
         }).join("");
 
-        addLog("chain-step", `
+        const msg = addLog("chain-step", `
             <strong>Step ${step.iteration + 1} &middot; ${escapeHtml(step.agent_id)}</strong>
             <div>${escapeHtml(step.reasoning || "")}</div>
             <div style="margin-top:6px;">Target: <strong>${escapeHtml(step.target)}</strong> &middot; Wrote: <code>${escapeHtml(valuesJson)}</code></div>
             ${obsItems ? `<ul>${obsItems}</ul>` : ""}
+            ${macroError}
+            ${macroBlock}
         `);
+        if (msg) wireProposedMacroButtons(msg);
     });
 
     if (data.terminated_early) {
@@ -767,6 +926,11 @@ function beginResize(kind, key, startPos) {
 }
 
 function handleDocumentMouseMove(event) {
+    if (formulaPickState) {
+        // Range refs (A1:B2) aren't supported by the kernel parser yet, so
+        // hold the pick at the single anchor cell until dragging is wired up.
+        return;
+    }
     if (resizeState) {
         const delta = resizeState.kind === "col" ? event.clientX - resizeState.startPos : event.clientY - resizeState.startPos;
         const next = Math.max(resizeState.kind === "col" ? 72 : 24, resizeState.startSize + delta);
@@ -797,6 +961,10 @@ function handleDocumentMouseMove(event) {
 }
 
 async function handleDocumentMouseUp(event) {
+    if (formulaPickState) {
+        finishFormulaPick();
+        return;
+    }
     if (resizeState) {
         resizeState = null;
         return;
@@ -838,6 +1006,11 @@ function attachGridEvents() {
         }
 
         const td = event.target.closest("td[data-cell]");
+        if (td && isEditingFormula() && td.dataset.cell !== editingCell) {
+            event.preventDefault();
+            startFormulaPick(td.dataset.cell);
+            return;
+        }
         if (!td || editingCell) return;
         selectionAnchor = td.dataset.cell;
         isSelecting = true;
@@ -1298,6 +1471,333 @@ async function handleMenuAction(action) {
             applyDimensions();
             addLog("system", "Column and row sizes reset.");
             break;
+        case "open-library-templates":
+            openLibraryModal("templates");
+            break;
+        case "open-library-tools":
+            openLibraryModal("tools");
+            break;
+    }
+}
+
+// ======== Library ========
+
+let libraryToolsCache = null;
+
+async function openLibraryModal(tab = "templates") {
+    const backdrop = document.getElementById("library-modal-backdrop");
+    if (!backdrop) return;
+    backdrop.removeAttribute("hidden");
+    switchLibraryTab(tab);
+    clearLibraryForms();
+    await Promise.all([refreshTemplateList(), refreshToolsTab()]);
+}
+
+function closeLibraryModal() {
+    const backdrop = document.getElementById("library-modal-backdrop");
+    if (backdrop) backdrop.setAttribute("hidden", "");
+}
+
+function switchLibraryTab(tab) {
+    document.querySelectorAll("[data-library-tab]").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.libraryTab === tab);
+    });
+    document.querySelectorAll("[data-library-panel]").forEach((panel) => {
+        panel.classList.toggle("active", panel.dataset.libraryPanel === tab);
+    });
+}
+
+function clearLibraryForms() {
+    ["template-save-name", "template-save-desc", "macro-form-name", "macro-form-params", "macro-form-desc", "macro-form-body"].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.value = "";
+    });
+    setLibraryError("template-save-error", "");
+    setLibraryError("macro-form-error", "");
+}
+
+function setLibraryError(elId, message) {
+    const el = document.getElementById(elId);
+    if (el) el.textContent = message || "";
+}
+
+async function refreshTemplateList() {
+    const list = document.getElementById("template-list");
+    const empty = document.getElementById("template-empty");
+    if (!list) return;
+    list.innerHTML = "";
+    try {
+        const res = await fetch(`${API_BASE}/templates/list`);
+        const data = await res.json();
+        const items = data.templates || [];
+        if (!items.length) {
+            empty.removeAttribute("hidden");
+            return;
+        }
+        empty.setAttribute("hidden", "");
+        items.forEach((tpl) => list.appendChild(renderTemplateItem(tpl)));
+    } catch (e) {
+        empty.removeAttribute("hidden");
+        empty.textContent = `Could not load templates: ${e.message}`;
+    }
+}
+
+function renderTemplateItem(tpl) {
+    const li = document.createElement("li");
+    li.className = "library-list-item";
+    const name = document.createElement("div");
+    name.innerHTML = `<strong>${escapeHtml(tpl.name || tpl.id)}</strong>`;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    const when = tpl.created_at ? new Date(tpl.created_at).toLocaleString() : "unknown";
+    const desc = tpl.description ? ` · ${escapeHtml(tpl.description)}` : "";
+    meta.innerHTML = `${when} · ${tpl.sheet_count || 0} sheet${tpl.sheet_count === 1 ? "" : "s"} · ${tpl.cell_count || 0} cells${desc}`;
+    const actions = document.createElement("div");
+    actions.className = "actions";
+
+    const applyBtn = document.createElement("button");
+    applyBtn.type = "button";
+    applyBtn.className = "primary";
+    applyBtn.textContent = "Load";
+    applyBtn.addEventListener("click", () => confirmAndApplyTemplate(tpl, li));
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "danger";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", () => deleteTemplate(tpl.id));
+
+    actions.appendChild(applyBtn);
+    actions.appendChild(delBtn);
+    li.appendChild(name);
+    li.appendChild(meta);
+    li.appendChild(actions);
+    return li;
+}
+
+function confirmAndApplyTemplate(tpl, parentLi) {
+    const existing = parentLi.querySelector(".library-confirm");
+    if (existing) { existing.remove(); return; }
+    const warn = document.createElement("div");
+    warn.className = "library-confirm";
+    warn.innerHTML = `<span>Loading <strong>${escapeHtml(tpl.name || tpl.id)}</strong> will clear all unlocked cells on this workbook. Locked cells are preserved.</span>`;
+    const ok = document.createElement("button");
+    ok.type = "button";
+    ok.className = "primary";
+    ok.textContent = "Apply";
+    ok.addEventListener("click", async () => {
+        ok.disabled = true;
+        await applyTemplate(tpl.id);
+        warn.remove();
+    });
+    warn.appendChild(ok);
+    parentLi.appendChild(warn);
+}
+
+async function applyTemplate(id) {
+    const before = snapshotGrid();
+    try {
+        const res = await fetch(`${API_BASE}/templates/apply/${encodeURIComponent(id)}`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not apply template.");
+        addLog("system", `Template applied: ${data.applied} cell${data.applied === 1 ? "" : "s"}, ${data.skipped_locked} skipped (locked).`);
+        closeLibraryModal();
+        await fetchGrid();
+        recordAction(before);
+    } catch (e) {
+        addLog("system", escapeHtml(`Template apply failed: ${e.message}`));
+    }
+}
+
+async function deleteTemplate(id) {
+    try {
+        const res = await fetch(`${API_BASE}/templates/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || "Could not delete template.");
+        }
+        await refreshTemplateList();
+        addLog("system", "Template deleted.");
+    } catch (e) {
+        addLog("system", escapeHtml(`Template delete failed: ${e.message}`));
+    }
+}
+
+async function saveCurrentAsTemplate() {
+    const name = document.getElementById("template-save-name").value.trim();
+    const desc = document.getElementById("template-save-desc").value.trim();
+    setLibraryError("template-save-error", "");
+    if (!name) {
+        setLibraryError("template-save-error", "Name is required.");
+        return;
+    }
+    try {
+        const res = await fetch(`${API_BASE}/templates/save`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, description: desc }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not save template.");
+        document.getElementById("template-save-name").value = "";
+        document.getElementById("template-save-desc").value = "";
+        addLog("system", `Template saved: <strong>${escapeHtml(name)}</strong>.`);
+        await refreshTemplateList();
+    } catch (e) {
+        setLibraryError("template-save-error", e.message);
+    }
+}
+
+async function refreshToolsTab() {
+    try {
+        const res = await fetch(`${API_BASE}/tools/list`);
+        const data = await res.json();
+        libraryToolsCache = data;
+        renderPrimitives(data.primitives || []);
+        renderMacros(data.macros || []);
+        renderHeroTools(data.hero_tools || []);
+    } catch (e) {
+        addLog("system", escapeHtml(`Could not load tools: ${e.message}`));
+    }
+}
+
+function renderPrimitives(primitives) {
+    const container = document.getElementById("primitives-chips");
+    if (!container) return;
+    container.innerHTML = "";
+    primitives.forEach((p) => {
+        const chip = document.createElement("span");
+        chip.className = "library-chip";
+        chip.textContent = p.name;
+        container.appendChild(chip);
+    });
+}
+
+function renderMacros(macros) {
+    const list = document.getElementById("macro-list");
+    const empty = document.getElementById("macro-empty");
+    if (!list) return;
+    list.innerHTML = "";
+    if (!macros.length) {
+        empty.removeAttribute("hidden");
+        return;
+    }
+    empty.setAttribute("hidden", "");
+    macros.forEach((macro) => {
+        const li = document.createElement("li");
+        li.className = "library-list-item";
+        const name = document.createElement("div");
+        name.innerHTML = `<strong>${escapeHtml(macro.name)}(${(macro.params || []).map(escapeHtml).join(", ")})</strong>`;
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const descPrefix = macro.description ? `${escapeHtml(macro.description)} · ` : "";
+        meta.innerHTML = `${descPrefix}<code>${escapeHtml(macro.body)}</code>`;
+        const actions = document.createElement("div");
+        actions.className = "actions";
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.textContent = "Edit";
+        editBtn.addEventListener("click", () => loadMacroIntoForm(macro));
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "danger";
+        delBtn.textContent = "Delete";
+        delBtn.addEventListener("click", () => deleteMacro(macro.name));
+        actions.appendChild(editBtn);
+        actions.appendChild(delBtn);
+        li.appendChild(name);
+        li.appendChild(meta);
+        li.appendChild(actions);
+        list.appendChild(li);
+    });
+}
+
+function loadMacroIntoForm(macro) {
+    document.getElementById("macro-form-name").value = macro.name || "";
+    document.getElementById("macro-form-params").value = (macro.params || []).join(", ");
+    document.getElementById("macro-form-desc").value = macro.description || "";
+    document.getElementById("macro-form-body").value = macro.body || "";
+    setLibraryError("macro-form-error", "");
+    document.getElementById("macro-form-name").focus();
+}
+
+async function saveMacro() {
+    const name = document.getElementById("macro-form-name").value.trim();
+    const paramsRaw = document.getElementById("macro-form-params").value;
+    const desc = document.getElementById("macro-form-desc").value.trim();
+    const body = document.getElementById("macro-form-body").value.trim();
+    setLibraryError("macro-form-error", "");
+    if (!name) { setLibraryError("macro-form-error", "Name is required."); return; }
+    if (!body) { setLibraryError("macro-form-error", "Body is required."); return; }
+    const params = paramsRaw.split(",").map((s) => s.trim()).filter(Boolean);
+    try {
+        const res = await fetch(`${API_BASE}/tools/save_macro`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, description: desc, params, body }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not save macro.");
+        addLog("system", `Macro saved: <strong>${escapeHtml(name.toUpperCase())}</strong>.`);
+        clearLibraryForms();
+        await refreshToolsTab();
+    } catch (e) {
+        setLibraryError("macro-form-error", e.message);
+    }
+}
+
+async function deleteMacro(name) {
+    try {
+        const res = await fetch(`${API_BASE}/tools/macros/${encodeURIComponent(name)}`, { method: "DELETE" });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || "Could not delete macro.");
+        }
+        addLog("system", `Macro deleted: ${escapeHtml(name)}.`);
+        await refreshToolsTab();
+    } catch (e) {
+        addLog("system", escapeHtml(`Macro delete failed: ${e.message}`));
+    }
+}
+
+function renderHeroTools(tools) {
+    const container = document.getElementById("hero-tools-list");
+    if (!container) return;
+    container.innerHTML = "";
+    tools.forEach((tool) => {
+        const row = document.createElement("div");
+        row.className = "library-toggle-row";
+        const info = document.createElement("div");
+        info.className = "info";
+        info.innerHTML = `<strong>${escapeHtml(tool.display_name)}</strong><p>${escapeHtml(tool.description)}</p>`;
+        const label = document.createElement("label");
+        label.className = "library-toggle";
+        const input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = !!tool.enabled;
+        input.addEventListener("change", () => toggleHeroTool(tool.id, input.checked));
+        const slider = document.createElement("span");
+        label.appendChild(input);
+        label.appendChild(slider);
+        row.appendChild(info);
+        row.appendChild(label);
+        container.appendChild(row);
+    });
+}
+
+async function toggleHeroTool(id, enabled) {
+    try {
+        const res = await fetch(`${API_BASE}/tools/hero/toggle`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tool_id: id, enabled }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Could not toggle hero tool.");
+        addLog("system", `${escapeHtml(id)}: ${data.enabled ? "enabled" : "disabled"}.`);
+    } catch (e) {
+        addLog("system", escapeHtml(`Hero toggle failed: ${e.message}`));
+        await refreshToolsTab();
     }
 }
 
@@ -1827,6 +2327,23 @@ async function bootstrap() {
             closeChartModal();
         }
     });
+
+    // Library modal wiring
+    document.getElementById("library-modal-close")?.addEventListener("click", closeLibraryModal);
+    document.getElementById("library-modal-backdrop")?.addEventListener("click", (event) => {
+        if (event.target.id === "library-modal-backdrop") closeLibraryModal();
+    });
+    document.querySelectorAll("[data-library-tab]").forEach((btn) => {
+        btn.addEventListener("click", () => switchLibraryTab(btn.dataset.libraryTab));
+    });
+    document.getElementById("template-save-btn")?.addEventListener("click", saveCurrentAsTemplate);
+    document.getElementById("macro-form-submit")?.addEventListener("click", saveMacro);
+    document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !document.getElementById("library-modal-backdrop")?.hasAttribute("hidden")) {
+            closeLibraryModal();
+        }
+    });
+
     // Reposition chart overlays whenever column/row sizes change.
     window.addEventListener("resize", () => sheetCharts.forEach(spec => {
         const el = chartOverlayEls.get(spec.id);

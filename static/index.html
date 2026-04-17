@@ -534,6 +534,232 @@
             margin-top: 4px;
         }
 
+        /* ===== Library modal ===== */
+        .library-modal {
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(16, 24, 40, 0.25);
+            width: 780px;
+            max-width: calc(100vw - 32px);
+            max-height: calc(100vh - 64px);
+            display: flex;
+            flex-direction: column;
+        }
+        .library-modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .library-modal-header h3 { margin: 0; font-size: 15px; }
+        .library-tabs {
+            display: flex;
+            gap: 4px;
+            padding: 8px 18px 0;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .library-tab {
+            padding: 8px 14px;
+            border: none;
+            background: none;
+            font: inherit;
+            font-size: 13px;
+            color: #5f6368;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -1px;
+        }
+        .library-tab.active {
+            color: #1a73e8;
+            border-bottom-color: #1a73e8;
+        }
+        .library-tab-panel {
+            padding: 16px 18px;
+            overflow: auto;
+            display: none;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .library-tab-panel.active { display: flex; }
+        .library-section-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .library-section-head h4 {
+            margin: 0;
+            font-size: 13px;
+            color: #202124;
+        }
+        .library-section-head .hint {
+            font-size: 11px;
+            color: #5f6368;
+        }
+        .library-list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .library-list-item {
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            padding: 10px 12px;
+            background: #fafafa;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 12px;
+        }
+        .library-list-item .meta {
+            color: #5f6368;
+            font-size: 11px;
+        }
+        .library-list-item .actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .library-list-item button {
+            font-size: 11px;
+            padding: 3px 10px;
+            border-radius: 3px;
+            border: 1px solid var(--border-soft);
+            background: #fff;
+            cursor: pointer;
+            font: inherit;
+            font-size: 11px;
+        }
+        .library-list-item button:hover { background: #f1f3f4; }
+        .library-list-item button.danger { color: #b3261e; }
+        .library-list-item button.primary { color: #1a73e8; border-color: #1a73e8; }
+        .library-empty {
+            padding: 14px;
+            text-align: center;
+            border: 1px dashed var(--border-soft);
+            border-radius: 6px;
+            font-size: 12px;
+            color: #5f6368;
+            background: #fff;
+        }
+        .library-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .library-chip {
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            padding: 3px 10px;
+            font-size: 11px;
+            background: #fff;
+            color: #3c4043;
+            font-family: var(--font-ui);
+        }
+        .library-form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            padding: 12px;
+            background: #fff;
+        }
+        .library-form label {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            font-size: 12px;
+            color: #3c4043;
+        }
+        .library-form input,
+        .library-form textarea {
+            font: inherit;
+            padding: 6px 8px;
+            border: 1px solid var(--border-soft);
+            border-radius: 4px;
+            font-family: var(--font-ui);
+        }
+        .library-form textarea {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            min-height: 54px;
+            resize: vertical;
+        }
+        .library-form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .library-form-actions {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .library-form-error {
+            color: #b3261e;
+            font-size: 11px;
+            min-height: 14px;
+        }
+        .library-toggle-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 12px;
+            border: 1px solid var(--border-soft);
+            border-radius: 6px;
+            background: #fff;
+            font-size: 12px;
+        }
+        .library-toggle-row .info strong { font-size: 12px; color: #202124; }
+        .library-toggle-row .info p { margin: 2px 0 0; font-size: 11px; color: #5f6368; }
+        .library-toggle {
+            position: relative;
+            width: 36px;
+            height: 20px;
+            flex-shrink: 0;
+            cursor: pointer;
+        }
+        .library-toggle input { opacity: 0; width: 0; height: 0; }
+        .library-toggle span {
+            position: absolute;
+            inset: 0;
+            background: #dadce0;
+            border-radius: 20px;
+            transition: background 0.15s;
+        }
+        .library-toggle span::before {
+            content: "";
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 16px;
+            height: 16px;
+            background: #fff;
+            border-radius: 50%;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+            transition: transform 0.15s;
+        }
+        .library-toggle input:checked + span { background: #1a73e8; }
+        .library-toggle input:checked + span::before { transform: translateX(16px); }
+        .library-confirm {
+            padding: 10px 12px;
+            border: 1px solid #f4c7bf;
+            background: #fdeceb;
+            color: #9b2016;
+            border-radius: 6px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
         table.spreadsheet {
             border-collapse: separate;
             border-spacing: 0;
@@ -1203,6 +1429,13 @@
                         <li data-menu-action="insert-chart">Chart...<span class="menu-shortcut"></span></li>
                     </ul>
                 </div>
+                <div class="menubar-menu-group">
+                    <button class="menubar-menu-btn" data-menu="library" type="button">Library</button>
+                    <ul class="menu-dropdown" id="menu-library" role="menu">
+                        <li data-menu-action="open-library-templates">Templates...<span class="menu-shortcut"></span></li>
+                        <li data-menu-action="open-library-tools">Formulas &amp; Tools...<span class="menu-shortcut"></span></li>
+                    </ul>
+                </div>
                 <div class="menubar-divider"></div>
                 <button class="icon-btn" id="save-btn" title="Save workbook (Ctrl+S)" type="button">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
@@ -1372,6 +1605,98 @@
                     <button type="submit" class="primary-btn" id="chart-form-submit">Create chart</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Library modal -->
+    <div class="chart-modal-backdrop" id="library-modal-backdrop" hidden>
+        <div class="library-modal" role="dialog" aria-modal="true" aria-labelledby="library-modal-title">
+            <div class="library-modal-header">
+                <h3 id="library-modal-title">Library</h3>
+                <button class="icon-btn" id="library-modal-close" type="button" title="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="library-tabs" role="tablist">
+                <button type="button" class="library-tab active" data-library-tab="templates" role="tab">Templates</button>
+                <button type="button" class="library-tab" data-library-tab="tools" role="tab">Formulas &amp; Tools</button>
+            </div>
+            <section class="library-tab-panel active" data-library-panel="templates" role="tabpanel">
+                <div class="library-section-head">
+                    <div>
+                        <h4>Save current workbook as a template</h4>
+                        <p class="hint">Captures every sheet, chart, and lock so you can restore the exact state later.</p>
+                    </div>
+                </div>
+                <div class="library-form" id="template-save-form">
+                    <div class="library-form-row">
+                        <label>Name
+                            <input type="text" id="template-save-name" placeholder="Q1 Operating Model" />
+                        </label>
+                        <label>Description (optional)
+                            <input type="text" id="template-save-desc" placeholder="Short note for future you" />
+                        </label>
+                    </div>
+                    <div class="library-form-actions">
+                        <div class="library-form-error" id="template-save-error"></div>
+                        <button type="button" class="primary-btn" id="template-save-btn">Save template</button>
+                    </div>
+                </div>
+                <div class="library-section-head">
+                    <div>
+                        <h4>Saved templates</h4>
+                        <p class="hint">Applying a template clears unlocked cells. Locked cells are preserved.</p>
+                    </div>
+                </div>
+                <ul class="library-list" id="template-list"></ul>
+                <div class="library-empty" id="template-empty" hidden>No templates saved yet.</div>
+            </section>
+            <section class="library-tab-panel" data-library-panel="tools" role="tabpanel">
+                <div class="library-section-head">
+                    <div>
+                        <h4>Built-in formulas</h4>
+                        <p class="hint">These are the primitives the kernel evaluates deterministically.</p>
+                    </div>
+                </div>
+                <div class="library-chips" id="primitives-chips"></div>
+
+                <div class="library-section-head" style="margin-top:6px;">
+                    <div>
+                        <h4>Custom macros</h4>
+                        <p class="hint">Compose primitives into a new named formula. No nesting in the grid — macros expand internally. Only registered primitives are allowed.</p>
+                    </div>
+                </div>
+                <div class="library-form" id="macro-form">
+                    <div class="library-form-row">
+                        <label>Name
+                            <input type="text" id="macro-form-name" placeholder="MARGIN" />
+                        </label>
+                        <label>Params (comma-separated)
+                            <input type="text" id="macro-form-params" placeholder="A, B" />
+                        </label>
+                    </div>
+                    <label>Description (optional)
+                        <input type="text" id="macro-form-desc" placeholder="Gross margin: (A - B) / A" />
+                    </label>
+                    <label>Body
+                        <textarea id="macro-form-body" placeholder="=DIVIDE(MINUS(A, B), A)"></textarea>
+                    </label>
+                    <div class="library-form-actions">
+                        <div class="library-form-error" id="macro-form-error"></div>
+                        <button type="button" class="primary-btn" id="macro-form-submit">Save macro</button>
+                    </div>
+                </div>
+                <ul class="library-list" id="macro-list"></ul>
+                <div class="library-empty" id="macro-empty" hidden>No custom macros yet. Save one above and it will be callable from any cell.</div>
+
+                <div class="library-section-head" style="margin-top:6px;">
+                    <div>
+                        <h4>Hero tools</h4>
+                        <p class="hint">Advisory toggles — they tell the agent what capabilities are available. Execution is not wired up yet.</p>
+                    </div>
+                </div>
+                <div id="hero-tools-list"></div>
+            </section>
         </div>
     </div>
 

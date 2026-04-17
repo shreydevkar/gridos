@@ -50,6 +50,11 @@ def _minus(a, b):
     return a - b
 
 
+@register_tool("SUBTRACT")
+def _subtract(a, b):
+    return a - b
+
+
 @register_tool("MULTIPLY")
 def _multiply(a, b):
     return a * b
@@ -67,6 +72,21 @@ def _average(*args):
     if not args:
         return 0
     return sum(args) / len(args)
+
+
+@register_tool("POWER")
+def _power(base, exponent):
+    return base ** exponent
+
+
+@register_tool("SQRT")
+def _sqrt(value):
+    return math.sqrt(value)
+
+
+@register_tool("ABS")
+def _abs(value):
+    return abs(value)
 
 
 class FormulaEvaluator:
