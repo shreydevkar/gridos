@@ -12,6 +12,7 @@ let isSelecting = false;
 let editingCell = null;
 let scopeMode = "selection";
 let previewState = null;
+let chainMode = false;
 let assistantOpen = true;
 let dragFillState = null;
 let resizeState = null;
@@ -532,19 +533,26 @@ async function requestPreview() {
     const prompt = document.getElementById("assistant-input").value.trim();
     if (!prompt) return;
     addLog("user", escapeHtml(prompt));
-    setStatus("Previewing");
 
+    const payload = {
+        prompt,
+        history: pendingHistory.slice(-6),
+        scope: scopeMode,
+        selected_cells: scopeMode === "selection" ? getSelectedCells() : [],
+        sheet: workbook.active_sheet,
+    };
+
+    if (chainMode) {
+        await runChain(prompt, payload);
+        return;
+    }
+
+    setStatus("Previewing");
     try {
         const res = await fetch(`${API_BASE}/agent/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                prompt,
-                history: pendingHistory.slice(-6),
-                scope: scopeMode,
-                selected_cells: scopeMode === "selection" ? getSelectedCells() : [],
-                sheet: workbook.active_sheet,
-            }),
+            body: JSON.stringify(payload),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Preview failed.");
@@ -558,6 +566,74 @@ async function requestPreview() {
     } catch (error) {
         addLog("system", escapeHtml(`Preview failed: ${error.message}`));
         setStatus("Recover");
+    }
+}
+
+async function runChain(prompt, payload) {
+    clearPreview();
+    setStatus("Chaining (this can take several seconds)");
+    addLog("system", "Chain mode engaged. Each step auto-applies and is observed.");
+
+    try {
+        const res = await fetch(`${API_BASE}/agent/chat/chain`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Chain failed.");
+
+        pendingHistory.push({ role: "user", content: prompt });
+        renderChainSteps(data);
+
+        const last = data.steps?.[data.steps.length - 1];
+        if (last) {
+            pendingHistory.push({
+                role: "assistant",
+                content: `chain (${data.iterations_used} steps): ${last.reasoning || ""}`,
+            });
+        }
+
+        await fetchGrid();
+        setStatus(`Chain finished (${data.iterations_used} step${data.iterations_used === 1 ? "" : "s"})`);
+    } catch (error) {
+        addLog("system", escapeHtml(`Chain failed: ${error.message}`));
+        setStatus("Recover");
+    }
+}
+
+function renderChainSteps(data) {
+    const steps = data.steps || [];
+    if (!steps.length) {
+        addLog("system", "Chain returned no steps.");
+        return;
+    }
+
+    steps.forEach((step) => {
+        if (step.completion_signal) {
+            addLog("chain-complete", `
+                <strong>Step ${step.iteration + 1} &middot; complete</strong>
+                <div>${escapeHtml(step.reasoning || "Agent signaled the task is finished.")}</div>
+            `);
+            return;
+        }
+
+        const valuesJson = JSON.stringify(step.values);
+        const obsItems = (step.observations || []).map((obs) => {
+            const formula = obs.formula ? ` <em>(formula: ${escapeHtml(obs.formula)})</em>` : "";
+            return `<li>${escapeHtml(obs.cell)} = ${escapeHtml(String(obs.value))}${formula}</li>`;
+        }).join("");
+
+        addLog("chain-step", `
+            <strong>Step ${step.iteration + 1} &middot; ${escapeHtml(step.agent_id)}</strong>
+            <div>${escapeHtml(step.reasoning || "")}</div>
+            <div style="margin-top:6px;">Target: <strong>${escapeHtml(step.target)}</strong> &middot; Wrote: <code>${escapeHtml(valuesJson)}</code></div>
+            ${obsItems ? `<ul>${obsItems}</ul>` : ""}
+        `);
+    });
+
+    if (data.terminated_early) {
+        addLog("system", `Chain terminated early after ${data.iterations_used} iteration(s).`);
     }
 }
 
@@ -597,6 +673,17 @@ function setScope(mode) {
         button.classList.toggle("active", button.dataset.scope === mode);
     });
     syncSelectionUI();
+}
+
+function setChainMode(enabled) {
+    chainMode = Boolean(enabled);
+    const toggle = document.getElementById("chain-mode-toggle");
+    const toggleLabel = toggle?.closest(".mode-toggle");
+    const previewBtn = document.getElementById("preview-btn");
+    if (toggle) toggle.checked = chainMode;
+    if (toggleLabel) toggleLabel.classList.toggle("active", chainMode);
+    if (previewBtn) previewBtn.textContent = chainMode ? "Run Chain" : "Preview Change";
+    if (chainMode && previewState) clearPreview();
 }
 
 function toggleAssistant(force) {
@@ -774,6 +861,11 @@ async function bootstrap() {
     document.querySelectorAll(".scope-btn").forEach((button) => {
         button.addEventListener("click", () => setScope(button.dataset.scope));
     });
+    const chainToggle = document.getElementById("chain-mode-toggle");
+    if (chainToggle) {
+        chainToggle.addEventListener("change", (event) => setChainMode(event.target.checked));
+    }
+    setChainMode(false);
 }
 
 bootstrap();

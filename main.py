@@ -173,14 +173,22 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
         if bounds else "Occupied region: empty"
     )
 
-    return "\n\n".join([
+    sections = [
         BASE_SYSTEM_RULES,
         f"ACTIVE SHEET: {req.sheet or kernel.active_sheet}\nVIEW SCOPE: {scope_line}\nSELECTED CELLS: {selected_summary}\n{bounds_line}",
         f"CELL METADATA (a1 -> {{val, locked, type}}):\n{context['cell_metadata_json']}",
         f"READABLE GRID STATE:\n{context['formatted_data']}",
-        agent["system_prompt"],
-        OUTPUT_FORMAT_SPEC,
-    ])
+    ]
+
+    if req.history:
+        history_lines = "\n".join(f"{h['role'].upper()}: {h['content']}" for h in req.history)
+        sections.append(
+            "CONVERSATION HISTORY (oldest first — the first user message is the original task; "
+            "check it for any targets you have not yet written):\n" + history_lines
+        )
+
+    sections.extend([agent["system_prompt"], OUTPUT_FORMAT_SPEC])
+    return "\n\n".join(sections)
 
 
 def _parse_ai_response(text: str) -> dict:
@@ -366,8 +374,10 @@ async def chat_chain(req: ChainRequest):
             summary = ", ".join(f"{o['cell']}={o['value']}" for o in formula_observations)
             current_prompt = (
                 f"The previous operation resulted in [{summary}]. "
-                "Do you have a follow-up action, or is the task complete? "
-                "If complete, return values=[[\"\"]] and target_cell equal to the last written cell."
+                "If the ORIGINAL task (see the user message at the top of this conversation) has more targets "
+                "left to write, produce the next one now and do NOT repeat cells you have already written. "
+                "If every part of the original task is done, signal completion by returning values=[[\"\"]] "
+                "with target_cell equal to the last written cell."
             )
 
         return {
