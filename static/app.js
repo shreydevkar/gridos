@@ -2680,6 +2680,27 @@ async function bootstrap() {
         });
     });
 
+    // Hero prompt handoff from landing page: pick up a prompt stashed in
+    // sessionStorage and (optionally) auto-submit it so the user lands on a
+    // workbook that's already being built.
+    const initialPrompt = sessionStorage.getItem("gridos.initialPrompt");
+    const initialAutosubmit = sessionStorage.getItem("gridos.initialAutosubmit") === "1";
+    sessionStorage.removeItem("gridos.initialPrompt");
+    sessionStorage.removeItem("gridos.initialAutosubmit");
+    if (initialPrompt) {
+        const input = document.getElementById("assistant-input");
+        input.value = initialPrompt;
+        autoGrowInput();
+        syncSendButtonState();
+        toggleAssistant(true);
+        setScope("sheet");
+        if (initialAutosubmit) {
+            requestPreview();
+        } else {
+            input.focus();
+        }
+    }
+
     document.getElementById("formula-input").addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
             event.preventDefault();

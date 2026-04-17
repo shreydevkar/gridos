@@ -327,10 +327,99 @@
         }
         .toast[hidden] { display: none; }
 
+        /* ===== Hero prompt ===== */
+        .hero-prompt {
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: 14px;
+            box-shadow: var(--shadow-1);
+            padding: 18px 18px 14px;
+            margin-bottom: 24px;
+            transition: border-color 120ms ease, box-shadow 120ms ease;
+        }
+        .hero-prompt:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+        .hero-prompt-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 10px;
+        }
+        .hero-prompt textarea {
+            flex: 1;
+            border: none;
+            outline: none;
+            resize: none;
+            font-family: var(--font-ui);
+            font-size: 16px;
+            color: var(--text);
+            background: transparent;
+            min-height: 48px;
+            max-height: 200px;
+            line-height: 1.45;
+            padding: 4px 2px;
+        }
+        .hero-prompt textarea::placeholder {
+            color: var(--text-mutedder);
+        }
+        .hero-prompt-submit {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 120ms ease;
+            white-space: nowrap;
+        }
+        .hero-prompt-submit:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+        .hero-prompt-submit:disabled {
+            background: var(--border);
+            color: var(--text-mutedder);
+            cursor: not-allowed;
+        }
+        .hero-prompt-hint {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 10px;
+            font-size: 11px;
+            color: var(--text-mutedder);
+        }
+        .hero-prompt-examples {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 14px;
+        }
+        .hero-prompt-chip {
+            background: var(--bg-soft);
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            padding: 6px 12px;
+            font-size: 12px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+        }
+        .hero-prompt-chip:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-soft);
+        }
+
         @media (max-width: 640px) {
             .page { padding: 32px 20px 60px; }
             .hero h2 { font-size: 26px; }
             .topbar { padding: 0 16px; }
+            .hero-prompt-row { flex-direction: column; align-items: stretch; }
+            .hero-prompt-submit { width: 100%; }
         }
     </style>
 </head>
@@ -349,8 +438,29 @@
     <main class="page">
         <section class="hero">
             <span class="hero-eyebrow">Agentic spreadsheet</span>
-            <h2>Open a workbook</h2>
-            <p>Start with a blank sheet, pick a saved template, or continue where you left off. GridOS pairs a deterministic spreadsheet kernel with an AI assistant that plans and fills multi-section models for you.</p>
+            <h2>What do you want to build?</h2>
+            <p>Describe a model, forecast, or dataset and GridOS will scaffold a fresh workbook for you. Or scroll down to open a blank sheet, pick a saved template, or continue where you left off.</p>
+        </section>
+
+        <section class="hero-prompt" id="hero-prompt">
+            <div class="hero-prompt-row">
+                <textarea
+                    id="hero-prompt-input"
+                    placeholder="e.g. Build a 4-quarter revenue forecast with 10% QoQ growth starting at 100"
+                    rows="2"
+                    autofocus></textarea>
+                <button type="button" class="hero-prompt-submit" id="hero-prompt-submit" disabled>Build it</button>
+            </div>
+            <div class="hero-prompt-hint">
+                <span>Enter to submit · Shift + Enter for a new line</span>
+                <span>Uses the workbook assistant with your configured LLMs.</span>
+            </div>
+            <div class="hero-prompt-examples" id="hero-prompt-examples">
+                <button type="button" class="hero-prompt-chip" data-example="Build a simple 5-year DCF valuation with revenue, growth, EBITDA margin, and discount rate assumptions">Simple DCF</button>
+                <button type="button" class="hero-prompt-chip" data-example="Create a 4-quarter operating model with revenue, COGS, gross profit, OpEx, and operating income">Quarterly operating model</button>
+                <button type="button" class="hero-prompt-chip" data-example="Make a monthly personal budget tracker with income, fixed expenses, variable expenses, and savings">Personal budget</button>
+                <button type="button" class="hero-prompt-chip" data-example="Build a 3-statement model with income statement, balance sheet, and cash flow statement">3-statement model</button>
+            </div>
         </section>
 
         <section class="section">
@@ -540,6 +650,50 @@
 
         document.getElementById("card-blank").addEventListener("click", openBlank);
         document.getElementById("card-continue").addEventListener("click", openContinue);
+
+        // ===== Hero prompt submit =====
+        const heroInput = document.getElementById("hero-prompt-input");
+        const heroSubmit = document.getElementById("hero-prompt-submit");
+
+        function syncHeroSubmitState() {
+            heroSubmit.disabled = heroInput.value.trim().length === 0;
+        }
+        heroInput.addEventListener("input", syncHeroSubmitState);
+        heroInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                submitHeroPrompt();
+            }
+        });
+        heroSubmit.addEventListener("click", submitHeroPrompt);
+        document.querySelectorAll("[data-example]").forEach((chip) => {
+            chip.addEventListener("click", () => {
+                heroInput.value = chip.dataset.example;
+                syncHeroSubmitState();
+                heroInput.focus();
+            });
+        });
+
+        async function submitHeroPrompt() {
+            const prompt = heroInput.value.trim();
+            if (!prompt) return;
+            showLoading("Preparing workbook…");
+            try {
+                await fetch(`${API_BASE}/system/clear`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({}),
+                });
+                // Hand the prompt to the workbook app. It will populate the composer
+                // and auto-submit on load.
+                sessionStorage.setItem("gridos.initialPrompt", prompt);
+                sessionStorage.setItem("gridos.initialAutosubmit", "1");
+                window.location.href = "/workbook";
+            } catch (e) {
+                hideLoading();
+                showError(`Could not start workbook: ${e.message}`);
+            }
+        }
 
         loadTemplates();
         loadContinueMeta();
