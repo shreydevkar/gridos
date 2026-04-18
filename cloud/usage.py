@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+from datetime import datetime, timezone
 from typing import Optional
 
 from cloud import config
@@ -147,3 +148,94 @@ def log_call(
         client.table("usage_logs").insert(row).execute()
     except Exception as e:
         log.warning("[usage] usage_logs insert failed for %s: %s", user_id, e)
+
+
+# ---------- Quota enforcement (Phase 4b) ------------------------------------
+# Read the authenticated user's current-month token usage + their
+# subscription tier from the service-role client, compare against the per-tier
+# cap in cloud.config.tier_limit, and return a tuple the endpoint can use to
+# either proceed or raise 402.
+#
+# Quota checks happen BEFORE a chat starts; once a chat/chain is in flight it
+# runs to completion even if it tips over. That avoids a cliff where a chain's
+# final iteration would crash mid-stream, which would leave the workbook in a
+# half-applied state. Hard cutoffs belong to the outer request, not mid-call.
+
+
+def get_tier_and_usage(user_id: str) -> dict:
+    """Return the user's tier + month-to-date usage in a single round-trip pair.
+    Returns dict with keys: tier, total_tokens, cost_cents, limit, month.
+    'limit' of 0 means unlimited."""
+    if not user_id or user_id == "oss":
+        # OSS — treat as unlimited.
+        return {
+            "tier": "oss",
+            "total_tokens": 0,
+            "cost_cents": 0,
+            "limit": 0,
+            "month": datetime.now(timezone.utc).strftime("%Y-%m-01"),
+        }
+
+    client = _client()
+    month_str = datetime.now(timezone.utc).strftime("%Y-%m-01")
+    tier = "free"
+    total_tokens = 0
+    cost_cents = 0
+
+    if client is not None:
+        try:
+            u = (
+                client.table("users")
+                .select("subscription_tier")
+                .eq("id", user_id)
+                .limit(1)
+                .execute()
+            )
+            if u.data:
+                tier = u.data[0].get("subscription_tier") or "free"
+        except Exception as e:
+            log.warning("[usage] users.select failed for %s: %s", user_id, e)
+
+        try:
+            r = (
+                client.table("user_usage")
+                .select("total_tokens, cost_cents")
+                .eq("user_id", user_id)
+                .eq("month", month_str)
+                .limit(1)
+                .execute()
+            )
+            if r.data:
+                total_tokens = int(r.data[0].get("total_tokens") or 0)
+                cost_cents = int(r.data[0].get("cost_cents") or 0)
+        except Exception as e:
+            log.warning("[usage] user_usage.select failed for %s: %s", user_id, e)
+
+    return {
+        "tier": tier,
+        "total_tokens": total_tokens,
+        "cost_cents": cost_cents,
+        "limit": config.tier_limit(tier),
+        "month": month_str,
+    }
+
+
+class QuotaExceeded(Exception):
+    """Raised by over_quota_check. Endpoints translate this to HTTP 402."""
+
+    def __init__(self, summary: dict):
+        self.summary = summary
+        super().__init__(
+            f"Monthly token cap reached for tier '{summary.get('tier')}' "
+            f"({summary.get('total_tokens')}/{summary.get('limit')})."
+        )
+
+
+def over_quota_check(user_id: str) -> dict:
+    """Raises QuotaExceeded when the user is at or over their monthly cap.
+    Returns the usage summary dict on success so callers can surface it."""
+    summary = get_tier_and_usage(user_id)
+    limit = int(summary.get("limit") or 0)
+    if limit > 0 and int(summary.get("total_tokens") or 0) >= limit:
+        raise QuotaExceeded(summary)
+    return summary

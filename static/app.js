@@ -154,6 +154,30 @@ function attachAccountModalEvents() {
     document.getElementById("account-modal-signout")?.addEventListener("click", signOut);
 }
 
+// --- Error + quota helpers --------------------------------------------------
+// 402 responses have `detail = {message, usage}`. Normalize so non-402 paths
+// that stringify `detail` still get a readable error instead of "[object
+// Object]".
+function formatApiError(detail) {
+    if (!detail) return "";
+    if (typeof detail === "string") return detail;
+    if (detail.message) return detail.message;
+    try { return JSON.stringify(detail); } catch (_) { return String(detail); }
+}
+
+function renderQuotaExceededMessage(detail) {
+    const usage = detail?.usage || {};
+    const tier = (usage.tier || "free").toLowerCase();
+    const used = (usage.total_tokens || 0).toLocaleString();
+    const limit = (usage.limit || 0).toLocaleString();
+    const body = `
+        <strong>Monthly token cap reached.</strong><br />
+        You're on the <b>${escapeHtml(tier)}</b> plan (${used} / ${limit} tokens used this month).
+        Your quota resets on the 1st. Upgrade for more, or wait for the new cycle.
+    `;
+    addLog("system", body);
+}
+
 // --- Account avatar + popover (menubar, SaaS only) --------------------------
 // Cached so the popover opens instantly; refresh happens in the background.
 let _accountCache = null;
@@ -186,9 +210,39 @@ function paintAccountPopover(data) {
     const month = document.getElementById("account-popover-month");
     if (month) month.textContent = formatMonthLabel(data.month) || "This month";
     const tokens = document.getElementById("account-popover-tokens");
-    if (tokens) tokens.textContent = formatNumber(data.total_tokens);
+    if (tokens) {
+        if (data.tier_limit && data.tier_limit > 0) {
+            tokens.textContent = `${formatNumber(data.total_tokens)} / ${formatNumber(data.tier_limit)}`;
+        } else {
+            tokens.textContent = formatNumber(data.total_tokens);
+        }
+    }
     const cost = document.getElementById("account-popover-cost");
     if (cost) cost.textContent = formatCostCents(data.cost_cents);
+
+    // Quota progress bar — only shown when the tier has a finite cap.
+    const quotaWrap = document.getElementById("account-popover-quota");
+    const quotaFill = document.getElementById("account-popover-quota-fill");
+    const quotaNote = document.getElementById("account-popover-quota-note");
+    if (quotaWrap && quotaFill) {
+        if (data.tier_limit && data.tier_limit > 0) {
+            quotaWrap.hidden = false;
+            const pct = Math.max(0, Math.min(100, data.quota_pct || 0));
+            quotaFill.style.width = `${pct}%`;
+            quotaFill.classList.toggle("over-80", pct >= 80 && pct < 100);
+            quotaFill.classList.toggle("over-100", pct >= 100);
+            if (quotaNote) {
+                if (pct >= 100) {
+                    quotaNote.textContent = "Monthly cap reached — chat is paused until the 1st.";
+                } else {
+                    const remaining = (data.tokens_remaining || 0).toLocaleString();
+                    quotaNote.textContent = `${remaining} tokens remaining this month.`;
+                }
+            }
+        } else {
+            quotaWrap.hidden = true;
+        }
+    }
 }
 
 async function refreshAccountData() {
@@ -1318,7 +1372,13 @@ async function requestPreview() {
         });
         const data = await res.json();
         thinking.remove();
-        if (!res.ok) throw new Error(data.detail || "Preview failed.");
+        if (res.status === 402) {
+            renderQuotaExceededMessage(data?.detail);
+            refreshAccountData?.();
+            setStatus("Quota exceeded");
+            return;
+        }
+        if (!res.ok) throw new Error(formatApiError(data?.detail) || "Preview failed.");
         previewState = data;
         pendingHistory.push({ role: "user", content: prompt });
         pendingHistory.push({ role: "assistant", content: `${data.category}: ${data.reasoning}` });
@@ -1347,7 +1407,13 @@ async function runChain(prompt, payload) {
         });
         const data = await res.json();
         thinking.remove();
-        if (!res.ok) throw new Error(data.detail || "Chain failed.");
+        if (res.status === 402) {
+            renderQuotaExceededMessage(data?.detail);
+            refreshAccountData?.();
+            setStatus("Quota exceeded");
+            return;
+        }
+        if (!res.ok) throw new Error(formatApiError(data?.detail) || "Chain failed.");
 
         pendingHistory.push({ role: "user", content: prompt });
         renderChainSteps(data);

@@ -63,6 +63,34 @@ STRIPE_SECRET_KEY: str | None = _env_str("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET: str | None = _env_str("STRIPE_WEBHOOK_SECRET")
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
+# Monthly per-tier token caps for quota enforcement. 0 (or a value read as
+# non-positive) means "unlimited" — used for enterprise and for disabling
+# enforcement entirely during development (FREE_TIER_MONTHLY_TOKENS=0).
+# Refine per-tier economics later against real Stripe price tiers.
+FREE_TIER_MONTHLY_TOKENS: int = _env_int("FREE_TIER_MONTHLY_TOKENS", 100_000)
+PRO_TIER_MONTHLY_TOKENS: int = _env_int("PRO_TIER_MONTHLY_TOKENS", 5_000_000)
+
+
+def tier_limit(tier: str) -> int:
+    """Monthly token cap for the given subscription tier. 0 means unlimited."""
+    t = (tier or "free").lower()
+    if t == "pro":
+        return PRO_TIER_MONTHLY_TOKENS
+    if t == "enterprise":
+        return 0  # unlimited
+    return FREE_TIER_MONTHLY_TOKENS
+
+
 @dataclass(frozen=True)
 class FeatureAvailability:
     enabled: bool

@@ -868,6 +868,14 @@ async def chat_with_agent(
     # FK would reject the usage_logs insert otherwise. Revisit once multi-workbook
     # UX lands and workbook rows are provisioned eagerly.
     cloud_usage.set_request_context(user.id, None)
+    if cloud_config.SAAS_MODE:
+        try:
+            cloud_usage.over_quota_check(user.id)
+        except cloud_usage.QuotaExceeded as qe:
+            raise HTTPException(status_code=402, detail={
+                "message": "Monthly token cap reached for your tier.",
+                "usage": qe.summary,
+            })
     try:
         return generate_agent_preview(req)
     except HTTPException:
@@ -1037,6 +1045,14 @@ async def chat_chain(
     # FK would reject the usage_logs insert otherwise. Revisit once multi-workbook
     # UX lands and workbook rows are provisioned eagerly.
     cloud_usage.set_request_context(user.id, None)
+    if cloud_config.SAAS_MODE:
+        try:
+            cloud_usage.over_quota_check(user.id)
+        except cloud_usage.QuotaExceeded as qe:
+            raise HTTPException(status_code=402, detail={
+                "message": "Monthly token cap reached for your tier.",
+                "usage": qe.summary,
+            })
     try:
         sheet = req.sheet or kernel.active_sheet
         history = list(req.history)
@@ -1364,6 +1380,9 @@ async def usage_me(user: AuthUser = Depends(require_user)):
             "month": datetime.now(timezone.utc).strftime("%Y-%m-01"),
             "total_tokens": 0,
             "cost_cents": 0,
+            "tier_limit": 0,
+            "tokens_remaining": None,
+            "quota_pct": 0,
         }
     if not cloud_config.SAAS_FEATURES["usage_tracking"].enabled:
         raise HTTPException(status_code=503, detail="Usage tracking is not configured on this deployment.")
@@ -1410,6 +1429,13 @@ async def usage_me(user: AuthUser = Depends(require_user)):
     except Exception:
         pass
 
+    limit = cloud_config.tier_limit(tier)
+    if limit > 0:
+        remaining = max(0, limit - total_tokens)
+        pct = min(100, int(round((total_tokens / limit) * 100))) if limit else 0
+    else:
+        remaining = None  # unlimited
+        pct = 0
     return {
         "mode": "saas",
         "email": user.email,
@@ -1418,6 +1444,9 @@ async def usage_me(user: AuthUser = Depends(require_user)):
         "month": month_str,
         "total_tokens": total_tokens,
         "cost_cents": cost_cents,
+        "tier_limit": limit,
+        "tokens_remaining": remaining,
+        "quota_pct": pct,
     }
 
 

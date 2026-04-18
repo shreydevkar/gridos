@@ -409,6 +409,31 @@
             color: var(--danger, #d93025);
         }
 
+        .account-popover-quota {
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .account-popover-quota[hidden] { display: none; }
+        .account-popover-quota-bar {
+            height: 6px;
+            background: var(--bg-soft, #f1f3f4);
+            border-radius: 999px;
+            overflow: hidden;
+        }
+        .account-popover-quota-fill {
+            height: 100%;
+            background: var(--accent, #1a73e8);
+            width: 0%;
+            transition: width 200ms ease, background-color 200ms ease;
+        }
+        .account-popover-quota-fill.over-80  { background: #f59e0b; }
+        .account-popover-quota-fill.over-100 { background: var(--danger, #d93025); }
+        .account-popover-quota-note {
+            margin-top: 6px;
+            font-size: 11px;
+            color: var(--text-mutedder);
+        }
+
         .menubar-ai-btn::before {
             content: "";
             width: 8px;
@@ -1996,6 +2021,12 @@
                                 <span class="account-popover-stat-label">Est. cost</span>
                                 <span class="account-popover-stat-value" id="account-popover-cost">—</span>
                             </div>
+                        </div>
+                        <div class="account-popover-quota" id="account-popover-quota" hidden>
+                            <div class="account-popover-quota-bar">
+                                <div class="account-popover-quota-fill" id="account-popover-quota-fill"></div>
+                            </div>
+                            <div class="account-popover-quota-note" id="account-popover-quota-note"></div>
                         </div>
                         <div class="account-popover-actions">
                             <button type="button" class="account-popover-link" id="account-popover-details">Account &amp; usage details…</button>

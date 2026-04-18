@@ -171,6 +171,21 @@
         }
         .account-popover-link:hover { background: var(--bg-hover); }
         .account-popover-link-danger { color: var(--danger); }
+        .account-popover-quota {
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .account-popover-quota[hidden] { display: none; }
+        .account-popover-quota-bar {
+            height: 6px; background: var(--bg-soft); border-radius: 999px; overflow: hidden;
+        }
+        .account-popover-quota-fill {
+            height: 100%; background: var(--accent); width: 0%;
+            transition: width 200ms ease, background-color 200ms ease;
+        }
+        .account-popover-quota-fill.over-80  { background: #f59e0b; }
+        .account-popover-quota-fill.over-100 { background: var(--danger); }
+        .account-popover-quota-note { margin-top: 6px; font-size: 11px; color: var(--text-mutedder); }
 
         /* ===== Page layout ===== */
         .page {
@@ -527,6 +542,12 @@
                             <span class="account-popover-stat-value" id="account-popover-cost">—</span>
                         </div>
                     </div>
+                    <div class="account-popover-quota" id="account-popover-quota" hidden>
+                        <div class="account-popover-quota-bar">
+                            <div class="account-popover-quota-fill" id="account-popover-quota-fill"></div>
+                        </div>
+                        <div class="account-popover-quota-note" id="account-popover-quota-note"></div>
+                    </div>
                     <div class="account-popover-actions">
                         <button type="button" class="account-popover-link" id="account-popover-open">Open workbook</button>
                         <button type="button" class="account-popover-link account-popover-link-danger" id="account-popover-signout">Sign out</button>
@@ -881,8 +902,25 @@
                 document.getElementById("account-popover-email").textContent = d.email || "—";
                 document.getElementById("account-popover-tier").textContent = `${d.tier || "free"} plan`;
                 document.getElementById("account-popover-month").textContent = formatMonthLabel(d.month) || "This month";
-                document.getElementById("account-popover-tokens").textContent = formatNumber(d.total_tokens);
+                document.getElementById("account-popover-tokens").textContent = (d.tier_limit > 0)
+                    ? `${formatNumber(d.total_tokens)} / ${formatNumber(d.tier_limit)}`
+                    : formatNumber(d.total_tokens);
                 document.getElementById("account-popover-cost").textContent = formatCostCents(d.cost_cents);
+                const quotaWrap = document.getElementById("account-popover-quota");
+                const quotaFill = document.getElementById("account-popover-quota-fill");
+                const quotaNote = document.getElementById("account-popover-quota-note");
+                if (d.tier_limit && d.tier_limit > 0) {
+                    quotaWrap.hidden = false;
+                    const pct = Math.max(0, Math.min(100, d.quota_pct || 0));
+                    quotaFill.style.width = `${pct}%`;
+                    quotaFill.classList.toggle("over-80", pct >= 80 && pct < 100);
+                    quotaFill.classList.toggle("over-100", pct >= 100);
+                    quotaNote.textContent = pct >= 100
+                        ? "Monthly cap reached — resets on the 1st."
+                        : `${(d.tokens_remaining || 0).toLocaleString()} tokens remaining this month.`;
+                } else {
+                    quotaWrap.hidden = true;
+                }
             } catch (_) { /* silent */ }
         }
 
