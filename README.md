@@ -111,9 +111,11 @@ Full docs live at **[gridos.mintlify.app](https://gridos.mintlify.app)**. Jumpin
 | API | FastAPI + Uvicorn |
 | Frontend | HTML + vanilla JS + Chart.js |
 | Persistence (OSS) | Custom `.gridos` file format (+ `.xlsx` round-trip via `openpyxl`) |
-| Persistence (SaaS) | Supabase Postgres + RLS (`public.workbooks`, `public.users`, `public.usage_logs`) |
+| Persistence (SaaS) | Supabase Postgres + RLS (`public.workbooks`, `public.users`, `public.usage_logs`, `public.user_api_keys`) |
 
 ## Running locally
+
+> Prefer a walkthrough? The [Quickstart](https://gridos.mintlify.app/quickstart) in the docs covers this section step-by-step with screenshots.
 
 Prerequisites: Python 3.10+ and **at least one** LLM API key. Any one of the four will work:
 
@@ -134,7 +136,7 @@ pip install -r requirements.txt
 
 ### Providing API keys
 
-Two equivalent options:
+Full per-provider instructions live in [Add API keys](https://gridos.mintlify.app/api-keys). The short version — two equivalent options:
 
 1. **In-app settings (recommended)** — run the server, click the gear icon in the menubar, paste a key for each provider you want to use. Keys are stored in `data/api_keys.json`, which is gitignored.
 
@@ -177,6 +179,8 @@ Open http://127.0.0.1:8000. The model picker in the chat composer lists every mo
 Add more by editing `core/providers/catalog.py`. The UI picks them up on next page load as long as the owning provider has a configured key.
 
 ## Running as a hosted SaaS
+
+> A live reference deployment of this exact config is at **[gridos.onrender.com](https://gridos.onrender.com)** — free tier, auto-deployed from `master`.
 
 The cloud tier is optional — set `SAAS_MODE=true` and point the server at a Supabase project, and every request is auth-gated, multi-tenant, and quota-tracked.
 
@@ -249,8 +253,12 @@ Render's free instances sleep after ~15 min of inactivity (~30–60s cold start 
 - [x] Router call pinned to fastest small model for ~40% wall-clock speedup
 - [x] `.xlsx` round-trip (openpyxl) for Excel + Google Sheets interop
 - [x] Optional SaaS tier: Supabase auth, multi-workbook cloud storage, per-tier token + slot quotas, usage analytics
-- [ ] Per-user kernel isolation — server currently holds one global kernel per process, so concurrent SaaS users on the same worker can collide (blocking before a public URL)
+- [x] Per-user kernel isolation — `ContextVar`-bound kernel per `(user_id, workbook_id)`, LRU-capped at 64
+- [x] BYOK — per-user LLM keys stored server-side in `public.user_api_keys` (RLS), set from the in-app Settings panel
+- [x] Render deploy — `/healthz`, `render.yaml`, same-origin `API_BASE` (live at [gridos.onrender.com](https://gridos.onrender.com))
+- [x] Five-tier pricing ladder (Free / Plus / Student / Pro / Enterprise) with independent token + slot caps
 - [ ] Stripe checkout + webhook for tier upgrades (Phase 4c)
+- [ ] `.edu` / GitHub Student Pack verification for the Student tier unlock
 - [ ] Range-based vector operations and cross-sheet referencing
 - [ ] External connectors (stock / weather / etc.)
 - [ ] Provider-native structured output (Claude tool-use / OpenAI JSON mode) for stricter JSON reliability
