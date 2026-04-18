@@ -3,12 +3,15 @@ import os
 import random
 import re
 import time
+from collections import OrderedDict
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -57,8 +60,49 @@ HERO_TOOLS_CATALOG = [
 ]
 
 app = FastAPI(title="GridOS - Agentic Workbook")
-kernel = GridOSKernel()
 AGENTS = load_agents()
+
+# Per-request kernel resolution. In OSS there's exactly one workbook state and
+# _default_kernel is it. In SaaS we keep a pool of GridOSKernel instances keyed
+# by (user_id, workbook_id); each request binds to the right one via the
+# current_kernel_dep dependency (below), which sets _current_kernel ContextVar
+# before the endpoint body runs. The `kernel` name here is a thin proxy — every
+# `kernel.X` access in existing code automatically routes to the request-scoped
+# kernel, so we don't have to thread `k` through hundreds of call sites.
+_default_kernel = GridOSKernel()
+_current_kernel: ContextVar[Optional[GridOSKernel]] = ContextVar("gridos_current_kernel", default=None)
+_kernel_pool: "OrderedDict[tuple[str, str], GridOSKernel]" = OrderedDict()
+_kernel_pool_lock = Lock()
+# Cap pool size so an abusive bot can't OOM the process. LRU-evict the oldest
+# entries past the cap. Render free = 512 MB → 64 kernels gives us comfortable
+# headroom. Evicted users' next request just lazy-loads from Supabase again.
+KERNEL_POOL_MAX = 64
+
+
+class _KernelProxy:
+    """Reads the per-request kernel from the ContextVar.
+
+    OSS: ContextVar may be unset (e.g. code path that doesn't go through the
+    dep); fall through to _default_kernel — behavior matches pre-refactor.
+
+    SaaS: any access without a resolved ContextVar is a bug — it would silently
+    read/write the wrong user's workbook state (the exact class of bug this
+    refactor prevents). Raise loudly so we catch missed Depends() wiring in CI
+    instead of corrupting a user's data in prod."""
+
+    def __getattr__(self, name: str):
+        k = _current_kernel.get()
+        if k is None:
+            if cloud_config.SAAS_MODE:
+                raise RuntimeError(
+                    f"kernel.{name} accessed outside a request-scoped kernel in SaaS mode. "
+                    "The endpoint is missing `Depends(current_kernel_dep)` on its signature."
+                )
+            k = _default_kernel
+        return getattr(k, name)
+
+
+kernel = _KernelProxy()
 
 USER_MACROS: list[dict] = []
 HERO_TOOLS_STATE: dict[str, bool] = {t["id"]: False for t in HERO_TOOLS_CATALOG}
@@ -102,20 +146,24 @@ else:
 
 
 def _builtin_primitive_names() -> list[str]:
-    return sorted(kernel.evaluator.registry.keys())
+    # _default_kernel's evaluator is always populated and identical across
+    # kernels for built-ins (macros are added by _register_macro which walks
+    # every kernel). Using the default keeps this callable outside a request
+    # scope (e.g. /tools/list which doesn't touch workbook state).
+    return sorted(_default_kernel.evaluator.registry.keys())
 
 
 def _macro_names() -> set[str]:
     return {m["name"].upper() for m in USER_MACROS}
 
 
-def _register_macro(spec: dict) -> None:
-    """Compile a macro spec and insert the resulting callable into the evaluator."""
+def _register_macro_into(k: GridOSKernel, spec: dict) -> None:
+    """Compile and register a macro into a single kernel's evaluator."""
+    macro_name = spec["name"].upper()
     # Exclude any previously-registered version of this macro from the primitive pool
     # so macros can be updated safely and so a macro can't (accidentally) recurse into itself.
-    macro_name = spec["name"].upper()
     primitive_registry = {
-        k: v for k, v in kernel.evaluator.registry.items() if k.upper() != macro_name
+        name: fn for name, fn in k.evaluator.registry.items() if name.upper() != macro_name
     }
     fn = compile_macro(
         name=spec["name"],
@@ -123,7 +171,33 @@ def _register_macro(spec: dict) -> None:
         body=spec["body"],
         registry=primitive_registry,
     )
-    kernel.evaluator.register_custom(macro_name, fn)
+    k.evaluator.register_custom(macro_name, fn)
+
+
+def _register_macro(spec: dict) -> None:
+    """Register a macro into _default_kernel AND every live per-user kernel in
+    the pool. At startup the pool is empty so only _default_kernel is touched;
+    at runtime this propagates newly-saved macros to every active session."""
+    _register_macro_into(_default_kernel, spec)
+    with _kernel_pool_lock:
+        pool_snapshot = list(_kernel_pool.values())
+    for k in pool_snapshot:
+        try:
+            _register_macro_into(k, spec)
+        except MacroError:
+            # Already validated against _default_kernel — per-kernel failures
+            # would indicate divergent registry state, which we silently skip
+            # so one bad kernel doesn't block the broadcast.
+            continue
+
+
+def _unregister_macro(upper_name: str) -> None:
+    """Drop a macro from every live kernel so delete takes effect immediately
+    across all sessions — not just the one that issued the request."""
+    _default_kernel.evaluator.registry.pop(upper_name, None)
+    with _kernel_pool_lock:
+        for k in _kernel_pool.values():
+            k.evaluator.registry.pop(upper_name, None)
 
 
 def _load_user_macros() -> None:
@@ -173,6 +247,106 @@ def _persist_hero_tools() -> None:
 
 _load_user_macros()
 _load_hero_tools()
+
+
+# ---------- Per-request kernel resolution ----------
+# Defined here (not later next to endpoint handlers) so every @app.X endpoint
+# below can reference current_kernel_dep as a Depends(). All of these need to
+# exist before Python evaluates the endpoint function signatures.
+
+
+def _scope_for(user: AuthUser, workbook_id: Optional[str] = None) -> WorkbookScope:
+    """Map auth context to a WorkbookScope.
+
+    OSS: single-user, single-workbook — user_id=None, workbook_id="default"
+        (legacy `system_state.gridos` file). An explicit workbook_id is
+        ignored.
+    SaaS: multi-workbook. Callers pass the active workbook's id; we fall
+        back to user.id for back-compat with the original one-workbook-per
+        -user behavior (used by save/load when the frontend doesn't pass
+        the id yet).
+    """
+    if not cloud_config.SAAS_MODE:
+        return WorkbookScope(user_id=None, workbook_id="default")
+    return WorkbookScope(user_id=user.id, workbook_id=workbook_id or user.id)
+
+
+def _register_macros_into_fresh(k: GridOSKernel) -> None:
+    """Replay the global USER_MACROS list onto a freshly-created kernel.
+    Called exactly once per kernel, when it enters the pool."""
+    for spec in USER_MACROS:
+        try:
+            _register_macro_into(k, spec)
+        except MacroError:
+            continue
+
+
+def _kernel_for_scope(scope: WorkbookScope) -> GridOSKernel:
+    """Resolve (or create) the GridOSKernel for this scope.
+
+    OSS: always returns _default_kernel — preserves pre-refactor behavior.
+
+    SaaS: returns (creating + lazy-loading from Supabase if needed) the kernel
+    for this (user, workbook). LRU-evicts the oldest entry when past the cap.
+    Thread-safe via _kernel_pool_lock; kernel creation happens outside the lock
+    since lazy-load may hit Supabase."""
+    if not cloud_config.SAAS_MODE:
+        return _default_kernel
+
+    key = (scope.user_id or "anon", scope.workbook_id or "default")
+    with _kernel_pool_lock:
+        if key in _kernel_pool:
+            _kernel_pool.move_to_end(key)
+            return _kernel_pool[key]
+
+    k = GridOSKernel()
+    _register_macros_into_fresh(k)
+    # Lazy-load workbook state so any endpoint can be the first touch point —
+    # we don't rely on the frontend calling /system/load first (e.g. a kernel
+    # that got LRU-evicted must rehydrate silently on the next access).
+    if scope.user_id:
+        try:
+            state = workbook_store.load(scope)
+            if state:
+                k.apply_state_dict(state)
+        except Exception as e:
+            print(f"[kernel_pool] lazy-load failed for {key}: {e}")
+
+    with _kernel_pool_lock:
+        # A concurrent request may have created one first — dedup by returning
+        # theirs so both see the same state.
+        if key in _kernel_pool:
+            _kernel_pool.move_to_end(key)
+            return _kernel_pool[key]
+        _kernel_pool[key] = k
+        while len(_kernel_pool) > KERNEL_POOL_MAX:
+            _kernel_pool.popitem(last=False)
+    return k
+
+
+async def current_kernel_dep(
+    user: AuthUser = Depends(require_user),
+    x_workbook_id: Optional[str] = Header(None, alias="X-Workbook-Id"),
+    workbook_id: Optional[str] = Query(None),
+) -> GridOSKernel:
+    """FastAPI dep that resolves the request's kernel and binds it to the
+    ContextVar for the duration of the request. Every endpoint that reads or
+    writes workbook state MUST declare this dep — otherwise the `kernel`
+    proxy raises in SaaS mode.
+
+    Must be `async def` — sync deps run in a threadpool with a *copied*
+    context, so `_current_kernel.set(k)` would land in the thread's copy and
+    the async endpoint body would see an empty ContextVar. Running inline in
+    the endpoint's task makes the set visible to subsequent `kernel.X` reads.
+
+    workbook_id resolution order: query param (back-compat with endpoints like
+    /system/save that already accept it) → X-Workbook-Id header (default path
+    for everything else) → _scope_for fallback (user.id)."""
+    wb_id = workbook_id or x_workbook_id
+    scope = _scope_for(user, wb_id)
+    k = _kernel_for_scope(scope)
+    _current_kernel.set(k)
+    return k
 
 
 # ---------- Provider registry + API-key storage ----------
@@ -859,6 +1033,7 @@ async def list_agents():
 async def chat_with_agent(
     req: ChatRequest,
     user: AuthUser = Depends(require_user),
+    k: GridOSKernel = Depends(current_kernel_dep),
 ):
     # Bind the request's user + workbook scope so every call_model() downstream
     # records usage against this user. In OSS mode user.id == "oss" and
@@ -896,7 +1071,10 @@ async def chat_with_agent(
 
 
 @app.post("/agent/apply")
-async def apply_agent_preview(req: PreviewApplyRequest):
+async def apply_agent_preview(
+    req: PreviewApplyRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     intent = AgentIntent(
         agent_id=req.agent_id,
         target_start_a1=req.target_cell,
@@ -1038,6 +1216,7 @@ def _is_completion_signal(values) -> bool:
 async def chat_chain(
     req: ChainRequest,
     user: AuthUser = Depends(require_user),
+    k: GridOSKernel = Depends(current_kernel_dep),
 ):
     """Auto-apply the agent's writes, observe formula results, and loop up to max_iterations times."""
     # workbook_id is intentionally None — tagging by workbook requires a row in
@@ -1240,7 +1419,10 @@ async def chat_chain(
 
 
 @app.post("/agent/write", response_model=WriteResponse)
-async def agent_write(intent: AgentIntent):
+async def agent_write(
+    intent: AgentIntent,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     try:
         requested_a1, actual_a1 = kernel.process_agent_intent(intent)
         return WriteResponse(
@@ -1259,7 +1441,10 @@ async def agent_write(intent: AgentIntent):
 
 
 @app.get("/debug/grid")
-async def get_grid(sheet: Optional[str] = None):
+async def get_grid(
+    sheet: Optional[str] = None,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     target = sheet or kernel.active_sheet
     return {
         "sheet": target,
@@ -1269,7 +1454,7 @@ async def get_grid(sheet: Optional[str] = None):
 
 
 @app.get("/api/workbook")
-async def get_workbook():
+async def get_workbook(k: GridOSKernel = Depends(current_kernel_dep)):
     return {
         "workbook_name": kernel.workbook_name,
         "active_sheet": kernel.active_sheet,
@@ -1283,7 +1468,10 @@ class ChatLogReplaceRequest(BaseModel):
 
 
 @app.post("/workbook/chat/replace")
-async def replace_chat_log(req: ChatLogReplaceRequest):
+async def replace_chat_log(
+    req: ChatLogReplaceRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     try:
         kernel.set_chat_log(req.entries)
     except ValueError as e:
@@ -1292,13 +1480,16 @@ async def replace_chat_log(req: ChatLogReplaceRequest):
 
 
 @app.post("/workbook/chat/clear")
-async def clear_chat_log():
+async def clear_chat_log(k: GridOSKernel = Depends(current_kernel_dep)):
     kernel.clear_chat_log()
     return {"status": "Success"}
 
 
 @app.post("/workbook/rename")
-async def rename_workbook(req: WorkbookRenameRequest):
+async def rename_workbook(
+    req: WorkbookRenameRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     try:
         name = kernel.rename_workbook(req.name)
     except ValueError as e:
@@ -1307,25 +1498,37 @@ async def rename_workbook(req: WorkbookRenameRequest):
 
 
 @app.post("/workbook/sheet")
-async def create_sheet(req: SheetCreateRequest):
+async def create_sheet(
+    req: SheetCreateRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     name = kernel.create_sheet(req.name)
     return {"sheet": name, "sheets": kernel.list_sheets(), "active_sheet": kernel.active_sheet}
 
 
 @app.post("/workbook/sheet/rename")
-async def rename_sheet(req: SheetRenameRequest):
+async def rename_sheet(
+    req: SheetRenameRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     name = kernel.rename_sheet(req.old_name, req.new_name)
     return {"sheet": name, "sheets": kernel.list_sheets(), "active_sheet": kernel.active_sheet}
 
 
 @app.post("/workbook/sheet/activate")
-async def activate_sheet(req: SheetActivateRequest):
+async def activate_sheet(
+    req: SheetActivateRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     name = kernel.activate_sheet(req.name)
     return {"sheet": name, "sheets": kernel.list_sheets(), "active_sheet": kernel.active_sheet}
 
 
 @app.post("/grid/cell")
-async def update_cell(req: CellUpdateRequest):
+async def update_cell(
+    req: CellUpdateRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     try:
         target = kernel.write_user_cell(req.cell.upper(), req.value, user_id="User", sheet_name=req.sheet)
         return {"status": "Success", "cell": target, "sheet": req.sheet or kernel.active_sheet}
@@ -1334,28 +1537,15 @@ async def update_cell(req: CellUpdateRequest):
 
 
 @app.post("/grid/range")
-async def update_range(req: RangeUpdateRequest):
+async def update_range(
+    req: RangeUpdateRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     try:
         target = kernel.write_user_range(req.target_cell.upper(), req.values, user_id="User", sheet_name=req.sheet)
         return {"status": "Success", "target": target, "sheet": req.sheet or kernel.active_sheet}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-
-def _scope_for(user: AuthUser, workbook_id: Optional[str] = None) -> WorkbookScope:
-    """Map auth context to a WorkbookScope.
-
-    OSS: single-user, single-workbook — user_id=None, workbook_id="default"
-        (legacy `system_state.gridos` file). An explicit workbook_id is
-        ignored.
-    SaaS: multi-workbook. Callers pass the active workbook's id; we fall
-        back to user.id for back-compat with the original one-workbook-per
-        -user behavior (used by save/load when the frontend doesn't pass
-        the id yet).
-    """
-    if not cloud_config.SAAS_MODE:
-        return WorkbookScope(user_id=None, workbook_id="default")
-    return WorkbookScope(user_id=user.id, workbook_id=workbook_id or user.id)
 
 
 @app.get("/auth/whoami")
@@ -1456,6 +1646,7 @@ async def usage_me(user: AuthUser = Depends(require_user)):
 async def save_grid(
     workbook_id: Optional[str] = None,
     user: AuthUser = Depends(require_user),
+    k: GridOSKernel = Depends(current_kernel_dep),
 ):
     scope = _scope_for(user, workbook_id)
     workbook_store.save(scope, kernel.export_state_dict())
@@ -1466,6 +1657,7 @@ async def save_grid(
 async def load_grid(
     workbook_id: Optional[str] = None,
     user: AuthUser = Depends(require_user),
+    k: GridOSKernel = Depends(current_kernel_dep),
 ):
     scope = _scope_for(user, workbook_id)
     state = workbook_store.load(scope)
@@ -1570,7 +1762,7 @@ async def delete_workbook(
 
 
 @app.get("/system/export")
-async def export_workbook():
+async def export_workbook(k: GridOSKernel = Depends(current_kernel_dep)):
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     safe_name = "".join(c if c.isalnum() or c in "-_ " else "-" for c in kernel.workbook_name).strip() or "workbook"
     safe_name = safe_name.replace(" ", "_")
@@ -1584,7 +1776,7 @@ async def export_workbook():
 
 
 @app.get("/system/export.xlsx")
-async def export_workbook_xlsx():
+async def export_workbook_xlsx(k: GridOSKernel = Depends(current_kernel_dep)):
     """Serialize the current workbook to .xlsx. One Excel sheet per GridOS
     sheet (respecting sheet_order). Cells with a `formula` get the formula
     string (Excel recomputes on open for compatible functions); cells without
@@ -1657,7 +1849,10 @@ async def export_workbook_xlsx():
 
 
 @app.post("/system/import.xlsx")
-async def import_workbook_xlsx(file: UploadFile = File(...)):
+async def import_workbook_xlsx(
+    file: UploadFile = File(...),
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     """Parse a .xlsx upload into GridOS state and apply to the kernel.
     One worksheet → one sheet. Cell values carry over; formula strings are
     preserved so GridOS's evaluator can recompute on next recalc (anything
@@ -1736,7 +1931,10 @@ async def import_workbook_xlsx(file: UploadFile = File(...)):
 
 
 @app.post("/system/import")
-async def import_workbook(payload: dict = Body(...)):
+async def import_workbook(
+    payload: dict = Body(...),
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid workbook payload.")
     try:
@@ -1753,13 +1951,16 @@ async def evaluate_formula(req: FormulaRequest):
 
 
 @app.post("/system/clear")
-async def clear_grid(sheet: Optional[str] = None):
+async def clear_grid(
+    sheet: Optional[str] = None,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     kernel.clear_unlocked(sheet)
     return {"status": "Success", "sheet": sheet or kernel.active_sheet}
 
 
 @app.post("/system/unlock-all")
-async def unlock_all():
+async def unlock_all(k: GridOSKernel = Depends(current_kernel_dep)):
     """Forcibly clear the locked flag on every cell across every sheet, and drop
     any empty-locked placeholder cells that have no value/formula."""
     dropped = 0
@@ -1805,12 +2006,18 @@ class ChartUpdateRequest(BaseModel):
 
 
 @app.get("/system/charts")
-async def list_charts(sheet: Optional[str] = None):
+async def list_charts(
+    sheet: Optional[str] = None,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     return {"charts": kernel.list_charts(sheet)}
 
 
 @app.post("/system/charts")
-async def create_chart(req: ChartCreateRequest):
+async def create_chart(
+    req: ChartCreateRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     spec = req.model_dump(exclude={"sheet"})
     try:
         chart = kernel.add_chart(spec, sheet_name=req.sheet)
@@ -1820,7 +2027,11 @@ async def create_chart(req: ChartCreateRequest):
 
 
 @app.patch("/system/charts/{chart_id}")
-async def update_chart(chart_id: str, req: ChartUpdateRequest):
+async def update_chart(
+    chart_id: str,
+    req: ChartUpdateRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     updates = req.model_dump(exclude={"sheet"}, exclude_none=True)
     try:
         chart = kernel.update_chart(chart_id, updates, sheet_name=req.sheet)
@@ -1832,7 +2043,11 @@ async def update_chart(chart_id: str, req: ChartUpdateRequest):
 
 
 @app.delete("/system/charts/{chart_id}")
-async def delete_chart(chart_id: str, sheet: Optional[str] = None):
+async def delete_chart(
+    chart_id: str,
+    sheet: Optional[str] = None,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     if not kernel.delete_chart(chart_id, sheet_name=sheet):
         raise HTTPException(status_code=404, detail=f"Chart '{chart_id}' not found.")
     return {"status": "Success"}
@@ -1874,7 +2089,10 @@ class HeroToolToggleRequest(BaseModel):
 
 
 @app.post("/templates/save")
-async def save_template(req: TemplateSaveRequest):
+async def save_template(
+    req: TemplateSaveRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     if not req.name or not req.name.strip():
         raise HTTPException(status_code=400, detail="Template name is required.")
 
@@ -1939,7 +2157,10 @@ async def load_template(template_id: str):
 
 
 @app.post("/templates/apply/{template_id}")
-async def apply_template(template_id: str):
+async def apply_template(
+    template_id: str,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     path = _template_path(template_id)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"Template '{template_id}' not found.")
@@ -2117,7 +2338,7 @@ async def delete_macro(macro_name: str):
             break
     if not removed:
         raise HTTPException(status_code=404, detail=f"Macro '{macro_name}' not found.")
-    kernel.evaluator.registry.pop(upper, None)
+    _unregister_macro(upper)
     _persist_user_macros()
     return {"status": "Success"}
 

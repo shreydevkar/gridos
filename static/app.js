@@ -48,9 +48,14 @@ async function bootstrapAuth() {
         throw new Error("No session — redirecting to /login.");
     }
 
-    // Intercept every fetch to our API and attach the current access token.
-    // Supabase auto-refreshes the token before it expires, so reading it on
-    // each call is cheap and always yields a live JWT.
+    // Intercept every fetch to our API and attach the current access token +
+    // the active workbook id. Supabase auto-refreshes the token before it
+    // expires, so reading it on each call is cheap and always yields a live
+    // JWT. The X-Workbook-Id header lets the server route to the right
+    // per-(user, workbook) kernel instead of one global singleton — without
+    // this header SaaS endpoints would fall back to user.id as the workbook
+    // id, which is fine for single-workbook users but wrong once a user has
+    // two tabs open on different workbooks.
     const origFetch = window.fetch.bind(window);
     window.fetch = async (input, init = {}) => {
         const url = typeof input === "string" ? input : input?.url || "";
@@ -58,9 +63,9 @@ async function bootstrapAuth() {
         if (!isOurApi) return origFetch(input, init);
         const { data: { session: fresh } } = await supabaseClient.auth.getSession();
         const token = fresh?.access_token;
-        if (!token) return origFetch(input, init);
         const headers = new Headers(init.headers || (typeof input === "object" ? input.headers : undefined));
-        headers.set("Authorization", `Bearer ${token}`);
+        if (token) headers.set("Authorization", `Bearer ${token}`);
+        if (activeWorkbookId) headers.set("X-Workbook-Id", activeWorkbookId);
         return origFetch(input, { ...init, headers });
     };
 

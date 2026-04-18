@@ -865,23 +865,27 @@
             try {
                 if (IS_SAAS()) {
                     // SaaS: provision a fresh workbook row, apply the template
-                    // into the in-memory kernel, rename the kernel to the
-                    // template's display name (template apply otherwise leaves
-                    // whatever workbook_name was in the saved snapshot), then
-                    // persist. Without the explicit rename+save the user lands
-                    // on a workbook titled "Untitled workbook" or the template
-                    // author's original name.
+                    // into the per-(user, workbook_id) kernel, rename it, then
+                    // persist. Every call between create and redirect must pin
+                    // the X-Workbook-Id header to the newly-created id so all
+                    // mutations land in the same kernel (without it the server
+                    // would fall back to user.id and we'd write into the wrong
+                    // per-user kernel).
                     const displayName = templateName || "Untitled workbook";
                     const created = await createWorkbookAndOpen(displayName);
-                    const applyRes = await fetch(`${API_BASE}/templates/apply/${encodeURIComponent(templateId)}`, { method: "POST" });
+                    const wbHeader = { "X-Workbook-Id": created.id };
+                    const applyRes = await fetch(`${API_BASE}/templates/apply/${encodeURIComponent(templateId)}`, {
+                        method: "POST",
+                        headers: wbHeader,
+                    });
                     const applyData = await applyRes.json().catch(() => ({}));
                     if (!applyRes.ok) throw new Error(applyData.detail || "Template apply failed.");
                     await fetch(`${API_BASE}/workbook/rename`, {
                         method: "POST",
-                        headers: { "Content-Type": "application/json" },
+                        headers: { "Content-Type": "application/json", ...wbHeader },
                         body: JSON.stringify({ name: displayName }),
                     }).catch(() => {});
-                    const saveRes = await fetch(`${API_BASE}/system/save?workbook_id=${encodeURIComponent(created.id)}`, { method: "POST" });
+                    const saveRes = await fetch(`${API_BASE}/system/save?workbook_id=${encodeURIComponent(created.id)}`, { method: "POST", headers: wbHeader });
                     if (!saveRes.ok) throw new Error(`Save after template failed (${saveRes.status})`);
                     await fetch(`${API_BASE}/workbooks/${encodeURIComponent(created.id)}`, {
                         method: "PATCH",
