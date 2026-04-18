@@ -342,12 +342,6 @@
             margin-bottom: 4px;
         }
 
-        .card-thumb.blank {
-            background: linear-gradient(135deg, #fafbff, #eef3fe);
-            border: 1px solid var(--accent-soft);
-            color: var(--accent);
-        }
-
         .card-thumb.template {
             background:
                 linear-gradient(90deg, rgba(26, 115, 232, 0.08) 1px, transparent 1px) 0 0/20px 100%,
@@ -661,19 +655,6 @@
 
         <section class="section">
             <div class="section-head">
-                <h3>Start something new</h3>
-            </div>
-            <div class="grid" id="starter-grid">
-                <div class="card" id="card-blank">
-                    <div class="card-thumb blank">+ blank</div>
-                    <div class="card-title">Blank workbook</div>
-                    <div class="card-description">Empty grid. Build it from scratch or ask the assistant to scaffold something.</div>
-                </div>
-            </div>
-        </section>
-
-        <section class="section">
-            <div class="section-head">
                 <h3>Templates</h3>
                 <span class="section-hint">Saved workbook snapshots — applying one clears unlocked cells.</span>
             </div>
@@ -968,7 +949,11 @@
             }
         }
 
-        document.getElementById("card-blank").addEventListener("click", openBlank);
+        // "Blank workbook" card was removed — openBlank() is still reachable
+        // through the OSS path of openContinue() (no-op when SaaS-only list
+        // exists) and through the hero prompt. Optional-chain the listener so
+        // a future reintroduction of the card is a one-line HTML add.
+        document.getElementById("card-blank")?.addEventListener("click", openBlank);
         document.getElementById("card-continue").addEventListener("click", openContinue);
 
         // ===== Hero prompt submit =====
