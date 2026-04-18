@@ -37,7 +37,7 @@ Minimal HTML + vanilla JS + Tailwind UI for editing cells, previewing AI suggest
 - **Formula synthesis** — natural-language prompts become executable grid formulas (e.g. `=MINUS(C3, D3)`).
 - **Multi-provider LLMs** — pick between Gemini, Claude, Groq, and OpenRouter models per request from the chat composer; keys live in-app (gear icon) and never need a code change.
 - **Landing-page hero prompt** — describe what you want to build ("Build a 4-quarter revenue forecast with 10% QoQ growth") and GridOS clears the kernel, routes you to the workbook, and auto-submits the prompt so you land on a sheet that's already building.
-- **Persistent reasoning history** — agent preview cards freeze in the chat thread after Apply/Dismiss with colored outcome badges (`APPLIED`, `DISMISSED`, `SUPERSEDED`), so the full audit trail of *what the agent was thinking* stays visible.
+- **Persistent reasoning history** — agent preview cards freeze in the chat thread after Apply/Dismiss with colored outcome badges (`APPLIED`, `DISMISSED`, `SUPERSEDED`), so the full audit trail of *what the agent was thinking* stays visible. The thread is part of workbook state: it survives page reloads and rides along inside the `.gridos` file when you export and re-import, so the conversation stays coupled to the sheet it produced.
 - **User macros** — the agent can propose reusable formulas (`=MARGIN(A,B)`) composed from primitives; approved macros are callable from any cell.
 - **Chart overlays** — in-app charts render via Chart.js and are upserted by title so the agent can resize/retype them in place.
 - **Preset templates** — built-in starters (Simple DCF, Monthly Budget, Break-Even, Loan Amortization, Income Statement) plus user-saved templates, with origin badges to tell them apart.
@@ -136,6 +136,7 @@ Add more by editing `core/providers/catalog.py`. The UI picks them up on next pa
 - [x] Multi-LLM support with in-app key management (Gemini, Claude, Groq, OpenRouter)
 - [x] Landing-page hero prompt → auto-submitting workbook start
 - [x] Persistent reasoning history with Apply/Dismiss outcome badges
+- [x] Chat thread persists with the workbook — survives reload + `.gridos` export/import
 - [x] Pre-apply formula-dependency guard (blocks `#DIV/0!` before it hits the sheet)
 - [x] Router call pinned to fastest small model for ~40% wall-clock speedup
 - [ ] Range-based vector operations and cross-sheet referencing

@@ -1192,7 +1192,27 @@ async def get_workbook():
         "workbook_name": kernel.workbook_name,
         "active_sheet": kernel.active_sheet,
         "sheets": kernel.list_sheets(),
+        "chat_log": list(kernel.chat_log),
     }
+
+
+class ChatLogReplaceRequest(BaseModel):
+    entries: List[Dict[str, Any]] = []
+
+
+@app.post("/workbook/chat/replace")
+async def replace_chat_log(req: ChatLogReplaceRequest):
+    try:
+        kernel.set_chat_log(req.entries)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "Success", "count": len(kernel.chat_log)}
+
+
+@app.post("/workbook/chat/clear")
+async def clear_chat_log():
+    kernel.clear_chat_log()
+    return {"status": "Success"}
 
 
 @app.post("/workbook/rename")

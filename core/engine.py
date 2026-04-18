@@ -214,7 +214,17 @@ class GridOSKernel:
         self.sheet_order: list[str] = []
         self.active_sheet = "Sheet1"
         self.workbook_name: str = "Untitled workbook"
+        self.chat_log: list[dict] = []
         self._ensure_sheet(self.active_sheet)
+
+    def set_chat_log(self, entries: list[dict]) -> list[dict]:
+        if not isinstance(entries, list):
+            raise ValueError("chat_log must be a list of entries.")
+        self.chat_log = [e for e in entries if isinstance(e, dict)]
+        return self.chat_log
+
+    def clear_chat_log(self) -> None:
+        self.chat_log = []
 
     def rename_workbook(self, new_name: str) -> str:
         cleaned = (new_name or "").strip()
@@ -557,6 +567,7 @@ class GridOSKernel:
                 }
                 for name in self.sheet_order
             },
+            "chat_log": list(self.chat_log),
         }
 
     def save_state(self, filepath: str = "system_state.gridos"):
@@ -609,6 +620,9 @@ class GridOSKernel:
                 r, c = a1_to_coords(a1_key)
                 self.cells[(r, c)] = CellState(**state_dict)
             self._rebuild_dependencies(self.active_sheet)
+
+        imported_log = import_data.get("chat_log")
+        self.chat_log = [e for e in imported_log if isinstance(e, dict)] if isinstance(imported_log, list) else []
 
     # ---------- Charts ----------
 

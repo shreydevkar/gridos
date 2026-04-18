@@ -28,6 +28,149 @@ let modelCatalog = { models: [], default_model_id: null, configured_providers: [
 let selectedModelId = null;
 const MODEL_PREF_KEY = "gridos.selectedModelId";
 
+// Session chat log — mirrors kernel.chat_log so save/reload can restore the thread.
+// Each entry: { id, kind: "user"|"agent"|"chain-step"|"chain-complete"|"system",
+//               text?, payload?, outcome?, ts }. DOM nodes carry data-chat-entry-id so
+// outcome updates can find their entry back.
+let sessionChat = [];
+let chatPersistTimer = null;
+let chatPersistInFlight = false;
+
+function genChatEntryId() {
+    return `c_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function schedulePersistChat() {
+    if (chatPersistTimer) clearTimeout(chatPersistTimer);
+    chatPersistTimer = setTimeout(persistSessionChat, 300);
+}
+
+async function persistSessionChat() {
+    chatPersistTimer = null;
+    if (chatPersistInFlight) {
+        // Retry after the current POST settles.
+        schedulePersistChat();
+        return;
+    }
+    chatPersistInFlight = true;
+    try {
+        await fetch(`${API_BASE}/workbook/chat/replace`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ entries: sessionChat }),
+        });
+    } catch (_) {
+        // Best-effort sync; next schedulePersistChat call will retry.
+    } finally {
+        chatPersistInFlight = false;
+    }
+}
+
+function pushChatEntry(entry) {
+    sessionChat.push(entry);
+    schedulePersistChat();
+    return entry;
+}
+
+function updateChatEntryOutcome(entryId, outcome) {
+    if (!entryId) return;
+    const entry = sessionChat.find((e) => e.id === entryId);
+    if (!entry) return;
+    entry.outcome = outcome;
+    schedulePersistChat();
+}
+
+function rehydrateChatFromWorkbook(entries) {
+    // Clear the DOM + re-render every entry from the server's chat_log. Called on
+    // page load and after importing a .gridos file. We suspend auto-persist while
+    // replaying so the replay doesn't immediately POST the log right back.
+    if (chatPersistTimer) { clearTimeout(chatPersistTimer); chatPersistTimer = null; }
+    sessionChat = [];
+    const conversation = document.getElementById("chat-conversation");
+    if (!conversation) return;
+    conversation.innerHTML = "";
+    previewMessageEl = null;
+
+    for (const entry of entries) {
+        if (!entry || !entry.kind) continue;
+        sessionChat.push(entry);
+        if (entry.kind === "user") {
+            addLog("user", escapeHtml(entry.text || ""));
+        } else if (entry.kind === "system") {
+            addLog("system", escapeHtml(entry.text || ""));
+        } else if (entry.kind === "agent") {
+            const payload = entry.payload || {};
+            const { html } = buildPreviewCardBody(payload, { includeActions: false });
+            const msg = addLog("agent", html);
+            if (msg) {
+                msg.dataset.chatEntryId = entry.id;
+                if (entry.outcome) {
+                    const badge = document.createElement("div");
+                    badge.className = `preview-outcome preview-outcome-${entry.outcome}`;
+                    badge.textContent = entry.outcome === "applied" ? "Applied"
+                        : entry.outcome === "dismissed" ? "Dismissed"
+                        : entry.outcome === "replaced" ? "Superseded"
+                        : entry.outcome;
+                    msg.prepend(badge);
+                }
+                wireProposedMacroButtons(msg);
+            }
+        } else if (entry.kind === "chain-step" || entry.kind === "chain-complete") {
+            const { html } = buildChainStepHtml(entry.payload || {}, entry.step_idx ?? 0);
+            const msg = addLog(entry.kind, html);
+            if (msg) wireProposedMacroButtons(msg);
+        }
+    }
+
+    if (!sessionChat.length) {
+        // Restore the empty-state panel so the quick-prompt chips reappear.
+        clearChatConversationDom();
+    }
+}
+
+function clearChatConversationDom() {
+    // DOM-only reset (no sessionChat / backend mutation). Used by rehydrate when
+    // the incoming chat_log is empty.
+    const conversation = document.getElementById("chat-conversation");
+    if (!conversation) return;
+    conversation.innerHTML = `
+        <div class="chat-empty" id="chat-empty">
+            <div class="chat-empty-logo">GO</div>
+            <h3>How can I help?</h3>
+            <p>Describe what you want to build or analyze. I'll plan it, preview the cells, and only write them when you approve.</p>
+            <div class="quick-prompts" id="quick-prompts-empty"></div>
+        </div>
+    `;
+    seedQuickPromptChips();
+}
+
+function seedQuickPromptChips() {
+    const empty = document.getElementById("quick-prompts-empty");
+    if (!empty) return;
+    const prompts = [
+        { text: "Operating model", prompt: "Build a quarterly operating model starting at B2 with revenue growing 10% QoQ from 100, COGS at 40% of revenue, OpEx flat at 30, gross profit, and operating income. Plan the full model first, then fill section by section.", chain: true },
+        { text: "Simple DCF", prompt: "Build a simple DCF starting at B2: 5 years of FCF growing 15% from 100, a 10% discount rate row, present value of each year using DIVIDE and POWER, and a total PV. Plan first, then fill.", chain: true },
+        { text: "Hiring tracker", prompt: "Create a hiring tracker in the selected area with role, stage, owner, and notes columns.", chain: false },
+        { text: "Summarize selection", prompt: "Summarize the selected range into a clean executive header row and totals.", chain: false },
+    ];
+    prompts.forEach((p) => {
+        const btn = document.createElement("button");
+        btn.className = "quick-prompt";
+        btn.type = "button";
+        btn.textContent = p.text;
+        btn.dataset.prompt = p.prompt;
+        if (p.chain) btn.dataset.chain = "true";
+        btn.addEventListener("click", () => {
+            document.getElementById("assistant-input").value = p.prompt;
+            syncSendButtonState();
+            autoGrowInput();
+            if (p.chain) setChainMode(true);
+            document.getElementById("assistant-input").focus();
+        });
+        empty.appendChild(btn);
+    });
+}
+
 const cellEls = new Map();
 const colEls = new Map();
 const rowEls = new Map();
@@ -123,13 +266,16 @@ function renderTabs() {
     document.getElementById("rename-tab-btn").addEventListener("click", renameActiveSheet);
 }
 
-async function fetchWorkbook() {
+async function fetchWorkbook({ rehydrateChat: shouldRehydrate = false } = {}) {
     const res = await fetch(`${API_BASE}/api/workbook`);
     workbook = await res.json();
     const activePill = document.getElementById("active-sheet-pill");
     if (activePill) activePill.textContent = workbook.active_sheet;
     syncWorkbookTitleInput();
     renderTabs();
+    if (shouldRehydrate) {
+        rehydrateChatFromWorkbook(workbook.chat_log || []);
+    }
 }
 
 function syncWorkbookTitleInput() {
@@ -448,39 +594,11 @@ function addLog(kind, html) {
 }
 
 function clearChatConversation() {
-    const conversation = document.getElementById("chat-conversation");
-    conversation.innerHTML = `
-        <div class="chat-empty" id="chat-empty">
-            <div class="chat-empty-logo">GO</div>
-            <h3>How can I help?</h3>
-            <p>Describe what you want to build or analyze. I'll plan it, preview the cells, and only write them when you approve.</p>
-            <div class="quick-prompts" id="quick-prompts-empty"></div>
-        </div>
-    `;
-    // Re-seed the quick-prompt buttons inside the new empty state.
-    const empty = document.getElementById("quick-prompts-empty");
-    const prompts = [
-        { text: "Operating model", prompt: "Build a quarterly operating model starting at B2 with revenue growing 10% QoQ from 100, COGS at 40% of revenue, OpEx flat at 30, gross profit, and operating income. Plan the full model first, then fill section by section.", chain: true },
-        { text: "Simple DCF", prompt: "Build a simple DCF starting at B2: 5 years of FCF growing 15% from 100, a 10% discount rate row, present value of each year using DIVIDE and POWER, and a total PV. Plan first, then fill.", chain: true },
-        { text: "Hiring tracker", prompt: "Create a hiring tracker in the selected area with role, stage, owner, and notes columns.", chain: false },
-        { text: "Summarize selection", prompt: "Summarize the selected range into a clean executive header row and totals.", chain: false },
-    ];
-    prompts.forEach((p) => {
-        const btn = document.createElement("button");
-        btn.className = "quick-prompt";
-        btn.type = "button";
-        btn.textContent = p.text;
-        btn.dataset.prompt = p.prompt;
-        if (p.chain) btn.dataset.chain = "true";
-        btn.addEventListener("click", () => {
-            document.getElementById("assistant-input").value = p.prompt;
-            syncSendButtonState();
-            autoGrowInput();
-            if (p.chain) setChainMode(true);
-            document.getElementById("assistant-input").focus();
-        });
-        empty.appendChild(btn);
-    });
+    sessionChat = [];
+    previewMessageEl = null;
+    if (chatPersistTimer) { clearTimeout(chatPersistTimer); chatPersistTimer = null; }
+    fetch(`${API_BASE}/workbook/chat/clear`, { method: "POST" }).catch(() => {});
+    clearChatConversationDom();
 }
 
 async function persistSingleCell(cell, value) {
@@ -822,7 +940,54 @@ function freezePreviewCard(outcome) {
             : outcome;
         previewMessageEl.prepend(badge);
     }
+    updateChatEntryOutcome(previewMessageEl.dataset.chatEntryId, outcome || null);
     previewMessageEl = null;
+}
+
+function buildPreviewCardBody(payload, { includeActions = true, idSuffix = "card" } = {}) {
+    const hasCells = payload.preview_cells && payload.preview_cells.length;
+    const previewRange = hasCells
+        ? `${payload.preview_cells[0].cell} → ${payload.preview_cells[payload.preview_cells.length - 1].cell}`
+        : payload.target_cell;
+    const hasValues = Array.isArray(payload.values) && payload.values.length > 0;
+    const hasChart = Boolean(payload.chart_spec);
+    const canApply = hasValues || hasChart;
+    const applyLabel = hasValues ? "Apply" : "Add chart";
+
+    const macroError = payload.macro_error
+        ? `<div style="margin-top:8px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(payload.macro_error)}</div>`
+        : "";
+    const macroBlock = renderProposedMacroBlock(payload.proposed_macro, { idSuffix });
+    const planBlock = renderPlanBlock(payload.plan);
+
+    let actionsRow = "";
+    if (includeActions) {
+        actionsRow = canApply
+            ? `<div class="msg-actions">
+                <button class="primary-btn" id="apply-preview-btn">${escapeHtml(applyLabel)}</button>
+                <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
+            </div>`
+            : `<div class="msg-actions">
+                <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
+            </div>`;
+    }
+
+    const agentLabel = escapeHtml((payload.category || "agent").toUpperCase());
+    const html = `
+        <div>${escapeHtml(payload.reasoning || "Preview ready.")}</div>
+        <div class="msg-meta">
+            <strong style="color:var(--accent);">${agentLabel}</strong>
+            <span>·</span>
+            <span>${payload.scope === "selection" ? "Selection" : "Whole sheet"}</span>
+            <span>·</span>
+            <span class="target-chip">${escapeHtml(previewRange || payload.target_cell || "")}</span>
+        </div>
+        ${planBlock}
+        ${macroError}
+        ${macroBlock}
+        ${actionsRow}
+    `;
+    return { html, canApply };
 }
 
 function renderPreviewAsChatMessage() {
@@ -835,47 +1000,17 @@ function renderPreviewAsChatMessage() {
 
     if (!previewState) return;
 
-    const hasCells = previewState.preview_cells && previewState.preview_cells.length;
-    const previewRange = hasCells
-        ? `${previewState.preview_cells[0].cell} → ${previewState.preview_cells[previewState.preview_cells.length - 1].cell}`
-        : previewState.target_cell;
-    const hasValues = Array.isArray(previewState.values) && previewState.values.length > 0;
-    const hasChart = Boolean(previewState.chart_spec);
-    const canApply = hasValues || hasChart;
-    const applyLabel = hasValues ? "Apply" : "Add chart";
-
-    const macroError = previewState.macro_error
-        ? `<div style="margin-top:8px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(previewState.macro_error)}</div>`
-        : "";
-    const macroBlock = renderProposedMacroBlock(previewState.proposed_macro, { idSuffix: "card" });
-    const planBlock = renderPlanBlock(previewState.plan);
-
-    const actionsRow = canApply
-        ? `<div class="msg-actions">
-            <button class="primary-btn" id="apply-preview-btn">${escapeHtml(applyLabel)}</button>
-            <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
-        </div>`
-        : `<div class="msg-actions">
-            <button class="ghost-btn" id="dismiss-preview-btn">Dismiss</button>
-        </div>`;
-
-    const agentLabel = escapeHtml((previewState.category || "agent").toUpperCase());
-    const html = `
-        <div>${escapeHtml(previewState.reasoning || "Preview ready.")}</div>
-        <div class="msg-meta">
-            <strong style="color:var(--accent);">${agentLabel}</strong>
-            <span>·</span>
-            <span>${previewState.scope === "selection" ? "Selection" : "Whole sheet"}</span>
-            <span>·</span>
-            <span class="target-chip">${escapeHtml(previewRange || previewState.target_cell || "")}</span>
-        </div>
-        ${planBlock}
-        ${macroError}
-        ${macroBlock}
-        ${actionsRow}
-    `;
-
+    const { html, canApply } = buildPreviewCardBody(previewState, { includeActions: true });
     previewMessageEl = addLog("agent", html);
+
+    const entry = pushChatEntry({
+        id: genChatEntryId(),
+        kind: "agent",
+        payload: { ...previewState },
+        outcome: null,
+        ts: Date.now(),
+    });
+    previewMessageEl.dataset.chatEntryId = entry.id;
 
     if (canApply) {
         previewMessageEl.querySelector("#apply-preview-btn")?.addEventListener("click", applyPreview);
@@ -903,6 +1038,7 @@ function clearPreview() {
 async function requestPreview() {
     const prompt = document.getElementById("assistant-input").value.trim();
     if (!prompt) return;
+    pushChatEntry({ id: genChatEntryId(), kind: "user", text: prompt, ts: Date.now() });
     addLog("user", escapeHtml(prompt));
     // Clear the composer after submit.
     const input = document.getElementById("assistant-input");
@@ -986,42 +1122,38 @@ async function runChain(prompt, payload) {
     }
 }
 
-function renderChainSteps(data) {
-    const steps = data.steps || [];
-    if (!steps.length) {
-        addLog("system", "Chain returned no steps.");
-        return;
-    }
+function buildChainStepHtml(step, idx) {
+    const macroBlock = renderProposedMacroBlock(step.proposed_macro, { idSuffix: `chain-${idx}` });
+    const macroError = step.macro_error
+        ? `<div style="margin-top:6px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(step.macro_error)}</div>`
+        : "";
+    const planBlock = renderPlanBlock(step.plan);
 
-    steps.forEach((step, idx) => {
-        const macroBlock = renderProposedMacroBlock(step.proposed_macro, { idSuffix: `chain-${idx}` });
-        const macroError = step.macro_error
-            ? `<div style="margin-top:6px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(step.macro_error)}</div>`
-            : "";
-        const planBlock = renderPlanBlock(step.plan);
-
-        if (step.completion_signal) {
-            const msg = addLog("chain-complete", `
+    if (step.completion_signal) {
+        return {
+            kind: "chain-complete",
+            html: `
                 <strong>Step ${step.iteration + 1} &middot; complete</strong>
                 <div>${escapeHtml(step.reasoning || "Agent signaled the task is finished.")}</div>
                 ${planBlock}
                 ${macroError}
                 ${macroBlock}
-            `);
-            if (msg) wireProposedMacroButtons(msg);
-            return;
-        }
+            `,
+        };
+    }
 
-        const valuesJson = JSON.stringify(step.values);
-        const obsItems = (step.observations || []).map((obs) => {
-            const formula = obs.formula ? ` <em>(formula: ${escapeHtml(obs.formula)})</em>` : "";
-            const warn = obs.warning
-                ? `<div style="color:var(--danger);font-size:11px;margin-left:18px;">⚠ ${escapeHtml(obs.warning)}</div>`
-                : "";
-            return `<li>${escapeHtml(obs.cell)} = ${escapeHtml(String(obs.value))}${formula}${warn}</li>`;
-        }).join("");
+    const valuesJson = JSON.stringify(step.values);
+    const obsItems = (step.observations || []).map((obs) => {
+        const formula = obs.formula ? ` <em>(formula: ${escapeHtml(obs.formula)})</em>` : "";
+        const warn = obs.warning
+            ? `<div style="color:var(--danger);font-size:11px;margin-left:18px;">⚠ ${escapeHtml(obs.warning)}</div>`
+            : "";
+        return `<li>${escapeHtml(obs.cell)} = ${escapeHtml(String(obs.value))}${formula}${warn}</li>`;
+    }).join("");
 
-        const msg = addLog("chain-step", `
+    return {
+        kind: "chain-step",
+        html: `
             <strong>Step ${step.iteration + 1} &middot; ${escapeHtml(step.agent_id)}</strong>
             <div>${escapeHtml(step.reasoning || "")}</div>
             <div style="margin-top:6px;">Target: <strong>${escapeHtml(step.target)}</strong> &middot; Wrote: <code>${escapeHtml(valuesJson)}</code></div>
@@ -1029,12 +1161,36 @@ function renderChainSteps(data) {
             ${planBlock}
             ${macroError}
             ${macroBlock}
-        `);
+        `,
+    };
+}
+
+function renderChainSteps(data) {
+    const steps = data.steps || [];
+    if (!steps.length) {
+        const text = "Chain returned no steps.";
+        addLog("system", escapeHtml(text));
+        pushChatEntry({ id: genChatEntryId(), kind: "system", text, ts: Date.now() });
+        return;
+    }
+
+    steps.forEach((step, idx) => {
+        const { kind, html } = buildChainStepHtml(step, idx);
+        const msg = addLog(kind, html);
         if (msg) wireProposedMacroButtons(msg);
+        pushChatEntry({
+            id: genChatEntryId(),
+            kind,
+            payload: step,
+            step_idx: idx,
+            ts: Date.now(),
+        });
     });
 
     if (data.terminated_early) {
-        addLog("system", `Chain terminated early after ${data.iterations_used} iteration(s).`);
+        const text = `Chain terminated early after ${data.iterations_used} iteration(s).`;
+        addLog("system", escapeHtml(text));
+        pushChatEntry({ id: genChatEntryId(), kind: "system", text, ts: Date.now() });
     }
 }
 
@@ -1606,7 +1762,7 @@ async function loadWorkbook() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Import failed.");
-        await fetchWorkbook();
+        await fetchWorkbook({ rehydrateChat: true });
         await fetchGrid();
         recordAction(before);
         setStatus("Ready");
@@ -2660,7 +2816,7 @@ async function bootstrap() {
     renderGridShell();
     attachGridEvents();
     attachGlobalEvents();
-    await fetchWorkbook();
+    await fetchWorkbook({ rehydrateChat: true });
     await fetchGrid();
     setScope("selection");
     toggleAssistant(true);
