@@ -990,6 +990,7 @@ async def chat_chain(req: ChainRequest):
                 scope=req.scope,
                 selected_cells=req.selected_cells,
                 sheet=sheet,
+                model_id=req.model_id,
             )
             preview = generate_agent_preview(chat_req)
             values = preview["values"] or [[""]]
