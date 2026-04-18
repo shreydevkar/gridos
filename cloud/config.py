@@ -80,21 +80,27 @@ def _env_int(name: str, default: int) -> int:
 # cloud/usage.over_quota_check() which returns 402 at the cap; the account
 # popover's progress bar renders the usage-to-cap ratio.
 #
-# Tier psychology (4-price anchor + "contact us"):
+# Tier psychology:
 #   Free       → try-it amount; hit a real ceiling quickly
 #   Plus       → low-friction entry paid tier; removes Free's pain
 #   Pro        → main plan; anchored so it looks like the sweet spot
 #   Enterprise → unlimited; makes Pro look reasonable
+#   Student    → Pro-level tokens with fewer workbook slots, unlocked by
+#                verification (.edu email / GitHub Student Pack — enforcement
+#                lands with the Stripe phase). "We trust you to do real work"
+#                rather than a throttled free tier.
 #
 # 0 means unlimited (enterprise, and anyone overriding via env for dev).
-FREE_TIER_MONTHLY_TOKENS: int = _env_int("FREE_TIER_MONTHLY_TOKENS",   100_000)
-PLUS_TIER_MONTHLY_TOKENS: int = _env_int("PLUS_TIER_MONTHLY_TOKENS", 1_000_000)
-PRO_TIER_MONTHLY_TOKENS:  int = _env_int("PRO_TIER_MONTHLY_TOKENS",  5_000_000)
+FREE_TIER_MONTHLY_TOKENS:    int = _env_int("FREE_TIER_MONTHLY_TOKENS",      100_000)
+PLUS_TIER_MONTHLY_TOKENS:    int = _env_int("PLUS_TIER_MONTHLY_TOKENS",    1_000_000)
+PRO_TIER_MONTHLY_TOKENS:     int = _env_int("PRO_TIER_MONTHLY_TOKENS",     5_000_000)
+STUDENT_TIER_MONTHLY_TOKENS: int = _env_int("STUDENT_TIER_MONTHLY_TOKENS", 5_000_000)
 
 # Cloud workbook slots per tier. 0 means unlimited (enterprise).
-FREE_TIER_MAX_WORKBOOKS: int = _env_int("FREE_TIER_MAX_WORKBOOKS",  3)
-PLUS_TIER_MAX_WORKBOOKS: int = _env_int("PLUS_TIER_MAX_WORKBOOKS", 10)
-PRO_TIER_MAX_WORKBOOKS:  int = _env_int("PRO_TIER_MAX_WORKBOOKS",  50)
+FREE_TIER_MAX_WORKBOOKS:    int = _env_int("FREE_TIER_MAX_WORKBOOKS",     3)
+PLUS_TIER_MAX_WORKBOOKS:    int = _env_int("PLUS_TIER_MAX_WORKBOOKS",    10)
+PRO_TIER_MAX_WORKBOOKS:     int = _env_int("PRO_TIER_MAX_WORKBOOKS",     50)
+STUDENT_TIER_MAX_WORKBOOKS: int = _env_int("STUDENT_TIER_MAX_WORKBOOKS", 25)
 
 
 def tier_limit(tier: str) -> int:
@@ -104,6 +110,8 @@ def tier_limit(tier: str) -> int:
         return 0  # unlimited
     if t == "pro":
         return PRO_TIER_MONTHLY_TOKENS
+    if t == "student":
+        return STUDENT_TIER_MONTHLY_TOKENS
     if t == "plus":
         return PLUS_TIER_MONTHLY_TOKENS
     return FREE_TIER_MONTHLY_TOKENS
@@ -116,6 +124,8 @@ def max_workbooks(tier: str) -> int:
         return 0
     if t == "pro":
         return PRO_TIER_MAX_WORKBOOKS
+    if t == "student":
+        return STUDENT_TIER_MAX_WORKBOOKS
     if t == "plus":
         return PLUS_TIER_MAX_WORKBOOKS
     return FREE_TIER_MAX_WORKBOOKS
