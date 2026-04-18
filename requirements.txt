@@ -8,4 +8,4 @@ python-dotenv
 # SaaS-only: required when SAAS_MODE=true. OSS installs can skip — both
 # imports are lazy inside cloud/ modules.
 supabase>=2.0
-PyJWT>=2.8
+PyJWT[crypto]>=2.8

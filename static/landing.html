@@ -99,6 +99,79 @@
             text-decoration: none;
         }
 
+        /* Account avatar + popover (SaaS only) */
+        .account-wrap { position: relative; }
+        .account-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 1px solid var(--border);
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            padding: 0;
+            transition: box-shadow 120ms ease, transform 80ms ease;
+        }
+        .account-avatar:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
+        .account-avatar:active { transform: scale(0.96); }
+        .account-popover {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            width: 280px;
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            box-shadow: var(--shadow-3);
+            padding: 14px;
+            z-index: 120;
+            font-size: 13px;
+        }
+        .account-popover[hidden] { display: none; }
+        .account-popover-head {
+            display: flex; align-items: center; gap: 10px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .account-popover-avatar {
+            width: 36px; height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            color: #fff; display: grid; place-items: center;
+            font-weight: 600; font-size: 13px; flex-shrink: 0;
+        }
+        .account-popover-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .account-popover-email {
+            font-weight: 500; color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .account-popover-tier {
+            font-size: 11px; color: var(--text-muted); text-transform: capitalize;
+        }
+        .account-popover-stats {
+            display: flex; gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .account-popover-stat { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+        .account-popover-stat-label {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+            color: var(--text-mutedder);
+        }
+        .account-popover-stat-value { font-size: 13px; font-weight: 500; color: var(--text); }
+        .account-popover-actions { display: flex; flex-direction: column; padding-top: 8px; }
+        .account-popover-link {
+            text-align: left; padding: 8px 6px;
+            background: transparent; border: none; border-radius: 6px;
+            color: var(--text); font-size: 13px; cursor: pointer; font-family: inherit;
+        }
+        .account-popover-link:hover { background: var(--bg-hover); }
+        .account-popover-link-danger { color: var(--danger); }
+
         /* ===== Page layout ===== */
         .page {
             max-width: 1120px;
@@ -432,6 +505,34 @@
         <div class="topbar-spacer"></div>
         <div class="topbar-actions">
             <a href="https://github.com/shreydevkar/gridos_kernel" target="_blank" rel="noopener">GitHub</a>
+            <div class="account-wrap" id="account-wrap" hidden>
+                <button class="account-avatar" id="account-avatar" type="button" title="Account" aria-haspopup="true" aria-expanded="false">
+                    <span id="account-avatar-initials">·</span>
+                </button>
+                <div class="account-popover" id="account-popover" hidden role="dialog">
+                    <div class="account-popover-head">
+                        <div class="account-popover-avatar" id="account-popover-avatar">·</div>
+                        <div class="account-popover-who">
+                            <div class="account-popover-email" id="account-popover-email">—</div>
+                            <div class="account-popover-tier" id="account-popover-tier">free plan</div>
+                        </div>
+                    </div>
+                    <div class="account-popover-stats">
+                        <div class="account-popover-stat">
+                            <span class="account-popover-stat-label" id="account-popover-month">This month</span>
+                            <span class="account-popover-stat-value" id="account-popover-tokens">—</span>
+                        </div>
+                        <div class="account-popover-stat">
+                            <span class="account-popover-stat-label">Est. cost</span>
+                            <span class="account-popover-stat-value" id="account-popover-cost">—</span>
+                        </div>
+                    </div>
+                    <div class="account-popover-actions">
+                        <button type="button" class="account-popover-link" id="account-popover-open">Open workbook</button>
+                        <button type="button" class="account-popover-link account-popover-link-danger" id="account-popover-signout">Sign out</button>
+                    </div>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -523,7 +624,9 @@
         // SaaS auth gate — redirect to /login if the user is not signed in.
         // OSS mode skips this entirely. Runs before the main landing script so
         // we never render template cards or fire API calls as an anonymous
-        // user in SaaS mode.
+        // user in SaaS mode. Also attaches the Bearer token to every API_BASE
+        // fetch and exposes the client + session on window for the main script
+        // (avatar popover, sign-out).
         try {
             const res = await fetch('/cloud/status');
             const status = await res.json();
@@ -539,7 +642,27 @@
                         auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
                     });
                     const { data: { session } } = await client.auth.getSession();
-                    if (!session) window.location.replace('/login');
+                    if (!session) {
+                        window.location.replace('/login');
+                    } else {
+                        window.__gridosSupabase = client;
+                        window.__gridosSession = session;
+                        // Attach Bearer to same-origin API calls so /usage/me works.
+                        const origFetch = window.fetch.bind(window);
+                        window.fetch = async function(input, init = {}) {
+                            const url = typeof input === 'string' ? input : (input?.url || '');
+                            const sameOrigin = url.startsWith(window.location.origin) || url.startsWith('/');
+                            if (sameOrigin) {
+                                const headers = new Headers(init.headers || {});
+                                if (!headers.has('Authorization')) {
+                                    headers.set('Authorization', `Bearer ${session.access_token}`);
+                                }
+                                init = { ...init, headers };
+                            }
+                            return origFetch(input, init);
+                        };
+                        window.dispatchEvent(new CustomEvent('gridos:saas-ready', { detail: { email: session.user?.email || null } }));
+                    }
                 }
             }
         } catch (_) {
@@ -724,6 +847,91 @@
 
         loadTemplates();
         loadContinueMeta();
+
+        // ===== Account avatar + popover (SaaS only) =====
+        function avatarInitials(email) {
+            if (!email) return "·";
+            const local = (email.split("@")[0] || "");
+            if (!local) return email[0]?.toUpperCase() || "·";
+            const parts = local.split(/[.\-_]/).filter(Boolean);
+            const pick = parts.length >= 2 ? parts[0][0] + parts[1][0] : local.slice(0, 2);
+            return pick.toUpperCase();
+        }
+        function formatNumber(n) { return (n || 0).toLocaleString(); }
+        function formatCostCents(c) {
+            const v = c || 0;
+            if (v === 0) return "< $0.01";
+            return `$${(v / 100).toFixed(2)}`;
+        }
+        function formatMonthLabel(iso) {
+            if (!iso) return "";
+            const [y, m] = iso.split("-");
+            const names = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+            return `${names[Number(m) - 1] || m} ${y}`;
+        }
+
+        async function paintAccountPopover() {
+            try {
+                const res = await fetch(`${API_BASE}/usage/me`);
+                if (!res.ok) return;
+                const d = await res.json();
+                const initials = avatarInitials(d.email);
+                document.getElementById("account-avatar-initials").textContent = initials;
+                document.getElementById("account-popover-avatar").textContent = initials;
+                document.getElementById("account-popover-email").textContent = d.email || "—";
+                document.getElementById("account-popover-tier").textContent = `${d.tier || "free"} plan`;
+                document.getElementById("account-popover-month").textContent = formatMonthLabel(d.month) || "This month";
+                document.getElementById("account-popover-tokens").textContent = formatNumber(d.total_tokens);
+                document.getElementById("account-popover-cost").textContent = formatCostCents(d.cost_cents);
+            } catch (_) { /* silent */ }
+        }
+
+        function toggleAccountPopover(force) {
+            const pop = document.getElementById("account-popover");
+            const avatar = document.getElementById("account-avatar");
+            if (!pop) return;
+            const open = force !== undefined ? force : pop.hasAttribute("hidden");
+            if (open) {
+                pop.removeAttribute("hidden");
+                avatar?.setAttribute("aria-expanded", "true");
+                paintAccountPopover();
+            } else {
+                pop.setAttribute("hidden", "");
+                avatar?.setAttribute("aria-expanded", "false");
+            }
+        }
+
+        function setupAccountAvatar() {
+            const wrap = document.getElementById("account-wrap");
+            if (!wrap) return;
+            wrap.hidden = false;
+            document.getElementById("account-avatar")?.addEventListener("click", (e) => {
+                e.stopPropagation();
+                toggleAccountPopover();
+            });
+            document.addEventListener("click", (e) => {
+                if (!wrap.contains(e.target)) toggleAccountPopover(false);
+            });
+            document.addEventListener("keydown", (e) => {
+                if (e.key === "Escape") toggleAccountPopover(false);
+            });
+            document.getElementById("account-popover-open")?.addEventListener("click", () => {
+                window.location.href = "/workbook";
+            });
+            document.getElementById("account-popover-signout")?.addEventListener("click", async () => {
+                if (window.__gridosSupabase) {
+                    await window.__gridosSupabase.auth.signOut();
+                }
+                window.location.replace("/login");
+            });
+            paintAccountPopover();
+        }
+
+        // If the auth-gate module fired this, we're in SaaS mode and signed in.
+        // If it already ran before this script loaded (race), the window flag
+        // will be set — check that too.
+        window.addEventListener("gridos:saas-ready", setupAccountAvatar);
+        if (window.__gridosSession) setupAccountAvatar();
     </script>
 </body>
 </html>

@@ -277,6 +277,138 @@
             border-color: var(--accent);
         }
 
+        /* Account avatar + popover (SaaS only) */
+        .account-avatar {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 1px solid var(--border);
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            padding: 0;
+            transition: box-shadow 120ms ease, transform 80ms ease;
+        }
+        .account-avatar:hover {
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+        .account-avatar:active {
+            transform: scale(0.96);
+        }
+
+        .account-popover {
+            position: absolute;
+            top: calc(100% + 6px);
+            right: 0;
+            width: 280px;
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            box-shadow: var(--shadow-3);
+            padding: 14px;
+            z-index: 120;
+            font-size: 13px;
+        }
+        .account-popover[hidden] { display: none; }
+
+        .account-popover-head {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .account-popover-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            color: #fff;
+            display: grid;
+            place-items: center;
+            font-weight: 600;
+            font-size: 13px;
+            flex-shrink: 0;
+        }
+
+        .account-popover-who {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+        }
+
+        .account-popover-email {
+            font-weight: 500;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .account-popover-tier {
+            font-size: 11px;
+            color: var(--text-muted);
+            text-transform: capitalize;
+        }
+
+        .account-popover-stats {
+            display: flex;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border-soft);
+        }
+
+        .account-popover-stat {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .account-popover-stat-label {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-mutedder);
+        }
+
+        .account-popover-stat-value {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .account-popover-actions {
+            display: flex;
+            flex-direction: column;
+            padding-top: 8px;
+        }
+
+        .account-popover-link {
+            text-align: left;
+            padding: 8px 6px;
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            color: var(--text);
+            font-size: 13px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        .account-popover-link:hover {
+            background: var(--bg-hover, #f1f3f4);
+        }
+        .account-popover-link-danger {
+            color: var(--danger, #d93025);
+        }
+
         .menubar-ai-btn::before {
             content: "";
             width: 8px;
@@ -1843,6 +1975,34 @@
                 <button class="menubar-ai-btn" id="assistant-toggle" type="button">
                     Ask GridOS
                 </button>
+                <div class="account-wrap menu-saas-only" id="account-wrap" style="display:none;position:relative;margin-left:8px;">
+                    <button class="account-avatar" id="account-avatar" type="button" title="Account" aria-haspopup="true" aria-expanded="false">
+                        <span id="account-avatar-initials">·</span>
+                    </button>
+                    <div class="account-popover" id="account-popover" hidden role="dialog" aria-labelledby="account-popover-title">
+                        <div class="account-popover-head">
+                            <div class="account-popover-avatar" id="account-popover-avatar">·</div>
+                            <div class="account-popover-who">
+                                <div class="account-popover-email" id="account-popover-email">—</div>
+                                <div class="account-popover-tier" id="account-popover-tier">free plan</div>
+                            </div>
+                        </div>
+                        <div class="account-popover-stats">
+                            <div class="account-popover-stat">
+                                <span class="account-popover-stat-label" id="account-popover-month">This month</span>
+                                <span class="account-popover-stat-value" id="account-popover-tokens">—</span>
+                            </div>
+                            <div class="account-popover-stat">
+                                <span class="account-popover-stat-label">Est. cost</span>
+                                <span class="account-popover-stat-value" id="account-popover-cost">—</span>
+                            </div>
+                        </div>
+                        <div class="account-popover-actions">
+                            <button type="button" class="account-popover-link" id="account-popover-details">Account &amp; usage details…</button>
+                            <button type="button" class="account-popover-link account-popover-link-danger" id="account-popover-signout">Sign out</button>
+                        </div>
+                    </div>
+                </div>
             </header>
 
             <!-- Formula bar -->
@@ -2121,6 +2281,27 @@
                     after you save a valid key.
                 </p>
                 <div id="settings-providers-list" class="settings-providers"></div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Account modal (SaaS only) -->
+    <div class="chart-modal-backdrop" id="account-modal-backdrop" hidden>
+        <div class="library-modal" role="dialog" aria-modal="true" aria-labelledby="account-modal-title">
+            <div class="library-modal-header">
+                <h3 id="account-modal-title">Account &amp; usage</h3>
+                <button class="icon-btn" id="account-modal-close" type="button" title="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <section class="library-tab-panel active">
+                <div id="account-modal-body">
+                    <p class="hint" style="margin-top:0;">Loading account details…</p>
+                </div>
+                <div style="margin-top:20px; display:flex; justify-content:flex-end; gap:8px;">
+                    <button class="ghost-btn" id="account-modal-refresh" type="button">Refresh</button>
+                    <button class="primary-btn" id="account-modal-signout" type="button">Sign out</button>
+                </div>
             </section>
         </div>
     </div>

@@ -67,6 +67,186 @@ async function signOut() {
     await supabaseClient.auth.signOut();
     window.location.replace("/login");
 }
+
+// --- Account modal (SaaS only) ----------------------------------------------
+// Populated from /usage/me on open. Shows email, plan tier, month-to-date
+// token usage, and an approximate cost. Refresh re-fetches; Sign out delegates
+// to the top-level signOut() handler.
+
+function formatNumber(n) {
+    return (n || 0).toLocaleString();
+}
+
+function formatCostCents(cents) {
+    const c = cents || 0;
+    if (c === 0) return "< $0.01";
+    return `$${(c / 100).toFixed(2)}`;
+}
+
+function formatMonthLabel(isoDate) {
+    if (!isoDate) return "";
+    // "2026-04-01" → "April 2026"
+    const [y, m] = isoDate.split("-");
+    const names = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    return `${names[Number(m) - 1] || m} ${y}`;
+}
+
+function formatDate(iso) {
+    if (!iso) return "—";
+    try { return new Date(iso).toLocaleDateString(); } catch (_) { return iso; }
+}
+
+async function openAccountModal() {
+    const backdrop = document.getElementById("account-modal-backdrop");
+    if (!backdrop) return;
+    backdrop.removeAttribute("hidden");
+    await renderAccountModal();
+}
+
+function closeAccountModal() {
+    const backdrop = document.getElementById("account-modal-backdrop");
+    if (backdrop) backdrop.setAttribute("hidden", "");
+}
+
+async function renderAccountModal() {
+    const body = document.getElementById("account-modal-body");
+    if (!body) return;
+    body.innerHTML = `<p class="hint" style="margin-top:0;">Loading account details…</p>`;
+    try {
+        const res = await fetch(`${API_BASE}/usage/me`);
+        if (!res.ok) {
+            const msg = await res.text().catch(() => "");
+            body.innerHTML = `<p class="hint" style="margin-top:0;color:var(--danger,#c0392b);">Failed to load usage (HTTP ${res.status}). ${msg}</p>`;
+            return;
+        }
+        const d = await res.json();
+        const rows = [
+            ["Email", d.email || "—"],
+            ["Plan", (d.tier || "free").toUpperCase()],
+            ["Member since", formatDate(d.joined_at)],
+            ["Usage period", formatMonthLabel(d.month)],
+            ["Tokens used this month", formatNumber(d.total_tokens)],
+            ["Approx. cost this month", formatCostCents(d.cost_cents)],
+        ];
+        body.innerHTML = `
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                ${rows.map(([k, v]) => `
+                    <tr>
+                        <td style="padding:8px 0;color:var(--text-muted);width:42%;">${k}</td>
+                        <td style="padding:8px 0;color:var(--text);font-weight:500;">${v}</td>
+                    </tr>`).join("")}
+            </table>
+            <p class="hint" style="margin-top:16px;">
+                Usage is tallied from every LLM call across the month. Cost is an estimate
+                based on published per-provider rates and may differ from invoiced totals.
+            </p>`;
+    } catch (e) {
+        body.innerHTML = `<p class="hint" style="margin-top:0;color:var(--danger,#c0392b);">Network error: ${e.message || e}</p>`;
+    }
+}
+
+function attachAccountModalEvents() {
+    document.getElementById("account-modal-close")?.addEventListener("click", closeAccountModal);
+    document.getElementById("account-modal-backdrop")?.addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) closeAccountModal();
+    });
+    document.getElementById("account-modal-refresh")?.addEventListener("click", renderAccountModal);
+    document.getElementById("account-modal-signout")?.addEventListener("click", signOut);
+}
+
+// --- Account avatar + popover (menubar, SaaS only) --------------------------
+// Cached so the popover opens instantly; refresh happens in the background.
+let _accountCache = null;
+
+function avatarInitials(email) {
+    if (!email) return "·";
+    const local = email.split("@")[0] || "";
+    if (!local) return email[0]?.toUpperCase() || "·";
+    const parts = local.split(/[.\-_]/).filter(Boolean);
+    const pick = parts.length >= 2
+        ? parts[0][0] + parts[1][0]
+        : local.slice(0, 2);
+    return pick.toUpperCase();
+}
+
+function paintAccountAvatar(data) {
+    const initials = avatarInitials(data?.email);
+    const elMenubar = document.getElementById("account-avatar-initials");
+    if (elMenubar) elMenubar.textContent = initials;
+    const elPop = document.getElementById("account-popover-avatar");
+    if (elPop) elPop.textContent = initials;
+}
+
+function paintAccountPopover(data) {
+    if (!data) return;
+    const email = document.getElementById("account-popover-email");
+    if (email) email.textContent = data.email || "—";
+    const tier = document.getElementById("account-popover-tier");
+    if (tier) tier.textContent = `${(data.tier || "free")} plan`;
+    const month = document.getElementById("account-popover-month");
+    if (month) month.textContent = formatMonthLabel(data.month) || "This month";
+    const tokens = document.getElementById("account-popover-tokens");
+    if (tokens) tokens.textContent = formatNumber(data.total_tokens);
+    const cost = document.getElementById("account-popover-cost");
+    if (cost) cost.textContent = formatCostCents(data.cost_cents);
+}
+
+async function refreshAccountData() {
+    try {
+        const res = await fetch(`${API_BASE}/usage/me`);
+        if (!res.ok) return;
+        _accountCache = await res.json();
+        paintAccountAvatar(_accountCache);
+        paintAccountPopover(_accountCache);
+    } catch (_) {
+        // Silent — popover just shows previous/default values.
+    }
+}
+
+function toggleAccountPopover(force) {
+    const pop = document.getElementById("account-popover");
+    const avatar = document.getElementById("account-avatar");
+    if (!pop) return;
+    const shouldOpen = force !== undefined ? force : pop.hasAttribute("hidden");
+    if (shouldOpen) {
+        pop.removeAttribute("hidden");
+        avatar?.setAttribute("aria-expanded", "true");
+        // Refresh when opened so stats reflect the latest call.
+        refreshAccountData();
+    } else {
+        pop.setAttribute("hidden", "");
+        avatar?.setAttribute("aria-expanded", "false");
+    }
+}
+
+function attachAccountAvatarEvents() {
+    const avatar = document.getElementById("account-avatar");
+    if (!avatar) return;
+
+    avatar.addEventListener("click", (e) => {
+        e.stopPropagation();
+        toggleAccountPopover();
+    });
+
+    // Close on outside click / Escape.
+    document.addEventListener("click", (e) => {
+        const wrap = document.getElementById("account-wrap");
+        if (!wrap) return;
+        if (!wrap.contains(e.target)) toggleAccountPopover(false);
+    });
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") toggleAccountPopover(false);
+    });
+
+    document.getElementById("account-popover-details")?.addEventListener("click", () => {
+        toggleAccountPopover(false);
+        openAccountModal();
+    });
+    document.getElementById("account-popover-signout")?.addEventListener("click", signOut);
+
+    // Warm the cache as soon as we know we're in SaaS mode.
+    refreshAccountData();
+}
 const COLUMN_COUNT = 40;
 const ROW_COUNT = 150;
 const DEFAULT_COL_WIDTH = 112;
@@ -1880,6 +2060,9 @@ async function handleMenuAction(action) {
         case "sign-out":
             await signOut();
             break;
+        case "account-details":
+            await openAccountModal();
+            break;
         case "undo":
             await undo();
             break;
@@ -2897,6 +3080,8 @@ async function bootstrap() {
     refreshUndoRedoButtons();
     await refreshModelCatalog();
     attachSettingsEvents();
+    attachAccountModalEvents();
+    attachAccountAvatarEvents();
 
     document.querySelectorAll("[data-prompt]").forEach((button) => {
         button.addEventListener("click", () => {

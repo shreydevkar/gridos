@@ -71,6 +71,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # frontend reads on bootstrap to decide whether to show login/billing UI. Real
 # SaaS features are gated on config.SAAS_MODE and attached in later phases.
 from cloud import config as cloud_config  # noqa: E402
+from cloud import usage as cloud_usage  # noqa: E402
 from cloud.auth import AuthUser, require_user  # noqa: E402
 from cloud.status import router as cloud_status_router  # noqa: E402
 from core.workbook_store import FileWorkbookStore, WorkbookScope, WorkbookStore  # noqa: E402
@@ -325,6 +326,16 @@ def call_model(
         "total_token_count": response.total_tokens,
         "finish_reason": response.finish_reason,
     })
+    # SaaS-only: record this call against the authenticated user + workbook
+    # bound on the current request via cloud_usage.set_request_context.
+    # No-op in OSS mode or for unauthenticated requests. Best-effort.
+    cloud_usage.log_call(
+        provider=provider.id,
+        model=response.model,
+        prompt_tokens=response.prompt_tokens or 0,
+        completion_tokens=response.candidates_tokens or 0,
+        finish_reason=response.finish_reason,
+    )
     return response
 
 
@@ -845,7 +856,18 @@ async def list_agents():
 
 
 @app.post("/agent/chat")
-async def chat_with_agent(req: ChatRequest):
+async def chat_with_agent(
+    req: ChatRequest,
+    user: AuthUser = Depends(require_user),
+):
+    # Bind the request's user + workbook scope so every call_model() downstream
+    # records usage against this user. In OSS mode user.id == "oss" and
+    # cloud_usage.log_call is a no-op.
+    # workbook_id is intentionally None — tagging by workbook requires a row in
+    # public.workbooks, which only exists after the user's first /system/save.
+    # FK would reject the usage_logs insert otherwise. Revisit once multi-workbook
+    # UX lands and workbook rows are provisioned eagerly.
+    cloud_usage.set_request_context(user.id, None)
     try:
         return generate_agent_preview(req)
     except HTTPException:
@@ -1005,8 +1027,16 @@ def _is_completion_signal(values) -> bool:
 
 
 @app.post("/agent/chat/chain")
-async def chat_chain(req: ChainRequest):
+async def chat_chain(
+    req: ChainRequest,
+    user: AuthUser = Depends(require_user),
+):
     """Auto-apply the agent's writes, observe formula results, and loop up to max_iterations times."""
+    # workbook_id is intentionally None — tagging by workbook requires a row in
+    # public.workbooks, which only exists after the user's first /system/save.
+    # FK would reject the usage_logs insert otherwise. Revisit once multi-workbook
+    # UX lands and workbook rows are provisioned eagerly.
+    cloud_usage.set_request_context(user.id, None)
     try:
         sheet = req.sheet or kernel.active_sheet
         history = list(req.history)
@@ -1315,6 +1345,80 @@ async def whoami(user: AuthUser = Depends(require_user)):
     """Return the signed-in user's claims so the frontend can confirm the
     session is valid before rendering protected UI."""
     return {"id": user.id, "email": user.email, "mode": "saas" if cloud_config.SAAS_MODE else "oss"}
+
+
+@app.get("/usage/me")
+async def usage_me(user: AuthUser = Depends(require_user)):
+    """Account summary for the signed-in user: tier + this month's token usage
+    + cost estimate. Reads `public.users` (tier, created_at) and
+    `public.user_usage` (month rollup). Returns zeros rather than 404 for
+    brand-new users who haven't made any calls yet."""
+    if not cloud_config.SAAS_MODE:
+        # OSS has no authenticated user; return a minimal stub so the same UI
+        # code can render something meaningful in local mode.
+        return {
+            "mode": "oss",
+            "email": None,
+            "tier": "oss",
+            "joined_at": None,
+            "month": datetime.now(timezone.utc).strftime("%Y-%m-01"),
+            "total_tokens": 0,
+            "cost_cents": 0,
+        }
+    if not cloud_config.SAAS_FEATURES["usage_tracking"].enabled:
+        raise HTTPException(status_code=503, detail="Usage tracking is not configured on this deployment.")
+    try:
+        from supabase import create_client  # type: ignore
+    except ImportError as e:
+        raise HTTPException(status_code=503, detail="supabase-py is not installed.") from e
+
+    client = create_client(cloud_config.SUPABASE_URL, cloud_config.SUPABASE_SERVICE_ROLE_KEY)
+    month_str = datetime.now(timezone.utc).strftime("%Y-%m-01")
+
+    tier = "free"
+    joined_at = None
+    try:
+        u = (
+            client.table("users")
+            .select("subscription_tier, created_at")
+            .eq("id", user.id)
+            .limit(1)
+            .execute()
+        )
+        if u.data:
+            tier = u.data[0].get("subscription_tier") or "free"
+            joined_at = u.data[0].get("created_at")
+    except Exception:
+        # Row may not yet exist if the on_auth_user_created trigger lagged;
+        # fall through with defaults.
+        pass
+
+    total_tokens = 0
+    cost_cents = 0
+    try:
+        usage = (
+            client.table("user_usage")
+            .select("total_tokens, cost_cents")
+            .eq("user_id", user.id)
+            .eq("month", month_str)
+            .limit(1)
+            .execute()
+        )
+        if usage.data:
+            total_tokens = int(usage.data[0].get("total_tokens") or 0)
+            cost_cents = int(usage.data[0].get("cost_cents") or 0)
+    except Exception:
+        pass
+
+    return {
+        "mode": "saas",
+        "email": user.email,
+        "tier": tier,
+        "joined_at": joined_at,
+        "month": month_str,
+        "total_tokens": total_tokens,
+        "cost_cents": cost_cents,
+    }
 
 
 @app.post("/system/save")
