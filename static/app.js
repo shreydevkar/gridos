@@ -1324,9 +1324,15 @@ function buildPreviewCardBody(payload, { includeActions = true, idSuffix = "card
         ? `${payload.preview_cells[0].cell} → ${payload.preview_cells[payload.preview_cells.length - 1].cell}`
         : payload.target_cell;
     const hasValues = Array.isArray(payload.values) && payload.values.length > 0;
+    const hasIntents = Array.isArray(payload.intents) && payload.intents.length > 0;
     const hasChart = Boolean(payload.chart_spec);
-    const canApply = hasValues || hasChart;
-    const applyLabel = hasValues ? "Apply" : "Add chart";
+    const canApply = hasValues || hasIntents || hasChart;
+    // Multi-intent previews show the rectangle count so the user sees what
+    // they're about to commit at a glance (e.g. "Apply 25 sections").
+    let applyLabel;
+    if (hasIntents) applyLabel = `Apply ${payload.intents.length} sections`;
+    else if (hasValues) applyLabel = "Apply";
+    else applyLabel = "Add chart";
 
     const macroError = payload.macro_error
         ? `<div style="margin-top:8px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(payload.macro_error)}</div>`
