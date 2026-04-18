@@ -1,4 +1,8 @@
-const API_BASE = "http://127.0.0.1:8000";
+// Same-origin in every deploy: local uvicorn on :8000 serves the static
+// frontend from the same host, and on Render the backend serves /static
+// directly. Hardcoding a localhost URL used to break the moment the page
+// loaded from any other origin.
+const API_BASE = window.location.origin;
 
 // --- Multi-workbook scope (SaaS only) ---------------------------------------
 // The landing page redirects to /workbook?id=<uuid> when the user picks a

@@ -1002,6 +1002,15 @@ def generate_agent_preview(req: ChatRequest) -> dict:
 # ---------- Endpoints ----------
 
 
+@app.get("/healthz")
+async def healthz():
+    """Liveness probe for Render (and UptimeRobot keep-warm). Returns 200
+    unconditionally as long as the ASGI app is importable and serving —
+    no DB or external-provider touch, because those are fine to be down
+    while the process itself is alive."""
+    return {"ok": True}
+
+
 @app.get("/")
 async def serve_landing():
     return FileResponse("static/landing.html")

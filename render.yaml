@@ -1,0 +1,61 @@
+# Render deploy manifest — one-click provisioning for the hosted SaaS tier.
+# https://render.com/docs/blueprint-spec
+#
+# This only describes the runtime; every env var in `envVars` with `sync: false`
+# must be pasted into the Render dashboard after the service is created.
+# Nothing sensitive is committed here.
+#
+# Build plan:
+#   pip install -r requirements.txt
+# Start plan:
+#   uvicorn main:app --host 0.0.0.0 --port $PORT
+# Health check:
+#   GET /healthz  → {"ok": true}
+#
+# Free tier caveat: the web service sleeps after ~15 min idle. Aim a free
+# UptimeRobot monitor at https://<service>.onrender.com/healthz every 5 min
+# during active hours to mask cold starts.
+
+services:
+  - type: web
+    name: gridos
+    runtime: python
+    plan: free
+    region: oregon
+    branch: master
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # --- SaaS runtime (set to enable the cloud tier) ---
+      - key: SAAS_MODE
+        value: "true"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      # --- LLM provider keys (at least one required) ---
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      # --- Optional tier tuning (defaults in cloud/config.py) ---
+      # - key: FREE_TIER_MONTHLY_TOKENS
+      #   value: "100000"
+      # - key: PRO_TIER_MONTHLY_TOKENS
+      #   value: "5000000"
+      # - key: FREE_TIER_MAX_WORKBOOKS
+      #   value: "3"
+      # - key: PRO_TIER_MAX_WORKBOOKS
+      #   value: "50"
