@@ -1,4 +1,72 @@
 const API_BASE = "http://127.0.0.1:8000";
+
+// --- Auth gate (SaaS mode only; no-op in OSS) --------------------------------
+// cloudStatus and supabaseClient are populated during bootstrapAuth() before
+// any other fetch is issued. In SaaS mode, window.fetch is patched to attach
+// the Supabase access token to every API_BASE request, so the rest of the
+// codebase doesn't need per-call auth awareness.
+let cloudStatus = null;
+let supabaseClient = null;
+
+async function bootstrapAuth() {
+    try {
+        const res = await fetch(`${API_BASE}/cloud/status`);
+        cloudStatus = await res.json();
+    } catch (_) {
+        cloudStatus = { mode: "oss", features: {} };
+    }
+    if (cloudStatus.mode !== "saas") return;
+
+    const cfg = cloudStatus.client_config || {};
+    if (!cfg.supabase_url || !cfg.supabase_anon_key) {
+        // SaaS mode declared but the server is missing the public client
+        // config — fail loudly so the user knows to fix their .env instead of
+        // silently downgrading to an auth-free experience.
+        document.body.innerHTML = `<div style="padding:48px;max-width:560px;margin:0 auto;font-family:-apple-system,sans-serif;">
+            <h2>Server misconfigured</h2>
+            <p>SAAS_MODE is on but SUPABASE_URL or SUPABASE_ANON_KEY is missing. Add them to the server environment and restart.</p>
+        </div>`;
+        throw new Error("Missing SaaS client config.");
+    }
+
+    const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2?bundle");
+    supabaseClient = createClient(cfg.supabase_url, cfg.supabase_anon_key, {
+        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+    });
+
+    const { data: { session } } = await supabaseClient.auth.getSession();
+    if (!session) {
+        window.location.replace("/login");
+        throw new Error("No session — redirecting to /login.");
+    }
+
+    // Intercept every fetch to our API and attach the current access token.
+    // Supabase auto-refreshes the token before it expires, so reading it on
+    // each call is cheap and always yields a live JWT.
+    const origFetch = window.fetch.bind(window);
+    window.fetch = async (input, init = {}) => {
+        const url = typeof input === "string" ? input : input?.url || "";
+        const isOurApi = url.startsWith(API_BASE) || url.startsWith("/");
+        if (!isOurApi) return origFetch(input, init);
+        const { data: { session: fresh } } = await supabaseClient.auth.getSession();
+        const token = fresh?.access_token;
+        if (!token) return origFetch(input, init);
+        const headers = new Headers(init.headers || (typeof input === "object" ? input.headers : undefined));
+        headers.set("Authorization", `Bearer ${token}`);
+        return origFetch(input, { ...init, headers });
+    };
+
+    // Surface Sign out entry in the File menu and stamp the user's email.
+    document.querySelectorAll(".menu-saas-only").forEach((el) => { el.style.display = ""; });
+    const emailSlot = document.getElementById("menu-sign-out-email");
+    if (emailSlot) emailSlot.textContent = session.user?.email || "";
+}
+
+async function signOut() {
+    if (!supabaseClient) return;
+    await supabaseClient.auth.signOut();
+    window.location.replace("/login");
+}
 const COLUMN_COUNT = 40;
 const ROW_COUNT = 150;
 const DEFAULT_COL_WIDTH = 112;
@@ -1809,6 +1877,9 @@ async function handleMenuAction(action) {
         case "unlock-all":
             await unlockAll();
             break;
+        case "sign-out":
+            await signOut();
+            break;
         case "undo":
             await undo();
             break;
@@ -2813,6 +2884,9 @@ async function deleteChartById(id) {
 // ======== Bootstrap ========
 
 async function bootstrap() {
+    // Auth gate must run first so every subsequent fetch carries the Bearer
+    // token. No-op in OSS mode.
+    await bootstrapAuth();
     renderGridShell();
     attachGridEvents();
     attachGlobalEvents();

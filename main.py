@@ -827,6 +827,13 @@ async def serve_workbook():
     return FileResponse("static/index.html")
 
 
+@app.get("/login")
+async def serve_login():
+    """Login page — only meaningful in SaaS mode. In OSS mode the page's own
+    bootstrap redirects to / since /cloud/status reports mode=oss."""
+    return FileResponse("static/login.html")
+
+
 @app.get("/agents")
 async def list_agents():
     return {

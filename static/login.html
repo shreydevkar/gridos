@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sign in · GridOS</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --bg-soft: #f8f9fa;
+            --bg-hover: #f1f3f4;
+            --border: #dadce0;
+            --border-soft: #e8eaed;
+            --text: #202124;
+            --text-muted: #5f6368;
+            --accent: #1a73e8;
+            --accent-hover: #1765cc;
+            --accent-soft: #e8f0fe;
+            --danger: #d93025;
+            --success: #1e8e3e;
+            --radius: 8px;
+            --radius-sm: 4px;
+            --shadow-1: 0 1px 2px rgba(60,64,67,0.1), 0 1px 3px rgba(60,64,67,0.08);
+            --shadow-2: 0 4px 12px rgba(60,64,67,0.15);
+            --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; height: 100%; background: var(--bg-soft); color: var(--text); font-family: var(--font-ui); font-size: 14px; -webkit-font-smoothing: antialiased; }
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        .wrap {
+            min-height: 100%;
+            display: grid;
+            place-items: center;
+            padding: 32px 16px;
+        }
+        .card {
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            box-shadow: var(--shadow-2);
+            width: 100%;
+            max-width: 400px;
+            padding: 32px;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .brand-logo {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            display: grid;
+            place-items: center;
+            color: #fff;
+            font-weight: 700;
+            font-size: 13px;
+            letter-spacing: 0.02em;
+        }
+        .brand-name { font-size: 16px; font-weight: 600; }
+
+        h2 {
+            text-align: center;
+            font-size: 20px;
+            font-weight: 600;
+            margin: 12px 0 4px;
+        }
+        .sub {
+            text-align: center;
+            color: var(--text-muted);
+            margin-bottom: 22px;
+        }
+
+        .field { margin-bottom: 12px; }
+        .field label {
+            display: block;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+            margin-bottom: 6px;
+        }
+        .field input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            background: var(--bg);
+            font-family: inherit;
+            font-size: 14px;
+            transition: border-color 120ms, box-shadow 120ms;
+        }
+        .field input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(26,115,232,0.18);
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            width: 100%;
+            padding: 10px 16px;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            font-weight: 500;
+            font-family: inherit;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: background 120ms, border-color 120ms, color 120ms;
+        }
+        .btn.primary {
+            background: var(--accent);
+            color: #fff;
+            border-color: var(--accent);
+        }
+        .btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+        .btn.ghost {
+            background: var(--bg);
+            color: var(--text);
+            border-color: var(--border);
+        }
+        .btn.ghost:hover:not(:disabled) { background: var(--bg-hover); }
+        .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+
+        .google-icon {
+            width: 18px;
+            height: 18px;
+        }
+
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--text-muted);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin: 18px 0;
+        }
+        .divider::before, .divider::after {
+            content: "";
+            flex: 1;
+            height: 1px;
+            background: var(--border-soft);
+        }
+
+        .row-between {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 6px 0 18px;
+            font-size: 12px;
+        }
+
+        .footer-link {
+            text-align: center;
+            margin-top: 22px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .msg {
+            padding: 10px 12px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            margin-bottom: 14px;
+            display: none;
+        }
+        .msg.error {
+            background: #fce8e6;
+            color: var(--danger);
+            border: 1px solid #f6cac8;
+            display: block;
+        }
+        .msg.success {
+            background: #e6f4ea;
+            color: var(--success);
+            border: 1px solid #ceead6;
+            display: block;
+        }
+
+        .loading {
+            text-align: center;
+            color: var(--text-muted);
+            padding: 24px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="card">
+            <div class="brand">
+                <div class="brand-logo">GO</div>
+                <div class="brand-name">GridOS</div>
+            </div>
+
+            <div id="loading-state" class="loading">Loading…</div>
+
+            <div id="auth-form" style="display:none;">
+                <h2 id="form-title">Welcome back</h2>
+                <p class="sub" id="form-sub">Sign in to continue.</p>
+
+                <div id="msg" class="msg"></div>
+
+                <form id="email-form" autocomplete="on">
+                    <div class="field">
+                        <label for="email">Email</label>
+                        <input type="email" id="email" name="email" required autocomplete="email" />
+                    </div>
+                    <div class="field">
+                        <label for="password">Password</label>
+                        <input type="password" id="password" name="password" required minlength="6" autocomplete="current-password" />
+                    </div>
+                    <div class="row-between">
+                        <a href="#" id="forgot-link">Forgot password?</a>
+                    </div>
+                    <button type="submit" class="btn primary" id="primary-btn">Sign in</button>
+                </form>
+
+                <div class="divider">or</div>
+
+                <button type="button" class="btn ghost" id="google-btn">
+                    <svg class="google-icon" viewBox="0 0 48 48" aria-hidden="true">
+                        <path fill="#4285f4" d="M45.12 24.5c0-1.56-.14-3.06-.4-4.5H24v8.51h11.84c-.51 2.75-2.06 5.08-4.39 6.64v5.52h7.11c4.16-3.83 6.56-9.47 6.56-16.17z"/>
+                        <path fill="#34a853" d="M24 46c5.94 0 10.92-1.97 14.56-5.33l-7.11-5.52c-1.97 1.32-4.49 2.1-7.45 2.1-5.73 0-10.58-3.87-12.31-9.07H4.34v5.7C7.96 41.07 15.4 46 24 46z"/>
+                        <path fill="#fbbc04" d="M11.69 28.18c-.44-1.32-.69-2.73-.69-4.18s.25-2.86.69-4.18v-5.7H4.34C2.85 17.09 2 20.45 2 24s.85 6.91 2.34 9.88l7.35-5.7z"/>
+                        <path fill="#ea4335" d="M24 10.75c3.23 0 6.13 1.11 8.41 3.29l6.31-6.31C34.91 4.18 29.93 2 24 2 15.4 2 7.96 6.93 4.34 14.12l7.35 5.7c1.73-5.2 6.58-9.07 12.31-9.07z"/>
+                    </svg>
+                    Continue with Google
+                </button>
+
+                <div class="footer-link">
+                    <span id="mode-toggle-prompt">New to GridOS?</span>
+                    <a href="#" id="mode-toggle-link">Create an account</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/static/login.js"></script>
+</body>
+</html>

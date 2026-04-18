@@ -1,15 +1,23 @@
 """Config module — resolves the open-core vs. SaaS mode at process start.
 
 Environment contract:
-  SAAS_MODE             = "true" | "false" (default false)
-  SUPABASE_URL          = https://<project>.supabase.co
-  SUPABASE_KEY          = service-role key (Project Settings → API → service_role)
-  SUPABASE_JWT_SECRET   = JWT signing secret (Project Settings → API → JWT Secret).
-                          Distinct from SUPABASE_KEY — used for local HS256
-                          verification of tokens the frontend receives from
-                          Supabase Auth. Never ship this to the browser.
-  STRIPE_SECRET_KEY     = sk_live_... | sk_test_... (Phase 4)
-  STRIPE_WEBHOOK_SECRET = whsec_... (Phase 4)
+  SAAS_MODE                 = "true" | "false" (default false)
+  SUPABASE_URL              = https://<project>.supabase.co — safe to expose.
+  SUPABASE_ANON_KEY         = anon (publishable) key (Project Settings → API →
+                              anon public). The frontend uses this directly.
+                              Safe to ship to the browser — RLS is the gate.
+  SUPABASE_SERVICE_ROLE_KEY = service-role key (Project Settings → API →
+                              service_role). Server-only — bypasses RLS.
+                              Never ship this to the browser.
+  SUPABASE_JWT_SECRET       = JWT signing secret (Project Settings → API →
+                              JWT Secret). Used for local HS256 verification
+                              of access tokens the frontend sends us. Never
+                              ship this to the browser.
+  STRIPE_SECRET_KEY         = sk_live_... | sk_test_... (Phase 4)
+  STRIPE_WEBHOOK_SECRET     = whsec_... (Phase 4)
+
+Backward compat: SUPABASE_KEY (singular) is still accepted and treated as the
+service-role key, so existing `.env` files don't break mid-migration.
 
 Rules:
   - Boolean parse treats "1", "true", "yes", "on" (case-insensitive) as true.
@@ -43,7 +51,12 @@ def _env_str(name: str) -> str | None:
 SAAS_MODE: bool = _env_bool("SAAS_MODE", default=False)
 
 SUPABASE_URL: str | None = _env_str("SUPABASE_URL")
-SUPABASE_KEY: str | None = _env_str("SUPABASE_KEY")
+SUPABASE_ANON_KEY: str | None = _env_str("SUPABASE_ANON_KEY")
+# Service-role key — accept both the canonical name and the legacy SUPABASE_KEY
+# alias so users with an older .env don't need to rename immediately.
+SUPABASE_SERVICE_ROLE_KEY: str | None = _env_str("SUPABASE_SERVICE_ROLE_KEY") or _env_str("SUPABASE_KEY")
+# Back-compat export — older cloud modules may still reference SUPABASE_KEY.
+SUPABASE_KEY: str | None = SUPABASE_SERVICE_ROLE_KEY
 SUPABASE_JWT_SECRET: str | None = _env_str("SUPABASE_JWT_SECRET")
 
 STRIPE_SECRET_KEY: str | None = _env_str("STRIPE_SECRET_KEY")
@@ -74,17 +87,43 @@ def _availability(required_env: dict[str, object]) -> FeatureAvailability:
 SAAS_FEATURES: dict[str, FeatureAvailability] = {
     "auth": _availability({
         "SUPABASE_URL": SUPABASE_URL,
+        "SUPABASE_ANON_KEY": SUPABASE_ANON_KEY,
         "SUPABASE_JWT_SECRET": SUPABASE_JWT_SECRET,
     }),
-    "cloud_storage": _availability({"SUPABASE_URL": SUPABASE_URL, "SUPABASE_KEY": SUPABASE_KEY}),
-    "billing": _availability({"STRIPE_SECRET_KEY": STRIPE_SECRET_KEY, "STRIPE_WEBHOOK_SECRET": STRIPE_WEBHOOK_SECRET}),
-    "usage_tracking": _availability({"SUPABASE_URL": SUPABASE_URL, "SUPABASE_KEY": SUPABASE_KEY}),
+    "cloud_storage": _availability({
+        "SUPABASE_URL": SUPABASE_URL,
+        "SUPABASE_SERVICE_ROLE_KEY": SUPABASE_SERVICE_ROLE_KEY,
+    }),
+    "billing": _availability({
+        "STRIPE_SECRET_KEY": STRIPE_SECRET_KEY,
+        "STRIPE_WEBHOOK_SECRET": STRIPE_WEBHOOK_SECRET,
+    }),
+    "usage_tracking": _availability({
+        "SUPABASE_URL": SUPABASE_URL,
+        "SUPABASE_SERVICE_ROLE_KEY": SUPABASE_SERVICE_ROLE_KEY,
+    }),
 }
 
 
-def snapshot() -> dict:
-    """Serializable view of the current mode + feature availability."""
+def public_client_config() -> dict:
+    """Config values the browser is allowed to see. Only surfaced in SaaS mode
+    so OSS responses don't advertise a non-existent Supabase project."""
+    if not SAAS_MODE:
+        return {}
     return {
+        "supabase_url": SUPABASE_URL,
+        "supabase_anon_key": SUPABASE_ANON_KEY,
+    }
+
+
+def snapshot() -> dict:
+    """Serializable view of the current mode + feature availability. In SaaS
+    mode also bundles the public client config so the frontend can init the
+    Supabase JS client on bootstrap."""
+    out = {
         "mode": "saas" if SAAS_MODE else "oss",
         "features": {name: f.to_dict() for name, f in SAAS_FEATURES.items()},
     }
+    if SAAS_MODE:
+        out["client_config"] = public_client_config()
+    return out

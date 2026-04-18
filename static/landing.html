@@ -519,6 +519,33 @@
 
     <div id="toast" class="toast" hidden></div>
 
+    <script type="module">
+        // SaaS auth gate — redirect to /login if the user is not signed in.
+        // OSS mode skips this entirely. Runs before the main landing script so
+        // we never render template cards or fire API calls as an anonymous
+        // user in SaaS mode.
+        try {
+            const res = await fetch('/cloud/status');
+            const status = await res.json();
+            if (status.mode === 'saas') {
+                const cfg = status.client_config || {};
+                if (!cfg.supabase_url || !cfg.supabase_anon_key) {
+                    document.body.innerHTML =
+                        '<div style="padding:48px;max-width:560px;margin:0 auto;font-family:-apple-system,sans-serif;">' +
+                        '<h2>Server misconfigured</h2><p>SAAS_MODE is on but SUPABASE_URL or SUPABASE_ANON_KEY is missing. Add them and restart.</p></div>';
+                } else {
+                    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2?bundle');
+                    const client = createClient(cfg.supabase_url, cfg.supabase_anon_key, {
+                        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+                    });
+                    const { data: { session } } = await client.auth.getSession();
+                    if (!session) window.location.replace('/login');
+                }
+            }
+        } catch (_) {
+            // /cloud/status unreachable — treat as OSS and continue.
+        }
+    </script>
     <script>
         const API_BASE = window.location.origin;
 
