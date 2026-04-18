@@ -71,8 +71,10 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # frontend reads on bootstrap to decide whether to show login/billing UI. Real
 # SaaS features are gated on config.SAAS_MODE and attached in later phases.
 from cloud import config as cloud_config  # noqa: E402
+from cloud.auth import AuthUser, require_user  # noqa: E402
 from cloud.status import router as cloud_status_router  # noqa: E402
 from core.workbook_store import FileWorkbookStore, WorkbookScope, WorkbookStore  # noqa: E402
+from fastapi import Depends  # noqa: E402
 
 app.include_router(cloud_status_router)
 
@@ -1287,29 +1289,37 @@ async def update_range(req: RangeUpdateRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-def _default_scope() -> WorkbookScope:
-    """Placeholder until Phase 3 auth injects user_id. OSS mode is single-user
-    and single-workbook, so the legacy file-backed default is correct. In
-    SaaS mode we 503 the endpoint instead of silently writing everyone's sheet
-    to the same file."""
-    if cloud_config.SAAS_MODE:
-        raise HTTPException(
-            status_code=503,
-            detail="SaaS persistence requires authentication (coming in Phase 3).",
-        )
-    return WorkbookScope(user_id=None, workbook_id="default")
+def _scope_for(user: AuthUser) -> WorkbookScope:
+    """Map auth context to a WorkbookScope.
+
+    OSS: single-user, single-workbook — user_id=None, workbook_id="default"
+        (legacy `system_state.gridos` file).
+    SaaS (Phase 3): one workbook per user. We pin `workbook_id == user.id`
+        so save is idempotent without a separate "active workbook" concept —
+        multi-workbook UX lands in a later phase with a workbook-list UI.
+    """
+    if not cloud_config.SAAS_MODE:
+        return WorkbookScope(user_id=None, workbook_id="default")
+    return WorkbookScope(user_id=user.id, workbook_id=user.id)
+
+
+@app.get("/auth/whoami")
+async def whoami(user: AuthUser = Depends(require_user)):
+    """Return the signed-in user's claims so the frontend can confirm the
+    session is valid before rendering protected UI."""
+    return {"id": user.id, "email": user.email, "mode": "saas" if cloud_config.SAAS_MODE else "oss"}
 
 
 @app.post("/system/save")
-async def save_grid():
-    scope = _default_scope()
+async def save_grid(user: AuthUser = Depends(require_user)):
+    scope = _scope_for(user)
     workbook_store.save(scope, kernel.export_state_dict())
     return {"status": "Success"}
 
 
 @app.post("/system/load")
-async def load_grid():
-    scope = _default_scope()
+async def load_grid(user: AuthUser = Depends(require_user)):
+    scope = _scope_for(user)
     state = workbook_store.load(scope)
     if state is None:
         return {"status": "Error", "message": "No save file found."}

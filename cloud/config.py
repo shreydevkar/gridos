@@ -1,10 +1,14 @@
 """Config module — resolves the open-core vs. SaaS mode at process start.
 
 Environment contract:
-  SAAS_MODE           = "true" | "false" (default false)
-  SUPABASE_URL        = https://<project>.supabase.co
-  SUPABASE_KEY        = anon or service-role key (service-role on the server)
-  STRIPE_SECRET_KEY   = sk_live_... | sk_test_... (Phase 4)
+  SAAS_MODE             = "true" | "false" (default false)
+  SUPABASE_URL          = https://<project>.supabase.co
+  SUPABASE_KEY          = service-role key (Project Settings → API → service_role)
+  SUPABASE_JWT_SECRET   = JWT signing secret (Project Settings → API → JWT Secret).
+                          Distinct from SUPABASE_KEY — used for local HS256
+                          verification of tokens the frontend receives from
+                          Supabase Auth. Never ship this to the browser.
+  STRIPE_SECRET_KEY     = sk_live_... | sk_test_... (Phase 4)
   STRIPE_WEBHOOK_SECRET = whsec_... (Phase 4)
 
 Rules:
@@ -40,6 +44,7 @@ SAAS_MODE: bool = _env_bool("SAAS_MODE", default=False)
 
 SUPABASE_URL: str | None = _env_str("SUPABASE_URL")
 SUPABASE_KEY: str | None = _env_str("SUPABASE_KEY")
+SUPABASE_JWT_SECRET: str | None = _env_str("SUPABASE_JWT_SECRET")
 
 STRIPE_SECRET_KEY: str | None = _env_str("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET: str | None = _env_str("STRIPE_WEBHOOK_SECRET")
@@ -67,7 +72,10 @@ def _availability(required_env: dict[str, object]) -> FeatureAvailability:
 
 
 SAAS_FEATURES: dict[str, FeatureAvailability] = {
-    "auth": _availability({"SUPABASE_URL": SUPABASE_URL, "SUPABASE_KEY": SUPABASE_KEY}),
+    "auth": _availability({
+        "SUPABASE_URL": SUPABASE_URL,
+        "SUPABASE_JWT_SECRET": SUPABASE_JWT_SECRET,
+    }),
     "cloud_storage": _availability({"SUPABASE_URL": SUPABASE_URL, "SUPABASE_KEY": SUPABASE_KEY}),
     "billing": _availability({"STRIPE_SECRET_KEY": STRIPE_SECRET_KEY, "STRIPE_WEBHOOK_SECRET": STRIPE_WEBHOOK_SECRET}),
     "usage_tracking": _availability({"SUPABASE_URL": SUPABASE_URL, "SUPABASE_KEY": SUPABASE_KEY}),
