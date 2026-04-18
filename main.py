@@ -629,8 +629,13 @@ class RangeUpdateRequest(BaseModel):
 class PreviewApplyRequest(BaseModel):
     sheet: Optional[str] = None
     agent_id: str
-    target_cell: str
-    values: list[list]
+    # Single-rectangle path (legacy, still valid for simple writes)
+    target_cell: Optional[str] = None
+    values: Optional[list[list]] = None
+    # Multi-rectangle path — list of {target_cell, values} dicts, applied
+    # in order so later intents can reference cells written by earlier ones.
+    # When intents is set, target_cell/values at the top level are ignored.
+    intents: Optional[list[Dict[str, Any]]] = None
     shift_direction: str = "right"
     chart_spec: Optional[Dict[str, Any]] = None
 
@@ -661,7 +666,9 @@ BASE_SYSTEM_RULES = (
 )
 
 OUTPUT_FORMAT_SPEC = """
-OUTPUT FORMAT: strictly valid JSON (no markdown fences):
+OUTPUT FORMAT: strictly valid JSON (no markdown fences). Two write shapes — pick whichever fits the task in ONE LLM call.
+
+(a) SINGLE-rectangle write — for one label, one row, one column, one N×M block:
 {
     "reasoning": "Short explanation.",
     "target_cell": "A1",
@@ -671,17 +678,28 @@ OUTPUT FORMAT: strictly valid JSON (no markdown fences):
     "plan": null
 }
 
-If the user is asking for a MULTI-SECTION build (financial model, forecast, 3-statement, operating model, DCF, budget, etc.), emit a `plan` object on the FIRST turn only. It is informational — the system shows it to the user so they can see the full structure before cells are filled:
+(b) MULTI-rectangle write — for any structured artifact with multiple named sections (3-statement model, full operating model / pro-forma / DCF / budget, multi-block dashboard, anything where the user asks for a deliverable that's clearly more than one rectangle). Pack EVERY section into ONE response so the kernel applies them atomically with one Apply click and the user pays for ONE LLM call instead of N chain turns:
 {
-    "title": "Quarterly Operating Model",
-    "anchor": "B2",
-    "sections": [
-        {"label": "Header row",          "target": "B2:F2", "notes": "Metric, Q1..Q4"},
-        {"label": "Revenue",             "target": "B3:F3", "notes": "10% QoQ growth from 100"},
-        {"label": "COGS",                "target": "B4:F4", "notes": "=MULTIPLY(revenue, 0.4)"}
-    ]
+    "reasoning": "Built complete 3-statement model anchored at B2.",
+    "intents": [
+        {"target_cell": "B2",  "values": [["Income Statement", "Q1", "Q2", "Q3", "Q4"]]},
+        {"target_cell": "B3",  "values": [["Revenue", 100, "=MULTIPLY(C3,1.1)", "=MULTIPLY(D3,1.1)", "=MULTIPLY(E3,1.1)"]]},
+        {"target_cell": "B4",  "values": [["COGS", "=MULTIPLY(C3,0.4)", "=MULTIPLY(D3,0.4)", "=MULTIPLY(E3,0.4)", "=MULTIPLY(F3,0.4)"]]},
+        {"target_cell": "B5",  "values": [["Gross profit", "=MINUS(C3,C4)", "=MINUS(D3,D4)", "=MINUS(E3,E4)", "=MINUS(F3,F4)"]]},
+        {"target_cell": "B13", "values": [["Balance Sheet", "Q1", "Q2", "Q3", "Q4"]]},
+        ...
+    ],
+    "chart_spec": null,
+    "macro_spec": null,
+    "plan": { "title": "...", "anchor": "B2", "sections": [...] }
 }
-On this first turn, `values` contains ONLY the first section. On subsequent chain turns, omit `plan` (set null) and write the NEXT section. Emit values=[[""]] when every section is done.
+When using `intents`, leave top-level `target_cell` and `values` null. Intents apply in order, so later intents may reference cells written by earlier ones. The agent system prompt's "one contiguous rectangle per response" rule constrains the SHAPE of each rectangle (each `values` must still be a contiguous rectangle, no holes), NOT the number of rectangles you may emit.
+
+WHICH SHAPE TO USE:
+- The user asks for a single value, label, or one row/column/block → (a) SINGLE.
+- The user asks for a structured deliverable with 3+ named sections → (b) MULTI. Always prefer (b) over chain mode for these — same result, ~6× cheaper in tokens and faster wall-clock.
+
+Always include a `plan` alongside `intents` when building a model — it tells the user what they're about to apply and gives them a mental map.
 
 If the user asks for a chart/graph/visualization, also fill in chart_spec:
 {
@@ -932,6 +950,36 @@ def _sanitize_plan(raw: Any) -> Optional[dict]:
     }
 
 
+def _normalize_multi_intents(raw: Any) -> list[dict]:
+    """Validate the agent's `intents` array and return [{target_cell, values}, ...].
+
+    Drops malformed entries (non-dict, missing target_cell, non-list values, or
+    all-blank values) silently — better to apply the well-formed subset than to
+    fail the whole response over one bad entry. Returns [] if the input isn't a
+    usable list."""
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        target = item.get("target_cell")
+        values = item.get("values")
+        if not isinstance(target, str) or not target.strip():
+            continue
+        if not isinstance(values, list) or not values:
+            continue
+        # Same emptiness check as the legacy single-intent path.
+        any_real = any(
+            any(v not in ("", None) for v in row)
+            for row in values if isinstance(row, list)
+        )
+        if not any_real:
+            continue
+        out.append({"target_cell": target.upper().strip(), "values": values})
+    return out
+
+
 def _validate_proposed_macro(raw: Any) -> tuple[Optional[dict], Optional[str]]:
     """Dry-compile an agent-proposed macro. Returns (normalized_spec, error_message)."""
     if not raw or not isinstance(raw, dict):
@@ -987,10 +1035,66 @@ def generate_agent_preview(req: ChatRequest) -> dict:
 
     raw_values = ai_data.get("values")
     raw_target = ai_data.get("target_cell")
+    raw_intents = ai_data.get("intents")
     chart_spec = ai_data.get("chart_spec")
     proposed_macro, macro_error = _validate_proposed_macro(ai_data.get("macro_spec"))
     plan = _sanitize_plan(ai_data.get("plan"))
     fallback_target = req.selected_cells[0] if req.selected_cells else "A1"
+
+    multi_intents = _normalize_multi_intents(raw_intents)
+    if multi_intents:
+        merged_preview_cells: list[dict] = []
+        echoed_intents: list[dict] = []
+        for vi in multi_intents:
+            sub_intent = AgentIntent(
+                agent_id=agent_id,
+                target_start_a1=vi["target_cell"],
+                data_payload=vi["values"],
+                shift_direction="right",
+            )
+            sub_preview = kernel.preview_agent_intent(sub_intent, sheet)
+            merged_preview_cells.extend(sub_preview["preview_cells"])
+            echoed_intents.append({
+                "target_cell": sub_preview["actual_target"],
+                "original_request": sub_preview["original_target"],
+                "values": vi["values"],
+            })
+
+        # Dependency-validity check across the WHOLE merged set so a formula
+        # in intent #2 referencing a cell written by intent #1 doesn't trip
+        # the "empty cell" guard.
+        dep_issues = _find_empty_formula_deps(merged_preview_cells, kernel._sheet_state(sheet))
+        if dep_issues:
+            bullets = "\n".join(
+                f"  - {d['cell']} ({d['formula']}) references empty cell(s): {', '.join(d['empty_refs'])}"
+                for d in dep_issues[:5]
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "The agent proposed formulas whose inputs are empty — applying would produce "
+                    "#DIV/0! or misleading zeros. Re-ask the agent to also populate the referenced "
+                    "cells, or fill them yourself first.\n" + bullets
+                ),
+            )
+
+        return {
+            "category": agent_id,
+            "reasoning": ai_data.get("reasoning"),
+            "sheet": sheet,
+            "scope": req.scope,
+            "selected_cells": req.selected_cells,
+            "agent_id": agent_id,
+            "target_cell": echoed_intents[0]["target_cell"],
+            "original_request": echoed_intents[0]["original_request"],
+            "preview_cells": merged_preview_cells,
+            "values": None,
+            "intents": echoed_intents,
+            "chart_spec": chart_spec,
+            "proposed_macro": proposed_macro,
+            "macro_error": macro_error,
+            "plan": plan,
+        }
 
     has_values = isinstance(raw_values, list) and any(
         any(v not in ("", None) for v in row) for row in raw_values if isinstance(row, list)
@@ -1160,6 +1264,43 @@ async def apply_agent_preview(
     req: PreviewApplyRequest,
     k: GridOSKernel = Depends(current_kernel_dep),
 ):
+    # Multi-intent path — apply N rectangles atomically (well, sequentially —
+    # later intents may reference cells written by earlier ones).
+    if req.intents:
+        valid = _normalize_multi_intents(req.intents)
+        if not valid:
+            raise HTTPException(status_code=400, detail="intents array is empty or malformed.")
+        actual_targets = []
+        for vi in valid:
+            sub_intent = AgentIntent(
+                agent_id=req.agent_id,
+                target_start_a1=vi["target_cell"],
+                data_payload=vi["values"],
+                shift_direction=req.shift_direction,
+            )
+            _, actual = kernel.process_agent_intent(sub_intent, req.sheet)
+            actual_targets.append(actual)
+        chart = None
+        chart_error = None
+        if req.chart_spec:
+            try:
+                chart = kernel.add_chart(req.chart_spec, sheet_name=req.sheet)
+            except Exception as e:
+                chart_error = f"Chart skipped: {e}"
+        out = {
+            "status": "Success",
+            "sheet": req.sheet or kernel.active_sheet,
+            "actual_target": actual_targets[0],
+            "actual_targets": actual_targets,
+            "intents_applied": len(actual_targets),
+            "chart": chart,
+        }
+        if chart_error:
+            out["chart_error"] = chart_error
+        return out
+
+    if not req.target_cell or req.values is None:
+        raise HTTPException(status_code=400, detail="Provide either (target_cell + values) or an intents array.")
     intent = AgentIntent(
         agent_id=req.agent_id,
         target_start_a1=req.target_cell,
@@ -1344,8 +1485,50 @@ async def chat_chain(
             proposed_macro = preview.get("proposed_macro")
             macro_error = preview.get("macro_error")
             plan = preview.get("plan")
+            multi_intents = preview.get("intents")
             if plan and active_plan is None:
                 active_plan = plan
+
+            # Multi-intent path — agent packed the entire deliverable into one
+            # response. Apply every rectangle in this single iteration and stop;
+            # there is no "next section" left to fetch.
+            if multi_intents:
+                actual_targets = []
+                for mi in multi_intents:
+                    sub = AgentIntent(
+                        agent_id=preview["agent_id"],
+                        target_start_a1=mi["original_request"],
+                        data_payload=mi["values"],
+                        shift_direction="right",
+                    )
+                    _, actual = kernel.process_agent_intent(sub, sheet)
+                    actual_targets.append(actual)
+                observations = _observe_written_cells(preview["preview_cells"], sheet)
+                chart = None
+                chart_error = None
+                if chart_spec:
+                    try:
+                        chart = kernel.add_chart(chart_spec, sheet_name=sheet)
+                    except Exception as e:
+                        chart_error = str(e)
+                steps.append({
+                    "iteration": iteration,
+                    "agent_id": preview["agent_id"],
+                    "reasoning": preview["reasoning"],
+                    "target": actual_targets[0],
+                    "values": None,
+                    "intents": multi_intents,
+                    "intents_applied": len(actual_targets),
+                    "observations": observations,
+                    "completion_signal": True,
+                    "chart": chart,
+                    "chart_error": chart_error,
+                    "proposed_macro": proposed_macro,
+                    "macro_error": macro_error,
+                    "plan": plan,
+                })
+                break
+
             skip_cell_write = preview["values"] is None and (chart_spec is not None or proposed_macro is not None)
 
             if _is_completion_signal(values) and not skip_cell_write:

@@ -70,6 +70,7 @@ In SaaS mode an in-app **Marketplace** (gear icon → grid icon in the menubar) 
 - **Chat shortcuts** — typing `clear all` / `delete all` in the chat bypasses the LLM entirely and runs the clear-sheet command directly, so common housekeeping phrases don't burn tokens or hit provider rate limits.
 - **Preview/apply flow** — AI writes go through a preview step before committing, with a pre-apply guard that blocks formulas whose inputs are empty.
 - **Chain mode** — the agent auto-applies each step, observes formula results, and keeps going until the plan is done.
+- **Multi-section builds in one call** — for structured deliverables (3-statement model, full operating model, DCF, multi-block dashboard), the agent emits an `intents` array packing every rectangle into a single response. One LLM call, one Apply click, ~6× fewer tokens than walking the same model through chain mode.
 - **String literals in formulas** — formulas accept quoted strings (`=GREET("Shrey")`, `=BLACK_SCHOLES(100, 100, 1, 0.05, 0.2, "call")`), enabling plugins that take labels or enum-style switches without needing cell references.
 - **Per-cell decimal precision** — two toolbar buttons (`.0←` / `.00→`) round the displayed number without touching the stored value, so downstream formulas still see full precision.
 
@@ -268,6 +269,7 @@ Render's free instances sleep after ~15 min of inactivity (~30–60s cold start 
 - [x] In-app plugin marketplace (SaaS) — browse + install per-user, persisted in `public.user_plugins`, per-surface type badges (Formula / Agent / Model)
 - [x] String literals in the formula parser — plugins can take quoted args like `=BLACK_SCHOLES(..., "call")`
 - [x] Per-cell decimal display precision — toolbar buttons adjust rounding without touching stored values
+- [x] Multi-rectangle agent responses (`intents` array) — whole multi-section models build in one LLM call instead of N chain turns
 - [ ] Stripe checkout + webhook for tier upgrades (Phase 4c)
 - [ ] `.edu` / GitHub Student Pack verification for the Student tier unlock
 - [ ] Range-based vector operations and cross-sheet referencing

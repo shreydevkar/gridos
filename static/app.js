@@ -1610,22 +1610,30 @@ function renderChainSteps(data) {
 async function applyPreview() {
     if (!previewState) return;
     const before = snapshotGrid();
-    const values = Array.isArray(previewState.values) ? previewState.values : [];
-    const targetCell = previewState.original_request || previewState.target_cell || "A1";
     const hasChart = Boolean(previewState.chart_spec);
+    const body = {
+        sheet: workbook.active_sheet,
+        agent_id: previewState.agent_id,
+        shift_direction: "right",
+        chart_spec: previewState.chart_spec || null,
+    };
+    // Multi-intent path — pack every rectangle the agent emitted into the
+    // apply request so the backend can write them all in one round-trip.
+    if (Array.isArray(previewState.intents) && previewState.intents.length) {
+        body.intents = previewState.intents.map((it) => ({
+            target_cell: it.original_request || it.target_cell,
+            values: it.values,
+        }));
+    } else {
+        body.target_cell = previewState.original_request || previewState.target_cell || "A1";
+        body.values = Array.isArray(previewState.values) ? previewState.values : [];
+    }
     try {
         setStatus("Applying");
         const res = await fetch(`${API_BASE}/agent/apply`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                sheet: workbook.active_sheet,
-                agent_id: previewState.agent_id,
-                target_cell: targetCell,
-                values: values,
-                shift_direction: "right",
-                chart_spec: previewState.chart_spec || null,
-            }),
+            body: JSON.stringify(body),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.detail || "Apply failed.");
