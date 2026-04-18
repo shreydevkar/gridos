@@ -410,6 +410,31 @@ class GridOSKernel:
     def write_user_cell(self, target_a1: str, raw_value, user_id: str = "User", sheet_name: str | None = None) -> str:
         return self.write_user_range(target_a1, [[raw_value]], user_id=user_id, sheet_name=sheet_name)
 
+    def clear_cells(self, cell_a1_list: list[str], sheet_name: str | None = None) -> dict:
+        """Bulk-clear a list of cells in a single pass. Locked cells are
+        skipped (not an error — UX would feel broken if a single locked cell
+        in a Del-key selection aborted the entire clear).
+
+        One `_rebuild_dependencies` at the end instead of N — what made the
+        per-cell HTTP loop slow on the frontend was also slow on the backend.
+        """
+        state = self._sheet_state(sheet_name)
+        cells = state["cells"]
+        cleared, skipped_locked = 0, 0
+        for a1 in cell_a1_list:
+            coords = a1_to_coords(a1.upper())
+            existing = cells.get(coords)
+            if existing is None:
+                continue
+            if existing.locked:
+                skipped_locked += 1
+                continue
+            del cells[coords]
+            cleared += 1
+        if cleared:
+            self._rebuild_dependencies(sheet_name)
+        return {"cleared": cleared, "skipped_locked": skipped_locked}
+
     def set_cell_format(self, target_a1: str, decimals: Optional[int], sheet_name: str | None = None) -> dict:
         """Set the per-cell display decimals. None clears the override.
 

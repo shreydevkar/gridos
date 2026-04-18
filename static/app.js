@@ -841,7 +841,9 @@ function syncSelectionUI() {
     const scopePill = document.getElementById("scope-pill");
     if (scopePill) scopePill.textContent = scopeMode === "selection" ? "Selected Cells" : "Entire Sheet";
     document.getElementById("formula-input").value = getCellDisplay(gridData[anchor]);
-    updateSelectionStats();
+    // Skip sum/avg/count walks while the user is mid-drag — they only matter
+    // when the drag settles. mouseup runs syncSelectionUI again to catch up.
+    if (!isSelecting) updateSelectionStats();
     highlightHeadersForSelection();
 }
 
@@ -859,25 +861,30 @@ function highlightHeadersForSelection() {
 }
 
 function repaintSelection() {
-    paintedSelection.forEach((a1) => cellEls.get(a1)?.classList.remove("selected"));
-    paintedSelection.clear();
-    if (activeCellId) {
+    // Build the new set first, then diff against what's currently painted —
+    // for a drag that grows the rectangle by one row/col per frame, this is
+    // O(perimeter delta) of class operations instead of O(area * 2).
+    const nextSelection = new Set();
+    const bounds = getSelectedBounds();
+    for (let row = bounds.top; row <= bounds.bottom; row++) {
+        for (let col = bounds.left; col <= bounds.right; col++) {
+            nextSelection.add(coordsToA1(row, col));
+        }
+    }
+
+    paintedSelection.forEach((a1) => {
+        if (!nextSelection.has(a1)) cellEls.get(a1)?.classList.remove("selected");
+    });
+    nextSelection.forEach((a1) => {
+        if (!paintedSelection.has(a1)) cellEls.get(a1)?.classList.add("selected");
+    });
+    paintedSelection = nextSelection;
+
+    if (activeCellId && activeCellId !== selectedRange.end) {
         const oldActive = cellEls.get(activeCellId);
         if (oldActive) {
             oldActive.classList.remove("active");
             oldActive.querySelector(".fill-handle")?.remove();
-        }
-    }
-
-    const bounds = getSelectedBounds();
-    for (let row = bounds.top; row <= bounds.bottom; row++) {
-        for (let col = bounds.left; col <= bounds.right; col++) {
-            const a1 = coordsToA1(row, col);
-            const td = cellEls.get(a1);
-            if (td) {
-                td.classList.add("selected");
-                paintedSelection.add(a1);
-            }
         }
     }
 
@@ -928,13 +935,24 @@ function repaintPreview(extraCells = null) {
     });
 }
 
+let selectionRafScheduled = false;
+
 function setSelection(start, end) {
     // Skip the DOM work when nothing actually changed — common during a selection
     // drag where the mouse moves inside the same cell across many frames.
     if (selectedRange.start === start && selectedRange.end === end) return;
     selectedRange = { start, end };
-    syncSelectionUI();
-    repaintSelection();
+    // Coalesce repaints to one per animation frame — mousemove can fire
+    // multiple times per frame (especially with high-DPI / high-Hz mice),
+    // and repainting a 50x50 selection on every mousemove is what made
+    // drag-select feel laggy.
+    if (selectionRafScheduled) return;
+    selectionRafScheduled = true;
+    requestAnimationFrame(() => {
+        selectionRafScheduled = false;
+        syncSelectionUI();
+        repaintSelection();
+    });
 }
 
 function addLog(kind, html) {
@@ -1727,8 +1745,14 @@ async function handleDocumentMouseUp(event) {
         dragFillState = null;
         return;
     }
-    isSelecting = false;
-    selectionAnchor = null;
+    if (isSelecting) {
+        isSelecting = false;
+        selectionAnchor = null;
+        // Drag finished — now run the deferred sum/avg/count once.
+        updateSelectionStats();
+    } else {
+        selectionAnchor = null;
+    }
 }
 
 function attachGridEvents() {
@@ -2015,19 +2039,27 @@ async function clearSelection() {
     const cells = getSelectedCells();
     if (!cells.length) return;
     const before = snapshotGrid();
-    let changed = false;
-    for (const a1 of cells) {
-        try {
-            await persistSingleCell(a1, "");
-            changed = true;
-        } catch {
-            // ignore locked or failed cells
+    // One round-trip instead of N — backend skips locked cells silently and
+    // does a single _rebuild_dependencies at the end.
+    let result;
+    try {
+        const res = await fetch(`${API_BASE}/grid/clear`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cells, sheet: workbook.active_sheet }),
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || `HTTP ${res.status}`);
         }
+        result = await res.json();
+    } catch (e) {
+        addLog("system", `Could not clear selection: ${escapeHtml(e.message)}`);
+        return;
     }
-    if (changed) {
-        await fetchGrid();
-        recordAction(before);
-    }
+    if (!result.cleared) return;
+    await fetchGrid();
+    recordAction(before);
 }
 
 // ======== Keyboard navigation ========

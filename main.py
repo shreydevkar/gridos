@@ -1633,6 +1633,25 @@ async def update_range(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class CellClearRequest(BaseModel):
+    cells: List[str]
+    sheet: Optional[str] = None
+
+
+@app.post("/grid/clear")
+async def clear_cells(
+    req: CellClearRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
+    """Bulk-clear a list of cells in one round-trip. Locked cells are
+    skipped silently — a single locked cell in a Del-key selection
+    shouldn't abort the entire clear."""
+    if not req.cells:
+        return {"status": "Success", "cleared": 0, "skipped_locked": 0}
+    result = kernel.clear_cells(req.cells, sheet_name=req.sheet)
+    return {"status": "Success", **result, "sheet": req.sheet or kernel.active_sheet}
+
+
 class CellFormatRequest(BaseModel):
     cells: List[str]
     decimals: Optional[int] = None  # None clears the per-cell override
