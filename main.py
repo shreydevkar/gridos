@@ -838,11 +838,13 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
         hero_section,
     ]
 
-    if req.history:
-        history_lines = "\n".join(f"{h['role'].upper()}: {h['content']}" for h in req.history)
+    trimmed = _trim_history(req.history)
+    if trimmed:
+        history_lines = "\n".join(f"{h['role'].upper()}: {h['content']}" for h in trimmed)
         sections.append(
-            "CONVERSATION HISTORY (oldest first — the first user message is the original task; "
-            "check it for any targets you have not yet written):\n" + history_lines
+            "CONVERSATION HISTORY (most recent ~6 turns, each truncated to ~600 chars; the first "
+            "user message is the original task — check it for any targets you have not yet written):\n"
+            + history_lines
         )
 
     sections.extend([agent["system_prompt"], OUTPUT_FORMAT_SPEC])
@@ -1019,12 +1021,33 @@ def _validate_proposed_macro(raw: Any) -> tuple[Optional[dict], Optional[str]]:
     }, None
 
 
+def _trim_history(history: list, max_turns: int = 6, max_chars: int = 600) -> list:
+    """Bound chat-history payload size before it reaches the agent prompt.
+
+    Long sessions (especially after a string of failed previews that left big
+    multi-intent JSON blobs in the assistant log) can blow past Groq's free-
+    tier 6K TPM ceiling and produce 413s. Keep the most recent N turns and
+    truncate each entry's content so a single huge JSON response from
+    earlier doesn't dominate the budget on every subsequent request."""
+    if not history:
+        return []
+    tail = history[-max_turns:]
+    out = []
+    for h in tail:
+        content = str(h.get("content", ""))
+        if len(content) > max_chars:
+            content = content[:max_chars] + " …[truncated]"
+        out.append({"role": h.get("role", "user"), "content": content})
+    return out
+
+
 def generate_agent_preview(req: ChatRequest) -> dict:
     sheet = req.sheet or kernel.active_sheet
     context = kernel.get_context_for_ai(sheet, req.selected_cells, req.scope)
-    history_context = "\n".join([f"{h['role'].upper()}: {h['content']}" for h in req.history])
-
-    agent_id = route_prompt(req.prompt, history_context, model_id=req.model_id)
+    # Router classifies on the CURRENT user prompt only — history adds noise
+    # and (more importantly) blew past Groq's free-tier 6K TPM ceiling once
+    # a session accumulated a few big multi-intent JSON outputs.
+    agent_id = route_prompt(req.prompt, "", model_id=req.model_id)
     agent = AGENTS[agent_id]
     system_instruction = build_system_instruction(agent, context, req)
 
