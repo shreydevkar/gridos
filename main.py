@@ -746,17 +746,28 @@ def _pick_router_model(user_choice: Optional[str]) -> Optional[str]:
     return user_choice
 
 
+_ROUTER_PROMPT_CHAR_CAP = 800       # the user prompt fragment shown to the router
+_ROUTER_HISTORY_CHAR_CAP = 400      # any history fragment, if a caller passes one
+
+
 def route_prompt(prompt: str, history_context: str, model_id: Optional[str] = None) -> str:
     if len(AGENTS) == 1:
         return next(iter(AGENTS))
+
+    # Defense-in-depth: route_prompt MUST stay tiny so it fits inside Groq's
+    # free-tier 6K TPM cap. Cap both fragments unconditionally — this absorbs
+    # any future regression where a caller forgets to pass empty history or
+    # the user pastes a 50KB prompt.
+    safe_prompt = (prompt or "")[:_ROUTER_PROMPT_CHAR_CAP]
+    safe_history = (history_context or "")[:_ROUTER_HISTORY_CHAR_CAP]
 
     options = "\n".join(
         f"- {agent['id']}: {agent.get('router_description', agent.get('display_name', agent['id']))}"
         for agent in AGENTS.values()
     )
     instruction = f"""
-Analyze this user task: "{prompt}".
-Previous context: {history_context}
+Analyze this user task: "{safe_prompt}".
+Previous context: {safe_history}
 
 Available agent profiles:
 {options}
