@@ -95,3 +95,79 @@ class SupabaseWorkbookStore:
             .eq("id", scope.workbook_id)
             .execute()
         )
+
+    # ---- Multi-workbook helpers (Phase 5) ---------------------------------
+
+    def count(self, user_id: str) -> int:
+        """Return how many workbooks the user owns — used by the free-tier
+        slot cap. `select('id', count='exact')` sends a HEAD-style count so
+        we don't pay to ship every row back."""
+        if not user_id:
+            raise SupabaseAuthError("count requires an authenticated user_id.")
+        res = (
+            self._client.table("workbooks")
+            .select("id", count="exact")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        return int(getattr(res, "count", 0) or 0)
+
+    def create_empty(self, user_id: str, title: str) -> dict:
+        """Insert a blank workbook row and return {id, title, updated_at}.
+        The caller will typically redirect to the workbook view with this id
+        in the URL so the kernel loads (and re-saves) against it."""
+        if not user_id:
+            raise SupabaseAuthError("create_empty requires an authenticated user_id.")
+        safe_title = (title or "").strip()[:120] or "Untitled workbook"
+        initial_state = {
+            "workbook_name": safe_title,
+            "active_sheet": "Sheet1",
+            "sheet_order": ["Sheet1"],
+            "sheets": {"Sheet1": {"cells": {}, "charts": []}},
+            "chat_log": [],
+        }
+        res = (
+            self._client.table("workbooks")
+            .insert({
+                "user_id": user_id,
+                "title": safe_title,
+                "grid_state": initial_state,
+            })
+            .execute()
+        )
+        rows = res.data or []
+        if not rows:
+            raise RuntimeError("create_empty: Supabase returned no row from insert.")
+        row = rows[0]
+        return {
+            "id": row.get("id"),
+            "title": row.get("title") or safe_title,
+            "updated_at": row.get("updated_at"),
+        }
+
+    def rename(self, scope: WorkbookScope, new_title: str) -> None:
+        """Update both the title column and the nested workbook_name in
+        grid_state so a subsequent load sees a consistent name."""
+        user_id = self._require_user(scope)
+        safe_title = (new_title or "").strip()[:120] or "Untitled workbook"
+        # Read the current grid_state so we can patch workbook_name in-place.
+        existing = (
+            self._client.table("workbooks")
+            .select("grid_state")
+            .eq("user_id", user_id)
+            .eq("id", scope.workbook_id)
+            .limit(1)
+            .execute()
+        )
+        rows = existing.data or []
+        if not rows:
+            return
+        state = rows[0].get("grid_state") or {}
+        state["workbook_name"] = safe_title
+        (
+            self._client.table("workbooks")
+            .update({"title": safe_title, "grid_state": state})
+            .eq("user_id", user_id)
+            .eq("id", scope.workbook_id)
+            .execute()
+        )

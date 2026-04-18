@@ -171,6 +171,64 @@
         }
         .account-popover-link:hover { background: var(--bg-hover); }
         .account-popover-link-danger { color: var(--danger); }
+
+        /* Workbook card — SaaS-only "Your workbooks" grid. */
+        .workbook-card {
+            position: relative;
+        }
+        .workbook-card-delete {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            border: 1px solid var(--border-soft);
+            background: var(--bg);
+            color: var(--text-mutedder);
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+        }
+        .card:hover .workbook-card-delete { opacity: 1; }
+        .workbook-card-delete:hover {
+            color: var(--danger);
+            border-color: var(--danger);
+        }
+        .workbook-card-delete svg { width: 14px; height: 14px; }
+
+        .card-thumb.workbook {
+            background: linear-gradient(135deg, #eef3fe, #d4e4fc);
+            border: 1px solid var(--accent-soft);
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .card-thumb.new-workbook {
+            background: var(--bg-soft);
+            border: 1px dashed var(--border);
+            color: var(--accent);
+            font-size: 24px;
+        }
+
+        .quota-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 10px;
+            border-radius: 999px;
+            background: var(--bg-soft);
+            border: 1px solid var(--border-soft);
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .quota-badge.at-limit {
+            background: #fff5f5;
+            border-color: var(--danger);
+            color: var(--danger);
+        }
         .account-popover-quota {
             padding: 10px 0;
             border-bottom: 1px solid var(--border-soft);
@@ -585,6 +643,22 @@
             </div>
         </section>
 
+        <section class="section" id="workbooks-section" hidden>
+            <div class="section-head">
+                <h3>Your workbooks</h3>
+                <span class="section-hint">
+                    <span class="quota-badge" id="quota-badge">—</span>
+                </span>
+            </div>
+            <div class="grid" id="workbooks-grid">
+                <div class="skeleton">
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                </div>
+            </div>
+        </section>
+
         <section class="section">
             <div class="section-head">
                 <h3>Start something new</h3>
@@ -615,7 +689,7 @@
             </div>
         </section>
 
-        <section class="section">
+        <section class="section" id="recent-activity-section">
             <div class="section-head">
                 <h3>Recent activity</h3>
                 <span class="section-hint">Currently single-kernel — the "Continue" card opens the workspace at its current state.</span>
@@ -728,7 +802,50 @@
             }
         }
 
+        const IS_SAAS = () => !!window.__gridosSession;
+
+        // Derive a short workbook title from a free-text prompt. Cuts at a
+        // word boundary near 45 chars so landing cards don't get a wall of
+        // text; the full prompt is still submitted to the agent for content.
+        function titleFromPrompt(prompt) {
+            const trimmed = (prompt || "").trim().replace(/\s+/g, " ");
+            if (!trimmed) return "Untitled workbook";
+            if (trimmed.length <= 45) return trimmed;
+            const firstSentence = trimmed.split(/[.!?]/, 1)[0].trim();
+            if (firstSentence && firstSentence.length <= 45) return firstSentence;
+            const cut = trimmed.slice(0, 45);
+            const lastSpace = cut.lastIndexOf(" ");
+            return lastSpace > 20 ? cut.slice(0, lastSpace).trim() : cut.trim();
+        }
+
+        async function createWorkbookAndOpen(title) {
+            const res = await fetch(`${API_BASE}/workbooks`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ title: title || "Untitled workbook" }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 402) {
+                hideLoading();
+                const usage = data?.detail?.usage || {};
+                showError(`Workbook slot limit reached (${usage.used || "?"}/${usage.limit || "?"}). Delete one to free a slot or upgrade your plan.`);
+                throw new Error("Quota exceeded");
+            }
+            if (!res.ok) throw new Error(data?.detail?.message || data?.detail || `Create failed (${res.status})`);
+            return data;
+        }
+
         async function openBlank() {
+            if (IS_SAAS()) {
+                showLoading("Creating new workbook…");
+                try {
+                    const created = await createWorkbookAndOpen("Untitled workbook");
+                    window.location.href = `/workbook?id=${encodeURIComponent(created.id)}`;
+                } catch (e) {
+                    if (e.message !== "Quota exceeded") showError(`Could not start a blank workbook: ${e.message}`);
+                }
+                return;
+            }
             showLoading("Clearing workbook…");
             try {
                 await fetch(`${API_BASE}/system/clear`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
@@ -746,13 +863,41 @@
         async function applyTemplateAndOpen(templateId, templateName) {
             showLoading(`Applying “${templateName}”…`);
             try {
+                if (IS_SAAS()) {
+                    // SaaS: provision a fresh workbook row, apply the template
+                    // into the in-memory kernel, rename the kernel to the
+                    // template's display name (template apply otherwise leaves
+                    // whatever workbook_name was in the saved snapshot), then
+                    // persist. Without the explicit rename+save the user lands
+                    // on a workbook titled "Untitled workbook" or the template
+                    // author's original name.
+                    const displayName = templateName || "Untitled workbook";
+                    const created = await createWorkbookAndOpen(displayName);
+                    const applyRes = await fetch(`${API_BASE}/templates/apply/${encodeURIComponent(templateId)}`, { method: "POST" });
+                    const applyData = await applyRes.json().catch(() => ({}));
+                    if (!applyRes.ok) throw new Error(applyData.detail || "Template apply failed.");
+                    await fetch(`${API_BASE}/workbook/rename`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ name: displayName }),
+                    }).catch(() => {});
+                    const saveRes = await fetch(`${API_BASE}/system/save?workbook_id=${encodeURIComponent(created.id)}`, { method: "POST" });
+                    if (!saveRes.ok) throw new Error(`Save after template failed (${saveRes.status})`);
+                    await fetch(`${API_BASE}/workbooks/${encodeURIComponent(created.id)}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ title: displayName }),
+                    }).catch(() => {});
+                    window.location.href = `/workbook?id=${encodeURIComponent(created.id)}`;
+                    return;
+                }
                 const res = await fetch(`${API_BASE}/templates/apply/${encodeURIComponent(templateId)}`, { method: "POST" });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(data.detail || "Template apply failed.");
                 window.location.href = "/workbook";
             } catch (e) {
                 hideLoading();
-                showError(`Could not apply template: ${e.message}`);
+                if (e.message !== "Quota exceeded") showError(`Could not apply template: ${e.message}`);
             }
         }
 
@@ -850,24 +995,143 @@
             if (!prompt) return;
             showLoading("Preparing workbook…");
             try {
+                sessionStorage.setItem("gridos.initialPrompt", prompt);
+                sessionStorage.setItem("gridos.initialAutosubmit", "1");
+                if (IS_SAAS()) {
+                    const created = await createWorkbookAndOpen(titleFromPrompt(prompt));
+                    window.location.href = `/workbook?id=${encodeURIComponent(created.id)}`;
+                    return;
+                }
                 await fetch(`${API_BASE}/system/clear`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({}),
                 });
-                // Hand the prompt to the workbook app. It will populate the composer
-                // and auto-submit on load.
-                sessionStorage.setItem("gridos.initialPrompt", prompt);
-                sessionStorage.setItem("gridos.initialAutosubmit", "1");
                 window.location.href = "/workbook";
             } catch (e) {
                 hideLoading();
-                showError(`Could not start workbook: ${e.message}`);
+                if (e.message !== "Quota exceeded") showError(`Could not start workbook: ${e.message}`);
             }
         }
 
         loadTemplates();
         loadContinueMeta();
+
+        // ===== Your workbooks (SaaS-only) =====
+        function formatRelative(iso) {
+            if (!iso) return "";
+            const then = new Date(iso).getTime();
+            if (Number.isNaN(then)) return "";
+            const diff = Date.now() - then;
+            const m = Math.round(diff / 60000);
+            if (m < 1) return "just now";
+            if (m < 60) return `${m}m ago`;
+            const h = Math.round(m / 60);
+            if (h < 24) return `${h}h ago`;
+            const d = Math.round(h / 24);
+            if (d < 30) return `${d}d ago`;
+            return new Date(iso).toLocaleDateString();
+        }
+
+        async function deleteWorkbook(id, title) {
+            if (!confirm(`Delete "${title || 'Untitled workbook'}"? This can't be undone.`)) return;
+            try {
+                const res = await fetch(`${API_BASE}/workbooks/${encodeURIComponent(id)}`, { method: "DELETE" });
+                if (!res.ok) throw new Error(`Delete failed (${res.status})`);
+                await loadWorkbooks();
+            } catch (e) {
+                showError(`Could not delete: ${e.message}`);
+            }
+        }
+
+        function renderWorkbookCards(list, quota) {
+            const grid = document.getElementById("workbooks-grid");
+            grid.innerHTML = "";
+
+            // Existing workbooks first (most-recently-used order from the server).
+            list.forEach((wb) => {
+                const card = document.createElement("div");
+                card.className = "card workbook-card";
+                card.innerHTML = `
+                    <div class="card-thumb workbook">${escapeHtml(wb.title || "Untitled")}</div>
+                    <div class="card-title">${escapeHtml(wb.title || "Untitled workbook")}</div>
+                    <div class="card-meta">
+                        <span>${escapeHtml(formatRelative(wb.updated_at))}</span>
+                    </div>
+                    <button class="workbook-card-delete" type="button" title="Delete workbook" aria-label="Delete workbook">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                    </button>
+                `;
+                card.addEventListener("click", (e) => {
+                    if (e.target.closest(".workbook-card-delete")) return;
+                    window.location.href = `/workbook?id=${encodeURIComponent(wb.id)}`;
+                });
+                card.querySelector(".workbook-card-delete").addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    deleteWorkbook(wb.id, wb.title);
+                });
+                grid.appendChild(card);
+            });
+
+            // "+ New workbook" card, unless the user's at their cap.
+            const atLimit = quota.limit > 0 && quota.used >= quota.limit;
+            if (!atLimit) {
+                const card = document.createElement("div");
+                card.className = "card";
+                card.innerHTML = `
+                    <div class="card-thumb new-workbook">+</div>
+                    <div class="card-title">New workbook</div>
+                    <div class="card-description">Blank sheet you can rename, save, and come back to.</div>
+                `;
+                card.addEventListener("click", openBlank);
+                grid.appendChild(card);
+            } else {
+                const card = document.createElement("div");
+                card.className = "empty-state";
+                card.innerHTML = `
+                    <strong>Workbook slots full.</strong><br />
+                    Delete one above or upgrade your plan for more.
+                `;
+                grid.appendChild(card);
+            }
+        }
+
+        function renderQuotaBadge(quota) {
+            const badge = document.getElementById("quota-badge");
+            if (!badge) return;
+            if (quota.limit === 0) {
+                badge.textContent = `${quota.used} workbooks · unlimited (${quota.tier})`;
+                badge.classList.remove("at-limit");
+            } else {
+                badge.textContent = `${quota.used} / ${quota.limit} used · ${quota.tier} plan`;
+                badge.classList.toggle("at-limit", quota.used >= quota.limit);
+            }
+        }
+
+        async function loadWorkbooks() {
+            try {
+                const res = await fetch(`${API_BASE}/workbooks`);
+                if (!res.ok) {
+                    // 404 = OSS mode or feature disabled — leave section hidden.
+                    return;
+                }
+                const data = await res.json();
+                const list = data.workbooks || [];
+                renderQuotaBadge({ tier: data.tier, used: data.used, limit: data.limit });
+                renderWorkbookCards(list, { used: data.used, limit: data.limit });
+                document.getElementById("workbooks-section").hidden = false;
+                // Recent-activity section is redundant in multi-workbook mode.
+                const recent = document.getElementById("recent-activity-section");
+                if (recent) recent.hidden = true;
+            } catch (_) {
+                // Network hiccup — keep the section hidden; user can still
+                // use hero-prompt / blank-card paths below.
+            }
+        }
+
+        // Fire as soon as we know we're signed into SaaS.
+        window.addEventListener("gridos:saas-ready", loadWorkbooks);
+        if (window.__gridosSession) loadWorkbooks();
 
         // ===== Account avatar + popover (SaaS only) =====
         function avatarInitials(email) {

@@ -5,6 +5,8 @@ google-genai
 anthropic>=0.40
 openai>=1.40
 python-dotenv
+openpyxl>=3.1
+python-multipart>=0.0.9
 # SaaS-only: required when SAAS_MODE=true. OSS installs can skip — both
 # imports are lazy inside cloud/ modules.
 supabase>=2.0

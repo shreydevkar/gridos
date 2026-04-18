@@ -247,12 +247,40 @@
             flex: 1;
         }
 
-        .menubar-actions .icon-btn {
+        /* Generic icon button — used by the menubar save/load/undo/redo/settings
+           cluster, by modal close buttons, and by tab actions. Some of these
+           live inside .menubar-actions / .tabs wrappers and some don't, so the
+           base style is unscoped. */
+        .icon-btn {
             width: 30px;
             height: 30px;
             padding: 0;
             display: grid;
             place-items: center;
+            background: transparent;
+            border: none;
+            border-radius: var(--radius-sm);
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: background 120ms ease, color 120ms ease;
+        }
+
+        .icon-btn:hover:not(:disabled) {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        .icon-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .icon-btn svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        .menubar-actions .icon-btn {
             color: var(--text-muted);
         }
 
@@ -1934,6 +1962,12 @@
                         <li data-menu-action="new-sheet">New sheet<span class="menu-shortcut"></span></li>
                         <li data-menu-action="save">Save workbook<span class="menu-shortcut">Ctrl+S</span></li>
                         <li data-menu-action="load">Load workbook<span class="menu-shortcut"></span></li>
+                        <li class="menu-divider" role="separator"></li>
+                        <li data-menu-action="download-gridos">Download as .gridos<span class="menu-shortcut"></span></li>
+                        <li data-menu-action="download-xlsx">Download as .xlsx (Excel / Sheets)<span class="menu-shortcut"></span></li>
+                        <li data-menu-action="download-csv">Download current sheet as .csv<span class="menu-shortcut"></span></li>
+                        <li data-menu-action="import-gridos">Import from .gridos<span class="menu-shortcut"></span></li>
+                        <li data-menu-action="import-xlsx">Import from .xlsx<span class="menu-shortcut"></span></li>
                         <li class="menu-divider" role="separator"></li>
                         <li data-menu-action="clear-sheet">Clear unlocked cells<span class="menu-shortcut"></span></li>
                         <li data-menu-action="unlock-all">Unlock all cells<span class="menu-shortcut"></span></li>

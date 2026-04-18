@@ -1,5 +1,13 @@
 const API_BASE = "http://127.0.0.1:8000";
 
+// --- Multi-workbook scope (SaaS only) ---------------------------------------
+// The landing page redirects to /workbook?id=<uuid> when the user picks a
+// workbook; we thread that id into /system/load + /system/save so the server
+// routes to the right row in public.workbooks. Null in OSS or when the page
+// was opened without an id (legacy entry point — server falls back to the
+// one-workbook-per-user default scope).
+const activeWorkbookId = new URLSearchParams(window.location.search).get("id");
+
 // --- Auth gate (SaaS mode only; no-op in OSS) --------------------------------
 // cloudStatus and supabaseClient are populated during bootstrapAuth() before
 // any other fetch is issued. In SaaS mode, window.fetch is patched to attach
@@ -368,6 +376,16 @@ async function persistSessionChat() {
     }
 }
 
+// Force-flush any pending/in-flight chat persist so kernel.chat_log matches
+// sessionChat before the caller does something that reads it (e.g. /system/save
+// in SaaS, which serializes kernel state to Supabase).
+async function flushChatPersist() {
+    if (chatPersistTimer) { clearTimeout(chatPersistTimer); chatPersistTimer = null; }
+    while (chatPersistInFlight) await new Promise((r) => setTimeout(r, 25));
+    await persistSessionChat();
+    while (chatPersistInFlight) await new Promise((r) => setTimeout(r, 25));
+}
+
 function pushChatEntry(entry) {
     sessionChat.push(entry);
     schedulePersistChat();
@@ -608,6 +626,17 @@ async function commitWorkbookName(newName) {
         syncWorkbookTitleInput();
         document.title = `${data.workbook_name} — GridOS`;
         addLog("system", `Workbook renamed to ${escapeHtml(data.workbook_name)}.`);
+        // SaaS: also patch the workbooks row so the landing-page list shows the
+        // new title without waiting for a full save round-trip.
+        if (cloudStatus?.mode === "saas" && activeWorkbookId) {
+            try {
+                await fetch(`${API_BASE}/workbooks/${encodeURIComponent(activeWorkbookId)}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ title: data.workbook_name }),
+                });
+            } catch (_) { /* non-fatal; next save propagates */ }
+        }
     } catch (error) {
         addLog("system", escapeHtml(`Rename failed: ${error.message}`));
         syncWorkbookTitleInput();
@@ -1337,6 +1366,24 @@ function clearPreview() {
     repaintPreview();
 }
 
+// Short phrases that map 1:1 to deterministic client actions. Intercepted
+// before /agent/chat so they don't consume an LLM call (and its token quota /
+// rate-limit budget). Keep this list tiny — each entry is a contract users
+// remember by rote. The LLM still handles anything more nuanced.
+const CHAT_SHORTCUTS = {
+    clearSheet: new Set([
+        "clear all", "clear sheet", "clear workbook", "clear the sheet", "clear the workbook",
+        "delete all", "delete sheet", "delete workbook", "delete everything",
+        "wipe all", "wipe sheet", "wipe workbook", "reset sheet", "reset workbook",
+    ]),
+};
+
+function matchChatShortcut(raw) {
+    const key = raw.toLowerCase().replace(/[.!?]+$/, "").trim();
+    if (CHAT_SHORTCUTS.clearSheet.has(key)) return "clearSheet";
+    return null;
+}
+
 async function requestPreview() {
     const prompt = document.getElementById("assistant-input").value.trim();
     if (!prompt) return;
@@ -1347,6 +1394,15 @@ async function requestPreview() {
     input.value = "";
     autoGrowInput();
     syncSendButtonState();
+
+    const shortcut = matchChatShortcut(prompt);
+    if (shortcut === "clearSheet") {
+        const text = `Running <strong>clear sheet</strong> directly — LLM skipped to save tokens.`;
+        pushChatEntry({ id: genChatEntryId(), kind: "system", text, ts: Date.now() });
+        addLog("system", text);
+        await clearActiveSheet();
+        return;
+    }
 
     const payload = {
         prompt,
@@ -2019,8 +2075,31 @@ async function handleGridKeydown(event) {
 // ======== Workbook save/load ========
 
 async function saveWorkbook() {
+    // In SaaS mode, save persists to public.workbooks via SupabaseWorkbookStore
+    // so the user's data survives across browsers / devices. In OSS the kernel
+    // is local; we still offer the legacy export-to-disk path so users can
+    // back up or move workbooks.
+    if (cloudStatus?.mode === "saas") {
+        try {
+            setStatus("Saving to cloud");
+            // Flush debounced chat sync first — otherwise the last few messages
+            // stay client-side and /system/save serializes a stale chat_log.
+            await flushChatPersist();
+            const qs = activeWorkbookId ? `?workbook_id=${encodeURIComponent(activeWorkbookId)}` : "";
+            const res = await fetch(`${API_BASE}/system/save${qs}`, { method: "POST" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(formatApiError(data?.detail) || `Save failed (${res.status})`);
+            setStatus("Saved");
+            addLog("system", "Workbook saved to your GridOS account.");
+        } catch (error) {
+            setStatus("Recover");
+            addLog("system", escapeHtml(`Save failed: ${error.message}`));
+        }
+        return;
+    }
     try {
         setStatus("Saving");
+        await flushChatPersist();
         const res = await fetch(`${API_BASE}/system/export`, { method: "GET" });
         if (!res.ok) throw new Error(`Export failed (${res.status})`);
         const blob = await res.blob();
@@ -2043,6 +2122,177 @@ async function saveWorkbook() {
     }
 }
 
+// ---- Download helpers -------------------------------------------------------
+// In SaaS, Save persists to the cloud; users still want a way to pull the
+// full workbook to disk (for local backup, offline work, or migrating to OSS).
+// downloadGridos hits the existing /system/export endpoint which emits the
+// .gridos JSON blob. downloadActiveSheetCsv rebuilds the active sheet's
+// grid client-side so we don't need a new backend endpoint — and it works
+// identically in OSS + SaaS.
+
+async function downloadGridos() {
+    try {
+        setStatus("Exporting");
+        await flushChatPersist();
+        const res = await fetch(`${API_BASE}/system/export`, { method: "GET" });
+        if (!res.ok) throw new Error(`Export failed (${res.status})`);
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") || "";
+        const match = disposition.match(/filename="([^"]+)"/);
+        const filename = match ? match[1] : "workbook.gridos";
+        triggerBrowserDownload(blob, filename);
+        setStatus("Downloaded");
+        addLog("system", `Workbook downloaded as ${escapeHtml(filename)}.`);
+    } catch (error) {
+        setStatus("Recover");
+        addLog("system", escapeHtml(`Download failed: ${error.message}`));
+    }
+}
+
+async function importFromXlsx() {
+    // Import acts like Load, not like New: it replaces the current workbook's
+    // contents with the xlsx data. No new row is created, no quota is
+    // consumed. The workbook keeps its existing title/identity — users who
+    // want a separate row can create a workbook first, then import into it.
+    const file = await new Promise((resolve) => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.accept = ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        input.addEventListener("change", () => resolve(input.files && input.files[0] ? input.files[0] : null));
+        input.click();
+    });
+    if (!file) return;
+
+    const postImport = async () => {
+        const form = new FormData();
+        form.append("file", file);
+        const res = await fetch(`${API_BASE}/system/import.xlsx`, { method: "POST", body: form });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || `Import failed (${res.status})`);
+        return data;
+    };
+
+    setStatus("Importing Excel");
+    try {
+        // The backend sets workbook_name to the uploaded filename. Stash the
+        // current title first so we can restore it — import should replace
+        // CONTENTS, not rename the user's workbook.
+        const currentTitle = workbook?.workbook_name || null;
+        const before = snapshotGrid();
+        const imported = await postImport();
+
+        if (cloudStatus?.mode === "saas") {
+            if (currentTitle) {
+                // Rename kernel back to the existing workbook's title.
+                await fetch(`${API_BASE}/workbook/rename`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: currentTitle }),
+                }).catch(() => {});
+            }
+            if (activeWorkbookId) {
+                await fetch(`${API_BASE}/system/save?workbook_id=${encodeURIComponent(activeWorkbookId)}`, { method: "POST" });
+            }
+        }
+        await fetchWorkbook({ rehydrateChat: true });
+        await fetchGrid();
+        recordAction(before);
+        setStatus("Imported");
+        addLog("system", `Imported ${escapeHtml(file.name)} — ${imported.sheets} sheet${imported.sheets === 1 ? "" : "s"} replaced the current workbook contents.`);
+    } catch (error) {
+        setStatus("Recover");
+        addLog("system", escapeHtml(`Excel import failed: ${error.message}`));
+    }
+}
+
+async function downloadXlsx() {
+    try {
+        setStatus("Exporting to Excel");
+        const res = await fetch(`${API_BASE}/system/export.xlsx`, { method: "GET" });
+        if (res.status === 503) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || "Excel export unavailable — server missing openpyxl.");
+        }
+        if (!res.ok) throw new Error(`Export failed (${res.status})`);
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") || "";
+        const match = disposition.match(/filename="([^"]+)"/);
+        const filename = match ? match[1] : "workbook.xlsx";
+        triggerBrowserDownload(blob, filename);
+        setStatus("Downloaded");
+        addLog("system", `Workbook exported as ${escapeHtml(filename)}. Open in Excel, or drag into Google Drive and pick “Open with Google Sheets”.`);
+    } catch (error) {
+        setStatus("Recover");
+        addLog("system", escapeHtml(`Excel export failed: ${error.message}`));
+    }
+}
+
+async function downloadActiveSheetCsv() {
+    try {
+        const sheetName = workbook?.active_sheet || "Sheet1";
+        const res = await fetch(`${API_BASE}/debug/grid?sheet=${encodeURIComponent(sheetName)}`);
+        if (!res.ok) throw new Error(`Read failed (${res.status})`);
+        const data = await res.json();
+        const csv = gridToCsv(data.cells || {});
+        const safeName = (workbook?.workbook_name || "workbook").replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 60) || "workbook";
+        triggerBrowserDownload(new Blob([csv], { type: "text/csv;charset=utf-8" }), `${safeName}__${sheetName}.csv`);
+        addLog("system", `Sheet ${escapeHtml(sheetName)} downloaded as CSV.`);
+    } catch (error) {
+        addLog("system", escapeHtml(`CSV download failed: ${error.message}`));
+    }
+}
+
+function triggerBrowserDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function gridToCsv(cells) {
+    // cells is {A1:{value:..., formula:...}, ...}. Walk the occupied range and
+    // emit a rectangular CSV, preferring rendered `value` over raw formula.
+    if (!cells || Object.keys(cells).length === 0) return "";
+    let maxRow = 0, maxCol = 0;
+    const cellMap = new Map();
+    for (const [addr, cell] of Object.entries(cells)) {
+        const m = /^([A-Z]+)(\d+)$/.exec(addr);
+        if (!m) continue;
+        const col = colLetterToIndex(m[1]);
+        const row = parseInt(m[2], 10);
+        if (row > maxRow) maxRow = row;
+        if (col > maxCol) maxCol = col;
+        cellMap.set(`${row},${col}`, cell?.value);
+    }
+    const out = [];
+    for (let r = 1; r <= maxRow; r++) {
+        const row = [];
+        for (let c = 1; c <= maxCol; c++) {
+            row.push(csvEscape(cellMap.get(`${r},${c}`) ?? ""));
+        }
+        out.push(row.join(","));
+    }
+    return out.join("\n");
+}
+
+function csvEscape(v) {
+    const s = String(v);
+    if (s.includes(",") || s.includes('"') || s.includes("\n") || s.includes("\r")) {
+        return `"${s.replace(/"/g, '""')}"`;
+    }
+    return s;
+}
+
+function colLetterToIndex(letters) {
+    let n = 0;
+    for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
+    return n;
+}
+
 function pickWorkbookFile() {
     return new Promise((resolve) => {
         const input = document.createElement("input");
@@ -2057,8 +2307,49 @@ function pickWorkbookFile() {
 }
 
 async function loadWorkbook() {
+    // SaaS: pull the user's cloud-stored workbook via /system/load. If there's
+    // nothing saved yet the server returns {status:"Error"} and we surface a
+    // friendly message. OSS falls through to the file-picker import flow.
+    if (cloudStatus?.mode === "saas") {
+        try {
+            setStatus("Loading from cloud");
+            const before = snapshotGrid();
+            const qs = activeWorkbookId ? `?workbook_id=${encodeURIComponent(activeWorkbookId)}` : "";
+            const res = await fetch(`${API_BASE}/system/load${qs}`, { method: "POST" });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(formatApiError(data?.detail) || `Load failed (${res.status})`);
+            if (data?.status !== "Success") {
+                setStatus("Ready");
+                addLog("system", escapeHtml(data?.message || "No saved workbook found for this account."));
+                return;
+            }
+            await fetchWorkbook({ rehydrateChat: true });
+            await fetchGrid();
+            recordAction(before);
+            setStatus("Loaded");
+            addLog("system", "Loaded your saved workbook from GridOS cloud.");
+        } catch (error) {
+            setStatus("Recover");
+            addLog("system", escapeHtml(`Load failed: ${error.message}`));
+        }
+        return;
+    }
     const file = await pickWorkbookFile();
     if (!file) return;
+    await importGridosFile(file);
+}
+
+// Explicit "Import from .gridos" menu action. In SaaS this is how users pull a
+// downloaded .gridos back into their workbook — Load workbook now means "pull
+// from cloud", so disk imports need their own entry point. Replaces the
+// current workbook's contents (same shape as Import from .xlsx).
+async function importFromGridos() {
+    const file = await pickWorkbookFile();
+    if (!file) return;
+    await importGridosFile(file);
+}
+
+async function importGridosFile(file) {
     try {
         setStatus("Loading");
         const text = await file.text();
@@ -2068,6 +2359,7 @@ async function loadWorkbook() {
         } catch (e) {
             throw new Error("Selected file is not valid JSON.");
         }
+        const currentTitle = workbook?.workbook_name || null;
         const before = snapshotGrid();
         const res = await fetch(`${API_BASE}/system/import`, {
             method: "POST",
@@ -2076,6 +2368,18 @@ async function loadWorkbook() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || "Import failed.");
+        if (cloudStatus?.mode === "saas") {
+            if (currentTitle) {
+                await fetch(`${API_BASE}/workbook/rename`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ name: currentTitle }),
+                }).catch(() => {});
+            }
+            if (activeWorkbookId) {
+                await fetch(`${API_BASE}/system/save?workbook_id=${encodeURIComponent(activeWorkbookId)}`, { method: "POST" });
+            }
+        }
         await fetchWorkbook({ rehydrateChat: true });
         await fetchGrid();
         recordAction(before);
@@ -2116,6 +2420,21 @@ async function handleMenuAction(action) {
             break;
         case "load":
             await loadWorkbook();
+            break;
+        case "download-gridos":
+            await downloadGridos();
+            break;
+        case "download-xlsx":
+            await downloadXlsx();
+            break;
+        case "download-csv":
+            await downloadActiveSheetCsv();
+            break;
+        case "import-gridos":
+            await importFromGridos();
+            break;
+        case "import-xlsx":
+            await importFromXlsx();
             break;
         case "clear-sheet":
             await clearActiveSheet();
@@ -3139,6 +3458,22 @@ async function bootstrap() {
     renderGridShell();
     attachGridEvents();
     attachGlobalEvents();
+    // SaaS multi-workbook: if the URL says ?id=<uuid>, hydrate the server
+    // kernel from that cloud row before we render anything. Opening /workbook
+    // directly with no id in SaaS mode is treated as "pick one" — redirect
+    // to the landing list so we never leak another user's in-memory state.
+    if (cloudStatus?.mode === "saas") {
+        if (!activeWorkbookId) {
+            window.location.replace("/");
+            return;
+        }
+        try {
+            await fetch(`${API_BASE}/system/load?workbook_id=${encodeURIComponent(activeWorkbookId)}`, { method: "POST" });
+        } catch (_) {
+            // Fall through — we'll render whatever's in the kernel; the chat
+            // log will surface the error. Better than a blank screen.
+        }
+    }
     await fetchWorkbook({ rehydrateChat: true });
     await fetchGrid();
     setScope("selection");

@@ -80,6 +80,10 @@ def _env_int(name: str, default: int) -> int:
 FREE_TIER_MONTHLY_TOKENS: int = _env_int("FREE_TIER_MONTHLY_TOKENS", 100_000)
 PRO_TIER_MONTHLY_TOKENS: int = _env_int("PRO_TIER_MONTHLY_TOKENS", 5_000_000)
 
+# Cloud workbook slots per tier. 0 means unlimited (enterprise).
+FREE_TIER_MAX_WORKBOOKS: int = _env_int("FREE_TIER_MAX_WORKBOOKS", 3)
+PRO_TIER_MAX_WORKBOOKS: int = _env_int("PRO_TIER_MAX_WORKBOOKS", 50)
+
 
 def tier_limit(tier: str) -> int:
     """Monthly token cap for the given subscription tier. 0 means unlimited."""
@@ -89,6 +93,16 @@ def tier_limit(tier: str) -> int:
     if t == "enterprise":
         return 0  # unlimited
     return FREE_TIER_MONTHLY_TOKENS
+
+
+def max_workbooks(tier: str) -> int:
+    """Workbook-slot cap for the given subscription tier. 0 means unlimited."""
+    t = (tier or "free").lower()
+    if t == "pro":
+        return PRO_TIER_MAX_WORKBOOKS
+    if t == "enterprise":
+        return 0
+    return FREE_TIER_MAX_WORKBOOKS
 
 
 @dataclass(frozen=True)

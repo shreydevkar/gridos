@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -1342,18 +1342,20 @@ async def update_range(req: RangeUpdateRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-def _scope_for(user: AuthUser) -> WorkbookScope:
+def _scope_for(user: AuthUser, workbook_id: Optional[str] = None) -> WorkbookScope:
     """Map auth context to a WorkbookScope.
 
     OSS: single-user, single-workbook — user_id=None, workbook_id="default"
-        (legacy `system_state.gridos` file).
-    SaaS (Phase 3): one workbook per user. We pin `workbook_id == user.id`
-        so save is idempotent without a separate "active workbook" concept —
-        multi-workbook UX lands in a later phase with a workbook-list UI.
+        (legacy `system_state.gridos` file). An explicit workbook_id is
+        ignored.
+    SaaS: multi-workbook. Callers pass the active workbook's id; we fall
+        back to user.id for back-compat with the original one-workbook-per
+        -user behavior (used by save/load when the frontend doesn't pass
+        the id yet).
     """
     if not cloud_config.SAAS_MODE:
         return WorkbookScope(user_id=None, workbook_id="default")
-    return WorkbookScope(user_id=user.id, workbook_id=user.id)
+    return WorkbookScope(user_id=user.id, workbook_id=workbook_id or user.id)
 
 
 @app.get("/auth/whoami")
@@ -1451,20 +1453,120 @@ async def usage_me(user: AuthUser = Depends(require_user)):
 
 
 @app.post("/system/save")
-async def save_grid(user: AuthUser = Depends(require_user)):
-    scope = _scope_for(user)
+async def save_grid(
+    workbook_id: Optional[str] = None,
+    user: AuthUser = Depends(require_user),
+):
+    scope = _scope_for(user, workbook_id)
     workbook_store.save(scope, kernel.export_state_dict())
-    return {"status": "Success"}
+    return {"status": "Success", "workbook_id": scope.workbook_id}
 
 
 @app.post("/system/load")
-async def load_grid(user: AuthUser = Depends(require_user)):
-    scope = _scope_for(user)
+async def load_grid(
+    workbook_id: Optional[str] = None,
+    user: AuthUser = Depends(require_user),
+):
+    scope = _scope_for(user, workbook_id)
     state = workbook_store.load(scope)
     if state is None:
         return {"status": "Error", "message": "No save file found."}
     kernel.apply_state_dict(state)
-    return {"status": "Success"}
+    return {"status": "Success", "workbook_id": scope.workbook_id}
+
+
+# ---- Multi-workbook endpoints (SaaS) ---------------------------------------
+# List / create / delete / rename. All auth-gated; in OSS mode they return a
+# 404 so the frontend can cleanly treat them as "feature not available."
+
+
+class WorkbookCreateRequest(BaseModel):
+    title: Optional[str] = None
+
+
+class WorkbookRenameRequest(BaseModel):
+    title: str
+
+
+def _require_saas_storage() -> None:
+    """Guard: endpoints that only make sense in SaaS with a Supabase store."""
+    if not cloud_config.SAAS_MODE:
+        raise HTTPException(status_code=404, detail="Multi-workbook is a SaaS feature.")
+    if not cloud_config.SAAS_FEATURES["cloud_storage"].enabled:
+        raise HTTPException(status_code=503, detail="Cloud storage is not configured.")
+
+
+@app.get("/workbooks")
+async def list_workbooks(user: AuthUser = Depends(require_user)):
+    """Return the signed-in user's workbooks ordered most-recently-used first,
+    plus slot usage so the UI can render the quota badge without a second
+    round-trip."""
+    _require_saas_storage()
+    items = workbook_store.list(user.id)
+    # Read the tier straight from public.users so the UI stays in sync when an
+    # admin flips the tier manually (until Stripe is live).
+    tier = "free"
+    try:
+        summary = cloud_usage.get_tier_and_usage(user.id)
+        tier = summary.get("tier") or "free"
+    except Exception:
+        pass
+    limit = cloud_config.max_workbooks(tier)
+    return {
+        "workbooks": items,
+        "tier": tier,
+        "used": len(items),
+        "limit": limit,
+        "remaining": None if limit == 0 else max(0, limit - len(items)),
+    }
+
+
+@app.post("/workbooks")
+async def create_workbook(
+    req: WorkbookCreateRequest,
+    user: AuthUser = Depends(require_user),
+):
+    """Create an empty workbook slot. Enforces the per-tier cap; returns 402
+    with the current usage so the UI can prompt for upgrade."""
+    _require_saas_storage()
+    tier = "free"
+    try:
+        summary = cloud_usage.get_tier_and_usage(user.id)
+        tier = summary.get("tier") or "free"
+    except Exception:
+        pass
+    limit = cloud_config.max_workbooks(tier)
+    current = workbook_store.count(user.id)
+    if limit > 0 and current >= limit:
+        raise HTTPException(status_code=402, detail={
+            "message": f"Workbook slot cap reached ({current}/{limit}) for your tier.",
+            "usage": {"tier": tier, "used": current, "limit": limit},
+        })
+    created = workbook_store.create_empty(user.id, req.title or "Untitled workbook")
+    return {"status": "Success", **created}
+
+
+@app.patch("/workbooks/{workbook_id}")
+async def rename_workbook(
+    workbook_id: str,
+    req: WorkbookRenameRequest,
+    user: AuthUser = Depends(require_user),
+):
+    _require_saas_storage()
+    scope = _scope_for(user, workbook_id)
+    workbook_store.rename(scope, req.title)
+    return {"status": "Success", "workbook_id": workbook_id, "title": req.title.strip()[:120]}
+
+
+@app.delete("/workbooks/{workbook_id}")
+async def delete_workbook(
+    workbook_id: str,
+    user: AuthUser = Depends(require_user),
+):
+    _require_saas_storage()
+    scope = _scope_for(user, workbook_id)
+    workbook_store.delete(scope)
+    return {"status": "Success", "workbook_id": workbook_id}
 
 
 @app.get("/system/export")
@@ -1479,6 +1581,158 @@ async def export_workbook():
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/system/export.xlsx")
+async def export_workbook_xlsx():
+    """Serialize the current workbook to .xlsx. One Excel sheet per GridOS
+    sheet (respecting sheet_order). Cells with a `formula` get the formula
+    string (Excel recomputes on open for compatible functions); cells without
+    get their rendered value. Charts, macros, locked metadata, and the chat
+    log are dropped — they have no clean Excel analogue. For a full-fidelity
+    export users should use the .gridos format instead."""
+    try:
+        from openpyxl import Workbook  # type: ignore
+        from openpyxl.utils import get_column_letter  # type: ignore
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="openpyxl is not installed. Run `pip install openpyxl`.",
+        )
+
+    state = kernel.export_state_dict()
+    wb = Workbook()
+    # Remove the default sheet; we'll add our own (and openpyxl requires at
+    # least one sheet, so we create the first one immediately).
+    wb.remove(wb.active)
+
+    sheet_order = state.get("sheet_order") or list((state.get("sheets") or {}).keys())
+    if not sheet_order:
+        sheet_order = ["Sheet1"]
+
+    sheets_data = state.get("sheets") or {}
+
+    for sheet_name in sheet_order:
+        # Excel sheet names can't exceed 31 chars and can't contain []:*?/\.
+        safe_sheet = sheet_name[:31]
+        for ch in "[]:*?/\\":
+            safe_sheet = safe_sheet.replace(ch, "_")
+        ws = wb.create_sheet(title=safe_sheet or "Sheet")
+        cells = (sheets_data.get(sheet_name) or {}).get("cells") or {}
+        for a1, cell in cells.items():
+            if not isinstance(cell, dict):
+                continue
+            formula = cell.get("formula")
+            value = cell.get("value")
+            datatype = cell.get("datatype")
+            if formula:
+                ws[a1] = formula  # openpyxl writes leading "=" strings as formulas
+            elif datatype == "num" and value not in (None, ""):
+                try:
+                    ws[a1] = float(value)
+                except (TypeError, ValueError):
+                    ws[a1] = value
+            else:
+                ws[a1] = value
+
+    # Ensure we always ship at least one sheet even if the kernel was empty.
+    if not wb.worksheets:
+        wb.create_sheet(title="Sheet1")
+
+    # openpyxl .save writes to a file-like; stream into an in-memory buffer.
+    from io import BytesIO
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "-" for c in kernel.workbook_name).strip() or "workbook"
+    safe_name = safe_name.replace(" ", "_")
+    filename = f"{safe_name}-{timestamp}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/system/import.xlsx")
+async def import_workbook_xlsx(file: UploadFile = File(...)):
+    """Parse a .xlsx upload into GridOS state and apply to the kernel.
+    One worksheet → one sheet. Cell values carry over; formula strings are
+    preserved so GridOS's evaluator can recompute on next recalc (anything
+    GridOS doesn't understand will render as #ERROR in that cell rather
+    than silently drop). Styles, merged cells, named ranges, and charts
+    are dropped — .gridos round-trips are the lossless path."""
+    try:
+        from openpyxl import load_workbook  # type: ignore
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail="openpyxl is not installed. Run `pip install openpyxl`.",
+        )
+    if not file.filename or not file.filename.lower().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Expected an .xlsx file.")
+    try:
+        raw = await file.read()
+        from io import BytesIO
+        wb = load_workbook(BytesIO(raw), data_only=False)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not parse Excel file: {e}")
+
+    sheets: dict[str, dict] = {}
+    sheet_order: list[str] = []
+    for ws in wb.worksheets:
+        name = ws.title or "Sheet"
+        sheet_order.append(name)
+        cells: dict[str, dict] = {}
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.value is None:
+                    continue
+                raw_val = cell.value
+                formula = None
+                value_str = ""
+                datatype = "str"
+                if isinstance(raw_val, str) and raw_val.startswith("="):
+                    formula = raw_val
+                    # Value will be filled by GridOS's evaluator on next recalc.
+                elif isinstance(raw_val, (int, float)):
+                    datatype = "num"
+                    value_str = str(raw_val)
+                elif isinstance(raw_val, bool):
+                    value_str = "TRUE" if raw_val else "FALSE"
+                else:
+                    value_str = str(raw_val)
+                cells[cell.coordinate] = {
+                    "value": value_str,
+                    "formula": formula,
+                    "locked": False,
+                    "datatype": datatype,
+                    "agent_owner": "User",
+                }
+        sheets[name] = {"cells": cells, "charts": []}
+
+    if not sheet_order:
+        sheet_order = ["Sheet1"]
+        sheets["Sheet1"] = {"cells": {}, "charts": []}
+
+    # Derive a friendly workbook name from the uploaded filename minus .xlsx.
+    base = file.filename.rsplit(".", 1)[0]
+    workbook_name = (base or "Imported workbook").strip()[:120] or "Imported workbook"
+
+    state = {
+        "workbook_name": workbook_name,
+        "active_sheet": sheet_order[0],
+        "sheet_order": sheet_order,
+        "sheets": sheets,
+        "chat_log": [],
+    }
+    try:
+        kernel.apply_state_dict(state)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not apply imported state: {e}")
+    return {"status": "Success", "workbook_name": workbook_name, "sheets": len(sheet_order)}
 
 
 @app.post("/system/import")
