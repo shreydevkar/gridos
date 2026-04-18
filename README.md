@@ -1,5 +1,7 @@
 # GridOS: Agentic Spreadsheet
 
+> **Live SaaS**: [gridos.onrender.com](https://gridos.onrender.com) · **Docs**: [gridos.mintlify.app](https://gridos.mintlify.app) · **Quickstart**: [gridos.mintlify.app/quickstart](https://gridos.mintlify.app/quickstart)
+
 GridOS pairs a deterministic Python kernel with an LLM to build a spreadsheet you can edit by talking to it. Agents read the current grid state, return structured JSON write-intents, and the kernel previews, collision-checks, and applies them — so the AI can edit the sheet without clobbering locked or occupied cells.
 
 Bring-your-own-key: plug in **Google Gemini**, **Anthropic Claude**, **Groq**, or **OpenRouter** from the in-app settings panel and switch models per-request from the chat composer. Start a fresh workbook by describing what you want to build from the landing page, or open a template — same backend, either entry point.
@@ -63,6 +65,42 @@ Run the migrations in `cloud/migrations/` (numbered `0001_init.sql`, `0002_usage
 - **Chat shortcuts** — typing `clear all` / `delete all` in the chat bypasses the LLM entirely and runs the clear-sheet command directly, so common housekeeping phrases don't burn tokens or hit provider rate limits.
 - **Preview/apply flow** — AI writes go through a preview step before committing, with a pre-apply guard that blocks formulas whose inputs are empty.
 - **Chain mode** — the agent auto-applies each step, observes formula results, and keeps going until the plan is done.
+
+## Documentation
+
+Full docs live at **[gridos.mintlify.app](https://gridos.mintlify.app)**. Jumping-off points:
+
+**Getting started**
+- [Introduction](https://gridos.mintlify.app/introduction) — what GridOS is, at a glance
+- [Quickstart](https://gridos.mintlify.app/quickstart) — run it locally and build your first workbook
+- [Add API keys](https://gridos.mintlify.app/api-keys) — connect Gemini / Claude / Groq / OpenRouter
+
+**Core concepts**
+- [Workbooks, sheets, and cells](https://gridos.mintlify.app/concepts/workbook)
+- [Chat and agents](https://gridos.mintlify.app/concepts/chat-and-agents) — how the agent reads and edits the sheet
+- [Preview & apply](https://gridos.mintlify.app/concepts/preview-apply) — review AI edits before they land
+- [Formulas](https://gridos.mintlify.app/concepts/formulas) — built-in functions and syntax
+
+**Configuration**
+- [LLM providers](https://gridos.mintlify.app/configuration/llm-providers)
+- [Supported models](https://gridos.mintlify.app/configuration/supported-models)
+- [Cell locking](https://gridos.mintlify.app/configuration/cell-locking)
+
+**Feature guides**
+- [Chain mode](https://gridos.mintlify.app/guides/chain-mode) — let the AI build the workbook end-to-end
+- [Templates](https://gridos.mintlify.app/guides/templates)
+- [Charts](https://gridos.mintlify.app/guides/charts)
+- [Macros](https://gridos.mintlify.app/guides/macros)
+- [Building financial models](https://gridos.mintlify.app/guides/building-financial-models)
+
+**REST API reference**
+- [`POST /agent/chat`](https://gridos.mintlify.app/api/agent-chat) · [`POST /agent/apply`](https://gridos.mintlify.app/api/agent-apply) · [`POST /agent/chat/chain`](https://gridos.mintlify.app/api/agent-chain)
+- [Grid cell writes](https://gridos.mintlify.app/api/grid-cell) · [Workbook / sheets](https://gridos.mintlify.app/api/workbook-sheets) · [Save / load / export](https://gridos.mintlify.app/api/save-load-export)
+- [Charts](https://gridos.mintlify.app/api/charts) · [Provider settings](https://gridos.mintlify.app/api/settings-providers)
+
+**Troubleshooting**
+- [Common errors](https://gridos.mintlify.app/troubleshooting/common-errors) — keys, guards, and load failures
+- [Model output issues](https://gridos.mintlify.app/troubleshooting/model-output-issues)
 
 ## Tech stack
 
