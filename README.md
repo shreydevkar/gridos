@@ -37,8 +37,10 @@ Everything here stays dormant unless `SAAS_MODE=true`. The public OSS path impor
 
 - **Supabase JWT auth** (`cloud/auth.py`) — email/password + Google OAuth, routes ES256/RS256 tokens through JWKS and HS256 through a shared secret.
 - **Multi-workbook storage** (`cloud/supabase_store.py`) — each user's workbooks live in `public.workbooks.grid_state` (jsonb), protected by row-level security. A landing-page workbook picker handles list / create / rename / delete.
-- **Per-tier quotas** (`cloud/usage.py` + `cloud/config.py`) — monthly token caps and cloud-workbook slot caps per subscription tier (`free`, `pro`, `enterprise`). Quota checks run before every LLM call and return 402 when exceeded.
-- **Usage analytics** — every successful LLM response logs to `public.usage_logs`; a Postgres trigger rolls it into `public.user_usage` for the account popover's progress bar.
+- **Bring-your-own-key LLMs** (`cloud/user_keys.py`) — each user enters their own Gemini/Anthropic/Groq/OpenRouter key from the in-app Settings panel; rows live in `public.user_api_keys` behind RLS. The operator never pays LLM bills — the product is GridOS itself (cloud save, multi-workbook, agentic UX), not the tokens.
+- **Per-user kernel isolation** (`main.py` kernel pool) — a `ContextVar`-bound kernel per `(user_id, workbook_id)`, LRU-capped at 64. Two tabs on different workbooks (or two users on the same process) never step on each other's in-memory state.
+- **Workbook-slot tiers** (`cloud/config.py`) — storage caps per subscription tier (`free=3`, `pro=50`, `enterprise=unlimited`); token caps default to unlimited since the user is paying the LLM bill.
+- **Usage analytics** — every successful LLM response logs to `public.usage_logs`; a Postgres trigger rolls it into `public.user_usage` for the account popover's progress bar (informational; not a hard cap).
 
 Run the migrations in `cloud/migrations/` (numbered `0001_init.sql`, `0002_usage_rollup.sql`, …) in the Supabase SQL Editor before pointing a server at your project.
 
@@ -143,7 +145,7 @@ The cloud tier is optional — set `SAAS_MODE=true` and point the server at a Su
 ### One-time Supabase setup
 
 1. Create a Supabase project.
-2. Open **SQL Editor** and run `cloud/migrations/0001_init.sql` (tables + RLS) and `cloud/migrations/0002_usage_rollup.sql` (usage trigger) in order.
+2. Open **SQL Editor** and run the numbered migrations in `cloud/migrations/` in order: `0001_init.sql` (tables + RLS), `0002_usage_rollup.sql` (usage trigger), `0003_user_api_keys.sql` (BYOK keys table).
 3. **Authentication → Providers** — enable Email and (optionally) Google. Google needs a Google Cloud Console OAuth 2.0 Client with `https://<project>.supabase.co/auth/v1/callback` as an authorized redirect URI.
 4. **Project Settings → API** — copy the `URL`, `anon public` key, `service_role` key, and `JWT Secret`.
 
@@ -157,13 +159,15 @@ SUPABASE_SERVICE_ROLE_KEY=<service role key> # SERVER ONLY, bypasses RLS
 SUPABASE_JWT_SECRET=<JWT secret>             # server-side token verification
 ```
 
-Plus at least one LLM provider key from the OSS list above. Optional tuning:
+**LLM keys are BYOK** — each signed-in user adds their own Gemini/Anthropic/Groq/OpenRouter key from the in-app Settings panel; the server never uses operator-side LLM credentials in SaaS mode. Any `GOOGLE_API_KEY` / `GROQ_API_KEY` env vars are ignored when `SAAS_MODE=true`.
+
+Optional tuning:
 
 ```
-FREE_TIER_MONTHLY_TOKENS=100000    # 0 = unlimited (disables enforcement)
-PRO_TIER_MONTHLY_TOKENS=5000000
-FREE_TIER_MAX_WORKBOOKS=3          # 0 = unlimited
+FREE_TIER_MAX_WORKBOOKS=3          # cloud storage slots per user; 0 = unlimited
 PRO_TIER_MAX_WORKBOOKS=50
+FREE_TIER_MONTHLY_TOKENS=0         # token cap; default 0 (unlimited) because users pay
+PRO_TIER_MONTHLY_TOKENS=0          # their own LLM bills. Set non-zero for abuse protection.
 ```
 
 ### Deploying to Render (free tier)

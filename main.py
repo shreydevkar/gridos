@@ -71,6 +71,11 @@ AGENTS = load_agents()
 # kernel, so we don't have to thread `k` through hundreds of call sites.
 _default_kernel = GridOSKernel()
 _current_kernel: ContextVar[Optional[GridOSKernel]] = ContextVar("gridos_current_kernel", default=None)
+# Request-scoped user. Set by current_kernel_dep alongside _current_kernel so
+# call_model() can look up the caller's BYOK LLM providers (SaaS) without us
+# threading `user` through every intermediate helper (route_prompt → agent
+# preview → provider resolution).
+_current_user: ContextVar[Optional["AuthUser"]] = ContextVar("gridos_current_user", default=None)
 _kernel_pool: "OrderedDict[tuple[str, str], GridOSKernel]" = OrderedDict()
 _kernel_pool_lock = Lock()
 # Cap pool size so an abusive bot can't OOM the process. LRU-evict the oldest
@@ -346,6 +351,7 @@ async def current_kernel_dep(
     scope = _scope_for(user, wb_id)
     k = _kernel_for_scope(scope)
     _current_kernel.set(k)
+    _current_user.set(user)
     return k
 
 
@@ -418,27 +424,62 @@ API_KEYS.update(_seed_keys_from_env(_load_api_keys_from_disk()))
 _rebuild_providers()
 
 
-def _configured_provider_ids() -> set[str]:
-    return set(PROVIDERS.keys())
+def _configured_provider_ids(providers: Optional[Dict[str, Provider]] = None) -> set[str]:
+    return set((providers if providers is not None else PROVIDERS).keys())
 
 
-def _resolve_model(model_id: Optional[str]) -> tuple[str, Provider]:
+def _providers_for_current_request() -> Dict[str, Provider]:
+    """Return the provider dict this request's model calls should use.
+
+    OSS: the global PROVIDERS dict, backed by `data/api_keys.json` on disk
+    (and env-var fallback). Shared across the single-user install.
+
+    SaaS BYOK: per-user providers, built fresh from `public.user_api_keys`
+    rows on every request. Each user pays for their own tokens; the server
+    never uses its own LLM credentials in the hosted tier. Built fresh —
+    not cached — so key rotations and deletions take effect immediately."""
+    if not cloud_config.SAAS_MODE:
+        return PROVIDERS
+    user = _current_user.get()
+    if not user or not getattr(user, "id", None):
+        return {}
+    from cloud import user_keys as _user_keys  # lazy import: OSS never touches it
+
+    keys = _user_keys.list_keys(user.id)
+    providers: Dict[str, Provider] = {}
+    for pid, key in keys.items():
+        cls = PROVIDER_CLASSES.get(pid)
+        if not cls or not key:
+            continue
+        try:
+            providers[pid] = cls(api_key=key)
+        except Exception as e:
+            print(f"[user_keys] {pid} init failed for user {user.id}: {e}")
+    return providers
+
+
+def _resolve_model(
+    model_id: Optional[str],
+    providers: Optional[Dict[str, Provider]] = None,
+) -> tuple[str, Provider]:
     """Pick a model + provider. Falls back to a sensible default if model_id is
     missing or its provider has no key configured."""
-    configured = _configured_provider_ids()
+    if providers is None:
+        providers = _providers_for_current_request()
+    configured = _configured_provider_ids(providers)
     if not configured:
         raise HTTPException(
             status_code=400,
             detail="No LLM provider is configured. Add an API key in Settings.",
         )
     entry = get_model_entry(model_id) if model_id else None
-    if entry and entry["provider"] in PROVIDERS:
-        return entry["id"], PROVIDERS[entry["provider"]]
+    if entry and entry["provider"] in providers:
+        return entry["id"], providers[entry["provider"]]
     fallback_id = default_model_id(configured)
     if not fallback_id:
         raise HTTPException(status_code=400, detail="No usable model available.")
     fallback_entry = get_model_entry(fallback_id)
-    return fallback_entry["id"], PROVIDERS[fallback_entry["provider"]]
+    return fallback_entry["id"], providers[fallback_entry["provider"]]
 
 
 # ---------- Telemetry ----------
@@ -653,7 +694,7 @@ _ROUTER_MODEL_PREFERENCE = [
 
 
 def _pick_router_model(user_choice: Optional[str]) -> Optional[str]:
-    configured = _configured_provider_ids()
+    configured = _configured_provider_ids(_providers_for_current_request())
     for mid, pid in _ROUTER_MODEL_PREFERENCE:
         if pid in configured:
             return mid
@@ -2202,10 +2243,26 @@ def _mask_key(key: str) -> str:
 
 
 @app.get("/settings/providers")
-async def list_providers():
-    """Describe every known provider and whether a key is configured for it."""
+async def list_providers(user: AuthUser = Depends(require_user)):
+    """Describe every known provider and whether a key is configured for it.
+    SaaS reads the current user's row from `public.user_api_keys`; OSS reads
+    the shared `data/api_keys.json` disk file."""
+    if cloud_config.SAAS_MODE:
+        from cloud import user_keys as _user_keys
+        keys = _user_keys.list_keys(user.id) if user and user.id else {}
+        providers = []
+        for pid, _cls in PROVIDER_CLASSES.items():
+            key = keys.get(pid, "")
+            providers.append({
+                "id": pid,
+                "display_name": PROVIDER_DISPLAY_NAMES.get(pid, pid),
+                "configured": bool(key),
+                "masked_key": _mask_key(key) if key else "",
+            })
+        return {"providers": providers}
+    # OSS: global disk-backed keys.
     providers = []
-    for pid, cls in PROVIDER_CLASSES.items():
+    for pid, _cls in PROVIDER_CLASSES.items():
         key = API_KEYS.get(pid, "")
         providers.append({
             "id": pid,
@@ -2217,7 +2274,10 @@ async def list_providers():
 
 
 @app.post("/settings/keys/save")
-async def save_api_key(req: ApiKeySaveRequest):
+async def save_api_key(
+    req: ApiKeySaveRequest,
+    user: AuthUser = Depends(require_user),
+):
     provider_id = (req.provider or "").strip().lower()
     cls = PROVIDER_CLASSES.get(provider_id)
     if cls is None:
@@ -2233,6 +2293,11 @@ async def save_api_key(req: ApiKeySaveRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Could not initialize {provider_id}: {e}")
 
+    if cloud_config.SAAS_MODE:
+        from cloud import user_keys as _user_keys
+        _user_keys.set_key(user.id, provider_id, api_key)
+        return {"status": "Success", "provider": provider_id, "configured": True}
+
     API_KEYS[provider_id] = api_key
     _persist_api_keys()
     _rebuild_providers()
@@ -2244,10 +2309,17 @@ async def save_api_key(req: ApiKeySaveRequest):
 
 
 @app.delete("/settings/keys/{provider_id}")
-async def delete_api_key(provider_id: str):
+async def delete_api_key(
+    provider_id: str,
+    user: AuthUser = Depends(require_user),
+):
     provider_id = (provider_id or "").strip().lower()
     if provider_id not in PROVIDER_CLASSES:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_id}")
+    if cloud_config.SAAS_MODE:
+        from cloud import user_keys as _user_keys
+        _user_keys.delete_key(user.id, provider_id)
+        return {"status": "Success", "provider": provider_id}
     if provider_id in API_KEYS:
         del API_KEYS[provider_id]
         _persist_api_keys()
@@ -2256,10 +2328,12 @@ async def delete_api_key(provider_id: str):
 
 
 @app.get("/models/available")
-async def list_available_models():
+async def list_available_models(user: AuthUser = Depends(require_user)):
     """Every model whose provider currently has a working key. The UI uses this to
-    populate the per-chat model picker."""
-    configured = _configured_provider_ids()
+    populate the per-chat model picker. In SaaS the answer is per-user (keys live
+    in `public.user_api_keys`); in OSS it's the global disk-backed PROVIDERS."""
+    _current_user.set(user)
+    configured = _configured_provider_ids(_providers_for_current_request())
     default_id = default_model_id(configured)
     models = [
         {**entry, "available": entry["provider"] in configured}

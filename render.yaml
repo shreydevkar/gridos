@@ -41,20 +41,14 @@ services:
         sync: false
       - key: SUPABASE_JWT_SECRET
         sync: false
-      # --- LLM provider keys (at least one required) ---
-      - key: GOOGLE_API_KEY
-        sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: GROQ_API_KEY
-        sync: false
-      - key: OPENROUTER_API_KEY
-        sync: false
-      # --- Optional tier tuning (defaults in cloud/config.py) ---
-      # - key: FREE_TIER_MONTHLY_TOKENS
-      #   value: "100000"
-      # - key: PRO_TIER_MONTHLY_TOKENS
-      #   value: "5000000"
+      # --- LLM provider keys ---
+      # SaaS is BYOK: users add their own Gemini/Anthropic/Groq/OpenRouter
+      # keys from the in-app Settings panel; they live in public.user_api_keys
+      # and the operator never pays LLM bills. No server-side env vars are
+      # needed or used — if you set them here, they're still ignored in SaaS
+      # mode (only the per-user row is read at request time).
+      #
+      # --- Optional workbook-slot tier tuning (defaults in cloud/config.py) ---
       # - key: FREE_TIER_MAX_WORKBOOKS
       #   value: "3"
       # - key: PRO_TIER_MAX_WORKBOOKS
