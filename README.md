@@ -32,6 +32,12 @@ A FastAPI app that:
 ### `/static` — Frontend
 Minimal HTML + vanilla JS + Tailwind UI for editing cells, previewing AI suggestions, and managing sheets.
 
+### `/cloud` — Managed (SaaS) tier, optional
+Everything here stays dormant unless `SAAS_MODE=true`. The public OSS path imports nothing from this folder into the hot loop — the only always-mounted endpoint is `GET /cloud/status`, which the frontend reads on bootstrap to decide whether to surface login / billing UI. When enabled, `cloud/supabase_store.py` (backed by Supabase Postgres + RLS) replaces the flat-file persistence layer so each user's workbooks live in the cloud. Run `cloud/migrations/0001_init.sql` in the Supabase SQL Editor before pointing a server at your project.
+
+### `/core/workbook_store.py` — Persistence seam
+`WorkbookStore` protocol with two implementations: `FileWorkbookStore` (OSS, flat files on disk) and `SupabaseWorkbookStore` (SaaS). Endpoints call `store.save(scope, state_dict)` without branching on mode.
+
 ## Capabilities
 
 - **Formula synthesis** — natural-language prompts become executable grid formulas (e.g. `=MINUS(C3, D3)`).

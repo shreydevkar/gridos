@@ -67,6 +67,33 @@ os.makedirs("static", exist_ok=True)
 TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+# Cloud (SaaS) router is always mounted — it exposes /cloud/status which the
+# frontend reads on bootstrap to decide whether to show login/billing UI. Real
+# SaaS features are gated on config.SAAS_MODE and attached in later phases.
+from cloud import config as cloud_config  # noqa: E402
+from cloud.status import router as cloud_status_router  # noqa: E402
+from core.workbook_store import FileWorkbookStore, WorkbookScope, WorkbookStore  # noqa: E402
+
+app.include_router(cloud_status_router)
+
+# Persistence seam. In OSS mode we keep using the flat-file store so behavior
+# is bit-identical. In SaaS mode we try Supabase and fall back to the file
+# store with a loud warning if credentials are missing — a misconfigured SaaS
+# deploy should surface as 503s on save/load, not crash at startup.
+workbook_store: WorkbookStore
+if cloud_config.SAAS_MODE and cloud_config.SAAS_FEATURES["cloud_storage"].enabled:
+    from cloud.supabase_store import SupabaseWorkbookStore  # noqa: E402
+
+    workbook_store = SupabaseWorkbookStore(
+        url=cloud_config.SUPABASE_URL,
+        key=cloud_config.SUPABASE_KEY,
+    )
+elif cloud_config.SAAS_MODE:
+    print("[cloud] SAAS_MODE=true but SUPABASE_URL/KEY missing — /system/save and /system/load will return 503.")
+    workbook_store = FileWorkbookStore()
+else:
+    workbook_store = FileWorkbookStore()
+
 
 # ---------- Library persistence ----------
 
@@ -1260,17 +1287,34 @@ async def update_range(req: RangeUpdateRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+def _default_scope() -> WorkbookScope:
+    """Placeholder until Phase 3 auth injects user_id. OSS mode is single-user
+    and single-workbook, so the legacy file-backed default is correct. In
+    SaaS mode we 503 the endpoint instead of silently writing everyone's sheet
+    to the same file."""
+    if cloud_config.SAAS_MODE:
+        raise HTTPException(
+            status_code=503,
+            detail="SaaS persistence requires authentication (coming in Phase 3).",
+        )
+    return WorkbookScope(user_id=None, workbook_id="default")
+
+
 @app.post("/system/save")
 async def save_grid():
-    kernel.save_state()
+    scope = _default_scope()
+    workbook_store.save(scope, kernel.export_state_dict())
     return {"status": "Success"}
 
 
 @app.post("/system/load")
 async def load_grid():
-    if kernel.load_state():
-        return {"status": "Success"}
-    return {"status": "Error", "message": "No save file found."}
+    scope = _default_scope()
+    state = workbook_store.load(scope)
+    if state is None:
+        return {"status": "Error", "message": "No save file found."}
+    kernel.apply_state_dict(state)
+    return {"status": "Success"}
 
 
 @app.get("/system/export")
