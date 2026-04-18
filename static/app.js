@@ -764,15 +764,31 @@ function renderGridShell() {
     applyDimensions();
 }
 
+function formatCellDisplay(state) {
+    if (!state || state.value === null || state.value === undefined) return "";
+    const raw = state.value;
+    // Apply per-cell decimal precision when set AND the value is numeric.
+    // String values (e.g. labels, plugin error sentinels) display verbatim.
+    if (typeof state.decimals === "number" && state.decimals >= 0) {
+        const num = typeof raw === "number" ? raw : Number(raw);
+        if (typeof raw === "number" && Number.isFinite(raw)) {
+            return raw.toFixed(state.decimals);
+        }
+        if (typeof raw === "string" && raw !== "" && Number.isFinite(num)) {
+            return num.toFixed(state.decimals);
+        }
+    }
+    return String(raw);
+}
+
 function updateCellDom(a1) {
     const td = cellEls.get(a1);
     if (!td) return;
     const state = gridData[a1];
     td.classList.toggle("locked", Boolean(state?.locked));
     const content = td.firstElementChild;
-    const display = state && state.value !== null && state.value !== undefined ? String(state.value) : "";
     content.className = `cell-content${state?.formula ? " cell-formula" : ""}`;
-    content.textContent = display;
+    content.textContent = formatCellDisplay(state);
 }
 
 function refreshPopulatedCells() {
@@ -2684,14 +2700,177 @@ function renderProviderRow(provider) {
     return wrap;
 }
 
+async function adjustDecimals(direction) {
+    const cells = getSelectedCells();
+    if (!cells || cells.length === 0) return;
+    // Pick the current decimals from the first selected cell that has one set;
+    // unset cells start at 2 decimals (the spreadsheet-default sweet spot).
+    let current = null;
+    for (const a1 of cells) {
+        const s = gridData[a1];
+        if (s && typeof s.decimals === "number") {
+            current = s.decimals;
+            break;
+        }
+    }
+    if (current === null) current = direction > 0 ? 1 : 3;
+    const next = Math.max(0, Math.min(20, current + direction));
+    if (next === current && (direction < 0 && current === 0)) return;
+    try {
+        const res = await fetch(`${API_BASE}/grid/format`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ cells, decimals: next, sheet: workbook.active_sheet }),
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.detail || `HTTP ${res.status}`);
+        }
+        // Apply locally so the user sees the change without a full grid round-trip.
+        cells.forEach((a1) => {
+            if (gridData[a1]) {
+                gridData[a1].decimals = next;
+                updateCellDom(a1);
+            }
+        });
+    } catch (e) {
+        alert(`Could not update decimals: ${e.message}`);
+    }
+}
+
 function attachSettingsEvents() {
     document.getElementById("settings-btn")?.addEventListener("click", openSettingsModal);
+    document.getElementById("decimal-increase-btn")?.addEventListener("click", () => adjustDecimals(+1));
+    document.getElementById("decimal-decrease-btn")?.addEventListener("click", () => adjustDecimals(-1));
     document.getElementById("settings-modal-close")?.addEventListener("click", closeSettingsModal);
     document.getElementById("settings-modal-backdrop")?.addEventListener("click", (e) => {
         if (e.target === e.currentTarget) closeSettingsModal();
     });
     document.getElementById("composer-settings-link")?.addEventListener("click", openSettingsModal);
     document.getElementById("model-select")?.addEventListener("change", onModelSelectChange);
+
+    document.getElementById("marketplace-btn")?.addEventListener("click", openMarketplaceModal);
+    document.getElementById("marketplace-modal-close")?.addEventListener("click", closeMarketplaceModal);
+    document.getElementById("marketplace-modal-backdrop")?.addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) closeMarketplaceModal();
+    });
+}
+
+// ======== Plugin marketplace ========
+
+async function openMarketplaceModal() {
+    const backdrop = document.getElementById("marketplace-modal-backdrop");
+    if (!backdrop) return;
+    backdrop.removeAttribute("hidden");
+    await renderMarketplace();
+}
+
+function closeMarketplaceModal() {
+    const backdrop = document.getElementById("marketplace-modal-backdrop");
+    if (backdrop) backdrop.setAttribute("hidden", "");
+}
+
+async function renderMarketplace() {
+    const container = document.getElementById("marketplace-list");
+    const hint = document.getElementById("marketplace-hint");
+    if (!container) return;
+    container.innerHTML = `<div class="marketplace-empty">Loading plugins…</div>`;
+    let data;
+    try {
+        const res = await fetch(`${API_BASE}/marketplace/list`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        data = await res.json();
+    } catch (e) {
+        container.innerHTML = `<div class="marketplace-empty">Could not load marketplace: ${escapeHtml(e.message)}</div>`;
+        return;
+    }
+
+    if (hint) {
+        if (data.mode === "saas") {
+            hint.innerHTML = `Install plugins to add them to your working system. Custom formulas become available from any cell, and specialist agents appear in the router.`;
+        } else {
+            hint.innerHTML = `Open-source mode — every plugin shipped in <code>plugins/</code> is auto-loaded at server boot. This catalog is a discovery surface; toggles persist per-user in SaaS mode.`;
+        }
+    }
+
+    const plugins = data.plugins || [];
+    if (plugins.length === 0) {
+        container.innerHTML = `<div class="marketplace-empty">No plugins found. Drop a package into <code>plugins/</code> and restart the server.</div>`;
+        return;
+    }
+
+    container.innerHTML = "";
+    plugins.forEach((p) => container.appendChild(renderMarketplaceCard(p, data.mode)));
+}
+
+function renderMarketplaceCard(plugin, mode) {
+    const wrap = document.createElement("div");
+    wrap.className = "marketplace-card" + (plugin.installed ? " installed" : "");
+
+    // Type badges — one per surface the plugin provides (formula / agent /
+    // model / template). Plural-aware label with count.
+    const typeBadges = [];
+    const badge = (kind, label, list) => {
+        if (!list || !list.length) return;
+        const count = list.length;
+        const text = count === 1 ? label : `${count} ${label}s`;
+        typeBadges.push(
+            `<span class="marketplace-tag ${kind}" title="${escapeHtml(list.join(', '))}">${escapeHtml(text)}</span>`
+        );
+    };
+    badge("formula", "Formula", plugin.formulas);
+    badge("agent", "Agent", plugin.agents);
+    badge("model", "Model", plugin.models);
+    badge("template", "Template", plugin.templates);
+
+    const btnLabel = plugin.installed ? "Remove" : "Install";
+    const btnClass = plugin.installed ? "ghost-btn" : "primary-btn";
+    const errorBlock = plugin.error
+        ? `<div class="marketplace-card-error">Load error: ${escapeHtml(plugin.error)}</div>`
+        : "";
+
+    wrap.innerHTML = `
+        <div class="marketplace-card-head">
+            <h4>${escapeHtml(plugin.name)}</h4>
+            <span class="marketplace-card-category">${escapeHtml(plugin.category || "utility")}</span>
+        </div>
+        ${typeBadges.length ? `<div class="marketplace-tags">${typeBadges.join("")}</div>` : ""}
+        <div class="marketplace-card-desc">${escapeHtml(plugin.description || "")}</div>
+        <div class="marketplace-card-meta">
+            <code>${escapeHtml(plugin.slug)}</code>
+            <span>v${escapeHtml(plugin.version || "0.0.1")}</span>
+            ${plugin.author ? `<span>by ${escapeHtml(plugin.author)}</span>` : ""}
+        </div>
+        ${errorBlock}
+        <div class="marketplace-card-footer">
+            <span style="font-size:11px;color:#5f6368;">${plugin.loaded ? "Loaded" : (plugin.error ? "Failed to load" : "Not loaded")}</span>
+            <button type="button" class="${btnClass}" data-action="toggle">${btnLabel}</button>
+        </div>
+    `;
+
+    wrap.querySelector('[data-action="toggle"]')?.addEventListener("click", async (ev) => {
+        const btn = ev.currentTarget;
+        btn.disabled = true;
+        btn.textContent = plugin.installed ? "Removing…" : "Installing…";
+        try {
+            const res = await fetch(`${API_BASE}/marketplace/toggle`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ slug: plugin.slug, installed: !plugin.installed }),
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.detail || `HTTP ${res.status}`);
+            }
+            await renderMarketplace();
+        } catch (e) {
+            btn.disabled = false;
+            btn.textContent = btnLabel;
+            alert(`Could not ${plugin.installed ? "remove" : "install"} plugin: ${e.message}`);
+        }
+    });
+
+    return wrap;
 }
 
 // ======== Library ========

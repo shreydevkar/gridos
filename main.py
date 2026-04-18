@@ -21,6 +21,7 @@ from core.engine import GridOSKernel
 from core.functions import FormulaEvaluator
 from core.macros import MacroError, compile_macro
 from core.models import AgentIntent, WriteResponse
+from core.plugins import PluginKernel, discover_and_load as discover_plugins, load_manifests as load_plugin_manifests
 from core.providers import (
     AnthropicProvider,
     GeminiProvider,
@@ -61,6 +62,29 @@ HERO_TOOLS_CATALOG = [
 
 app = FastAPI(title="GridOS - Agentic Workbook")
 AGENTS = load_agents()
+
+# Plugin loader — walks `plugins/<slug>/plugin.py`, registers formulas/agents/models.
+# Default on; flip GRIDOS_PLUGINS_ENABLED=false to disable entirely (e.g. if a
+# bad plugin is crashing boot and you need to triage). One plugin's failure
+# never aborts the loader; errors surface via GET /plugins.
+PLUGINS_DIR = Path("plugins")
+_PLUGINS_ENABLED_ENV = os.environ.get("GRIDOS_PLUGINS_ENABLED")
+PLUGINS_ENABLED = (
+    _PLUGINS_ENABLED_ENV.strip().lower() in ("1", "true", "yes", "on")
+    if _PLUGINS_ENABLED_ENV is not None
+    else True
+)
+if PLUGINS_ENABLED:
+    PLUGIN_KERNEL = discover_plugins(PLUGINS_DIR)
+    for _plugin_agent_id, _plugin_agent_spec in PLUGIN_KERNEL.agents.items():
+        AGENTS[_plugin_agent_id] = _plugin_agent_spec
+    MODEL_CATALOG.extend(PLUGIN_KERNEL.models)
+    for _rec in PLUGIN_KERNEL.records:
+        print(f"[plugins] loaded {_rec.slug}: formulas={_rec.formulas} agents={_rec.agents} models={_rec.models}")
+    for _err in PLUGIN_KERNEL.errors:
+        print(f"[plugins] ERROR in {_err['plugin']}: {_err['error']}")
+else:
+    PLUGIN_KERNEL = PluginKernel()
 
 # Per-request kernel resolution. In OSS there's exactly one workbook state and
 # _default_kernel is it. In SaaS we keep a pool of GridOSKernel instances keyed
@@ -1052,6 +1076,17 @@ async def healthz():
     return {"ok": True}
 
 
+@app.get("/plugins")
+async def list_plugins():
+    """Introspect what the plugin loader saw at boot — what loaded, what
+    failed. Useful for plugin authors to debug a bad register() call."""
+    return {
+        "enabled": PLUGINS_ENABLED,
+        "loaded": [r.to_dict() for r in PLUGIN_KERNEL.records],
+        "errors": PLUGIN_KERNEL.errors,
+    }
+
+
 @app.get("/")
 async def serve_landing():
     return FileResponse("static/landing.html")
@@ -1596,6 +1631,35 @@ async def update_range(
         return {"status": "Success", "target": target, "sheet": req.sheet or kernel.active_sheet}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class CellFormatRequest(BaseModel):
+    cells: List[str]
+    decimals: Optional[int] = None  # None clears the per-cell override
+    sheet: Optional[str] = None
+
+
+@app.post("/grid/format")
+async def set_cell_format(
+    req: CellFormatRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
+    """Set per-cell display decimals on one or more cells. Render-only —
+    underlying values stay precise so formula references aren't truncated.
+    Accepts decimals=None to reset a cell back to raw display."""
+    decimals = req.decimals
+    if decimals is not None:
+        # Clamp to a sensible range — Excel allows 0..30; we mirror that to
+        # stop a typo like decimals=999 from running away in the UI.
+        if not isinstance(decimals, int) or decimals < 0 or decimals > 30:
+            raise HTTPException(status_code=400, detail="decimals must be an integer between 0 and 30, or null to reset")
+    updated = []
+    for cell_a1 in req.cells:
+        try:
+            updated.append(kernel.set_cell_format(cell_a1.upper(), decimals, sheet_name=req.sheet))
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "Success", "updated": updated, "sheet": req.sheet or kernel.active_sheet}
 
 
 @app.get("/auth/whoami")
@@ -2327,6 +2391,77 @@ async def delete_api_key(
     return {"status": "Success", "provider": provider_id}
 
 
+# ---------- Marketplace: plugins ----------
+
+
+@app.get("/marketplace/list")
+async def marketplace_list(user: AuthUser = Depends(require_user)):
+    """Every plugin shipped in `plugins/` with a per-user `installed` flag.
+
+    OSS mode: all plugins are effectively installed (no per-user state) — the
+    UI can still render the catalog as a discovery surface but toggles are
+    no-ops. SaaS mode: installed flag comes from `public.user_plugins`."""
+    manifests = load_plugin_manifests(PLUGINS_DIR)
+    loaded_slugs = {r.slug for r in PLUGIN_KERNEL.records}
+    # Pull formulas/agents/models registered per plugin off the PluginRecord so
+    # the UI can render per-surface type badges (Formula / Agent / Model).
+    loaded_by_slug = {r.slug: r for r in PLUGIN_KERNEL.records}
+    # Mark which plugins actually survived the boot loader — if manifest.json
+    # exists but register() blew up, the card should tell the user.
+    load_errors = {e["plugin"]: e["error"] for e in PLUGIN_KERNEL.errors}
+
+    if cloud_config.SAAS_MODE:
+        from cloud import marketplace as _marketplace
+        installed = _marketplace.list_installed(user.id) if user and user.id else set()
+    else:
+        # OSS — every loaded plugin is "installed" from the user's POV.
+        installed = set(loaded_slugs)
+
+    out = []
+    for m in manifests:
+        slug = m["slug"]
+        rec = loaded_by_slug.get(slug)
+        out.append({
+            **m,
+            "installed": slug in installed,
+            "loaded": slug in loaded_slugs,
+            "error": load_errors.get(slug),
+            "formulas": list(rec.formulas) if rec else [],
+            "agents": list(rec.agents) if rec else [],
+            "models": list(rec.models) if rec else [],
+        })
+    return {
+        "plugins": out,
+        "plugins_enabled": PLUGINS_ENABLED,
+        "mode": "saas" if cloud_config.SAAS_MODE else "oss",
+    }
+
+
+class MarketplaceToggleRequest(BaseModel):
+    slug: str
+    installed: bool
+
+
+@app.post("/marketplace/toggle")
+async def marketplace_toggle(
+    req: MarketplaceToggleRequest,
+    user: AuthUser = Depends(require_user),
+):
+    """Install or uninstall a plugin for the current user. OSS mode: no-op
+    (plugins are always globally available). SaaS mode: upsert/delete row in
+    `public.user_plugins`."""
+    manifests = {m["slug"]: m for m in load_plugin_manifests(PLUGINS_DIR)}
+    if req.slug not in manifests:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {req.slug}")
+    if not cloud_config.SAAS_MODE:
+        return {"status": "Success", "slug": req.slug, "installed": True, "mode": "oss"}
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Sign in to manage plugins.")
+    from cloud import marketplace as _marketplace
+    _marketplace.set_installed(user.id, req.slug, req.installed)
+    return {"status": "Success", "slug": req.slug, "installed": req.installed}
+
+
 @app.get("/models/available")
 async def list_available_models(user: AuthUser = Depends(require_user)):
     """Every model whose provider currently has a working key. The UI uses this to
@@ -2350,13 +2485,41 @@ async def list_available_models(user: AuthUser = Depends(require_user)):
 
 
 @app.get("/tools/list")
-async def list_tools():
+async def list_tools(user: AuthUser = Depends(require_user)):
+    """List primitives + macros + hero tools the user has access to.
+
+    Plugin-registered formulas are filtered by the user's marketplace installs:
+    - OSS mode → everything from loaded plugins is shown (no per-user state).
+    - SaaS mode → only formulas from plugins the user has installed.
+    Execution of plugin formulas is NOT gated — existing cells continue to
+    evaluate whatever is in the global registry. This filter is visibility-only
+    so uninstalling doesn't break workbooks that already reference the formula.
+    """
+    # Map plugin-provided formula names to the slug that registered them, so we
+    # can drop formulas whose plugin is not installed for this user.
+    plugin_formula_to_slug: dict[str, str] = {}
+    for rec in PLUGIN_KERNEL.records:
+        for fname in rec.formulas:
+            plugin_formula_to_slug[fname.upper()] = rec.slug
+
+    if cloud_config.SAAS_MODE and user and user.id:
+        from cloud import marketplace as _marketplace
+        installed_slugs = _marketplace.list_installed(user.id)
+    else:
+        installed_slugs = {r.slug for r in PLUGIN_KERNEL.records}
+
+    primitives = []
+    for name in _builtin_primitive_names():
+        upper = name.upper()
+        if upper in _macro_names():
+            continue
+        owning_slug = plugin_formula_to_slug.get(upper)
+        if owning_slug is not None and owning_slug not in installed_slugs:
+            continue
+        primitives.append({"name": name, "builtin": True})
+
     return {
-        "primitives": [
-            {"name": name, "builtin": True}
-            for name in _builtin_primitive_names()
-            if name.upper() not in _macro_names()
-        ],
+        "primitives": primitives,
         "macros": [dict(m) for m in USER_MACROS],
         "hero_tools": [
             {

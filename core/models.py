@@ -7,6 +7,10 @@ class CellState(BaseModel):
     datatype: str = "string"  # string, int, float, boolean, loading
     locked: bool = False
     agent_owner: Optional[str] = None
+    # Display-only decimal precision. None = render the raw value verbatim.
+    # The stored `value` is never rounded — formatting is applied in the
+    # frontend at render time so downstream formula references stay precise.
+    decimals: Optional[int] = None
 
 class AgentIntent(BaseModel):
     agent_id: str

@@ -1,0 +1,7 @@
+{
+  "name": "Black-Scholes Options Pricing",
+  "description": "European-option pricing via the Black-Scholes formula. Exposes =BLACK_SCHOLES(S, K, T, r, sigma, type) where type is 'call' or 'put'.",
+  "category": "finance",
+  "author": "GridOS",
+  "version": "0.1.0"
+}

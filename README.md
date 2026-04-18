@@ -49,6 +49,11 @@ Run the migrations in `cloud/migrations/` (numbered `0001_init.sql`, `0002_usage
 ### `/core/workbook_store.py` — Persistence seam
 `WorkbookStore` protocol with two implementations: `FileWorkbookStore` (OSS, flat files on disk) and `SupabaseWorkbookStore` (SaaS). Endpoints call `store.save(scope, state_dict)` without branching on mode.
 
+### `/plugins` — Extensibility surface
+Drop a directory into `plugins/` with `plugin.py` + `manifest.json` and GridOS auto-loads it on boot. A plugin's `register(kernel)` function can register custom formulas (`@kernel.formula("BLACK_SCHOLES")`), specialist agents (`kernel.agent({...})`), and provider models (`kernel.model({...})`). Example plugins ship in-tree — see [`plugins/hello_world`](./plugins/hello_world), [`plugins/black_scholes`](./plugins/black_scholes), and [`plugins/real_estate`](./plugins/real_estate). Full authoring guide: [`plugins/README.md`](./plugins/README.md). Introspect what loaded (and what failed) at `GET /plugins`.
+
+In SaaS mode an in-app **Marketplace** (gear icon → grid icon in the menubar) lets users browse the vetted plugin catalog and toggle per-user installs, persisted in `public.user_plugins`.
+
 ## Capabilities
 
 - **Formula synthesis** — natural-language prompts become executable grid formulas (e.g. `=MINUS(C3, D3)`).
@@ -65,6 +70,8 @@ Run the migrations in `cloud/migrations/` (numbered `0001_init.sql`, `0002_usage
 - **Chat shortcuts** — typing `clear all` / `delete all` in the chat bypasses the LLM entirely and runs the clear-sheet command directly, so common housekeeping phrases don't burn tokens or hit provider rate limits.
 - **Preview/apply flow** — AI writes go through a preview step before committing, with a pre-apply guard that blocks formulas whose inputs are empty.
 - **Chain mode** — the agent auto-applies each step, observes formula results, and keeps going until the plan is done.
+- **String literals in formulas** — formulas accept quoted strings (`=GREET("Shrey")`, `=BLACK_SCHOLES(100, 100, 1, 0.05, 0.2, "call")`), enabling plugins that take labels or enum-style switches without needing cell references.
+- **Per-cell decimal precision** — two toolbar buttons (`.0←` / `.00→`) round the displayed number without touching the stored value, so downstream formulas still see full precision.
 
 ## Documentation
 
@@ -257,6 +264,10 @@ Render's free instances sleep after ~15 min of inactivity (~30–60s cold start 
 - [x] BYOK — per-user LLM keys stored server-side in `public.user_api_keys` (RLS), set from the in-app Settings panel
 - [x] Render deploy — `/healthz`, `render.yaml`, same-origin `API_BASE` (live at [gridos.onrender.com](https://gridos.onrender.com))
 - [x] Five-tier pricing ladder (Free / Plus / Student / Pro / Enterprise) with independent token + slot caps
+- [x] V0 plugin architecture — auto-loader for custom formulas, specialist agents, and provider models (see [`plugins/`](./plugins))
+- [x] In-app plugin marketplace (SaaS) — browse + install per-user, persisted in `public.user_plugins`, per-surface type badges (Formula / Agent / Model)
+- [x] String literals in the formula parser — plugins can take quoted args like `=BLACK_SCHOLES(..., "call")`
+- [x] Per-cell decimal display precision — toolbar buttons adjust rounding without touching stored values
 - [ ] Stripe checkout + webhook for tier upgrades (Phase 4c)
 - [ ] `.edu` / GitHub Student Pack verification for the Student tier unlock
 - [ ] Range-based vector operations and cross-sheet referencing
@@ -264,6 +275,51 @@ Render's free instances sleep after ~15 min of inactivity (~30–60s cold start 
 - [ ] Provider-native structured output (Claude tool-use / OpenAI JSON mode) for stricter JSON reliability
 - [ ] Prompt caching on Gemini + Anthropic to cut long-chain latency
 - [ ] Embedding-based agent router (needed before ~10 agents)
+
+## Contributing
+
+GridOS is open-core, and there are two ways to get involved.
+
+### 1. Core contributors
+
+Working on the kernel itself — new primitives, provider adapters, collision-engine improvements, SaaS features. Start here:
+
+- Fork the repo and follow [Running locally](#running-locally) to get the server up.
+- Read the [Architecture](#architecture) section above for a map of `core/`, `main.py`, `cloud/`, and the static frontend.
+- Run `python test_platform.py && python test_plugins.py` before sending a PR. Both are offline — no network, no LLM calls.
+- PRs welcome for anything on the [Roadmap](#roadmap) or anything you think the project is missing. Open an issue first for larger architectural changes.
+
+### 2. Plugin and extension developers
+
+Shipping standalone formulas, agents, or models without touching the core. This is the lower-friction path and is where most third-party work belongs. GridOS's plugin system is designed to make your contribution usable **immediately** after someone drops your directory into `plugins/` — no re-architecture required.
+
+**60-second plugin:**
+
+```python
+# plugins/my_pack/plugin.py
+def register(kernel):
+    @kernel.formula("BLACK_SCHOLES")
+    def black_scholes(S, K, T, r, sigma, option_type="call"):
+        ...
+
+    kernel.agent({
+        "id": "real_estate",
+        "display_name": "Real Estate Copilot",
+        "router_description": "cap rate, NOI, DSCR, pro-formas",
+        "system_prompt": "You are a real-estate underwriting specialist. ..."
+    })
+```
+
+Then `plugins/my_pack/manifest.json` with name/description/category so the marketplace can surface it. Full guide, examples, and the developer map: **[`plugins/README.md`](./plugins/README.md)**.
+
+**Developer map — where to look in the core:**
+
+| You want to add… | Look at | Seam |
+| :--- | :--- | :--- |
+| A custom formula (`=BLACK_SCHOLES`, `=GET_BTC_PRICE`) | [`core/functions.py`](./core/functions.py) | `@kernel.formula("NAME")` |
+| A specialist agent (real-estate copilot, ML-ops agent) | [`agents/__init__.py`](./agents/__init__.py) + [`agents/*.json`](./agents/) | `kernel.agent({...})` |
+| A new LLM provider or model | [`core/providers/catalog.py`](./core/providers/catalog.py) | `kernel.model({...})` |
+| State / persistence changes | [`core/workbook_store.py`](./core/workbook_store.py) | core-contributor PR (not plugin-addressable yet) |
 
 ## License
 

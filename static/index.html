@@ -948,6 +948,115 @@
             min-height: 14px;
         }
 
+        /* Marketplace modal */
+        .marketplace-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 12px;
+        }
+        .marketplace-card {
+            border: 1px solid var(--border-soft);
+            border-radius: 8px;
+            padding: 14px;
+            background: #fafafa;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            min-height: 150px;
+        }
+        .marketplace-card.installed {
+            background: #f4f8ff;
+            border-color: #c6dafc;
+        }
+        .marketplace-card-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 8px;
+        }
+        .marketplace-card-head h4 { margin: 0; font-size: 13px; flex: 1; }
+        .marketplace-card-category {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: #5f6368;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: #e8eaed;
+            border: 1px solid var(--border-soft);
+        }
+        .marketplace-tags {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        .marketplace-tag {
+            font-size: 10px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid transparent;
+        }
+        .marketplace-tag.formula {
+            background: #e6f4ea;
+            color: #137333;
+            border-color: #ceead6;
+        }
+        .marketplace-tag.agent {
+            background: #e8f0fe;
+            color: #1a73e8;
+            border-color: #c6dafc;
+        }
+        .marketplace-tag.model {
+            background: #fef3e0;
+            color: #a56300;
+            border-color: #fcdfa2;
+        }
+        .marketplace-tag.template {
+            background: #f3e8fd;
+            color: #6a3cb0;
+            border-color: #ddcaf5;
+        }
+        .marketplace-card-desc {
+            font-size: 12px;
+            color: #3c4043;
+            line-height: 1.4;
+            flex: 1;
+        }
+        .marketplace-card-meta {
+            font-size: 11px;
+            color: #5f6368;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .marketplace-card-meta code {
+            font-size: 10px;
+            padding: 1px 5px;
+            background: #fff;
+            border: 1px solid var(--border-soft);
+            border-radius: 3px;
+        }
+        .marketplace-card-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        .marketplace-card-error {
+            font-size: 11px;
+            color: #b3261e;
+        }
+        .marketplace-empty {
+            text-align: center;
+            padding: 40px 20px;
+            color: #5f6368;
+            font-size: 13px;
+        }
+
         .library-list-item.is-preset {
             border-left: 3px solid #1a73e8;
             background: #f4f8ff;
@@ -1875,6 +1984,26 @@
 
         .ghost-btn:hover { background: var(--bg-hover); }
 
+        /* ===== Decimal-format toolbar buttons ===== */
+        .decimal-btn {
+            min-width: 36px;
+            font-size: 11px;
+            font-weight: 500;
+            color: #3c4043;
+        }
+        .decimal-btn .decimal-glyph {
+            display: inline-flex;
+            align-items: baseline;
+            gap: 2px;
+            font-family: var(--font-mono, monospace);
+            letter-spacing: -0.2px;
+        }
+        .decimal-btn .decimal-arrow {
+            font-size: 10px;
+            color: #5f6368;
+        }
+        .decimal-btn:hover .decimal-arrow { color: #1a73e8; }
+
         /* ===== Context menu ===== */
         .ctx-menu {
             position: fixed;
@@ -2027,8 +2156,18 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 7v6h-6"/><path d="M3 17a9 9 0 0 1 15-6.7L21 13"/></svg>
                 </button>
                 <div class="menubar-divider"></div>
+                <button class="icon-btn decimal-btn" id="decimal-decrease-btn" title="Decrease decimal places" type="button">
+                    <span class="decimal-glyph">.0<span class="decimal-arrow">←</span></span>
+                </button>
+                <button class="icon-btn decimal-btn" id="decimal-increase-btn" title="Increase decimal places" type="button">
+                    <span class="decimal-glyph">.00<span class="decimal-arrow">→</span></span>
+                </button>
+                <div class="menubar-divider"></div>
                 <button class="icon-btn" id="settings-btn" title="Settings (API keys)" type="button">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                </button>
+                <button class="icon-btn" id="marketplace-btn" title="Plugin marketplace" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
                 </button>
                 <div class="menubar-spacer"></div>
                 <button class="menubar-ai-btn" id="assistant-toggle" type="button">
@@ -2346,6 +2485,26 @@
                     after you save a valid key.
                 </p>
                 <div id="settings-providers-list" class="settings-providers"></div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Marketplace modal: browse + install plugins -->
+    <div class="chart-modal-backdrop" id="marketplace-modal-backdrop" hidden>
+        <div class="library-modal" role="dialog" aria-modal="true" aria-labelledby="marketplace-modal-title">
+            <div class="library-modal-header">
+                <h3 id="marketplace-modal-title">Plugin marketplace</h3>
+                <button class="icon-btn" id="marketplace-modal-close" type="button" title="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <section class="library-tab-panel active">
+                <p class="hint" id="marketplace-hint" style="margin-top:0;">
+                    Add specialist agents and custom formulas to your workbook. Install what you want —
+                    the formulas show up as first-class primitives (e.g. <code>=BLACK_SCHOLES(...)</code>)
+                    and the agents become available to the router.
+                </p>
+                <div id="marketplace-list" class="marketplace-list"></div>
             </section>
         </div>
     </div>

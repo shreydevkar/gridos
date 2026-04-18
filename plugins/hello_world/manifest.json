@@ -1,0 +1,7 @@
+{
+  "name": "Hello World",
+  "description": "Minimal plugin template — exposes =GREET(name) and a friendly 'greeter' agent. Copy this directory as the starting point for your own plugin.",
+  "category": "examples",
+  "author": "GridOS",
+  "version": "0.1.0"
+}

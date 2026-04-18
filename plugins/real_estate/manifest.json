@@ -1,0 +1,7 @@
+{
+  "name": "Real Estate Copilot",
+  "description": "Specialized agent for real-estate underwriting (cap rate, NOI, cash-on-cash, DSCR) plus a =CAP_RATE(noi, price) formula for quick cells.",
+  "category": "finance",
+  "author": "GridOS",
+  "version": "0.1.0"
+}

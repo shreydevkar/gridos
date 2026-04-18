@@ -2,6 +2,7 @@ import json
 import re
 import uuid
 from copy import deepcopy
+from typing import Optional
 
 from core.functions import FormulaEvaluator
 from core.models import AgentIntent, CellState, ChartSpec
@@ -13,9 +14,10 @@ class _FormulaParseError(Exception):
 
 
 _TOKEN_PATTERN = re.compile(
-    r"(?P<NUMBER>\d+\.\d*|\.\d+|\d+)"
-    r"|(?P<CELL>[A-Z]+\d+)"
-    r"|(?P<NAME>[A-Z_][A-Z0-9_]*)"
+    r'(?P<STRING>"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')'
+    r"|(?P<NUMBER>\d+\.\d*|\.\d+|\d+)"
+    r"|(?P<CELL>[A-Za-z]+\d+)"
+    r"|(?P<NAME>[A-Za-z_][A-Za-z0-9_]*)"
     r"|(?P<POW>\*\*|\^)"
     r"|(?P<OP>[+\-*/])"
     r"|(?P<LPAREN>\()"
@@ -27,19 +29,50 @@ _TOKEN_PATTERN = re.compile(
 
 
 def _tokenize_formula(src: str):
+    """Tokenize a GridOS cell formula.
+
+    NAME and CELL tokens are case-insensitive (normalized to upper), but STRING
+    contents are preserved verbatim so plugins like =GREET("Shrey") see the
+    caller's exact text.
+    """
     tokens = []
     pos = 0
-    upper_src = src.upper()
-    while pos < len(upper_src):
-        match = _TOKEN_PATTERN.match(upper_src, pos)
+    while pos < len(src):
+        match = _TOKEN_PATTERN.match(src, pos)
         if not match:
             raise _FormulaParseError(f"Unexpected character at position {pos}: {src[pos]!r}")
         kind = match.lastgroup
-        if kind != "WS":
-            tokens.append((kind, match.group()))
+        if kind == "WS":
+            pos = match.end()
+            continue
+        value = match.group()
+        if kind in ("CELL", "NAME"):
+            value = value.upper()
+        tokens.append((kind, value))
         pos = match.end()
     tokens.append(("EOF", ""))
     return tokens
+
+
+_STRING_ESCAPES = {"\\n": "\n", "\\t": "\t", "\\\"": "\"", "\\'": "'", "\\\\": "\\"}
+
+
+def _unquote_string(raw: str) -> str:
+    """Strip surrounding quotes and decode a small set of escapes."""
+    body = raw[1:-1]
+    if "\\" not in body:
+        return body
+    out = []
+    i = 0
+    while i < len(body):
+        if body[i] == "\\" and i + 1 < len(body):
+            pair = body[i:i + 2]
+            out.append(_STRING_ESCAPES.get(pair, pair[1]))
+            i += 2
+        else:
+            out.append(body[i])
+            i += 1
+    return "".join(out)
 
 
 class _ExpressionEvaluator:
@@ -126,6 +159,10 @@ class _ExpressionEvaluator:
         if kind == "NUMBER":
             self._advance()
             return float(text) if "." in text else int(text)
+
+        if kind == "STRING":
+            self._advance()
+            return _unquote_string(text)
 
         if kind == "CELL":
             self._advance()
@@ -373,6 +410,24 @@ class GridOSKernel:
     def write_user_cell(self, target_a1: str, raw_value, user_id: str = "User", sheet_name: str | None = None) -> str:
         return self.write_user_range(target_a1, [[raw_value]], user_id=user_id, sheet_name=sheet_name)
 
+    def set_cell_format(self, target_a1: str, decimals: Optional[int], sheet_name: str | None = None) -> dict:
+        """Set the per-cell display decimals. None clears the override.
+
+        Mutates ONLY the format — value/formula/datatype/locked are untouched,
+        so downstream formula references see the same precise number. If the
+        cell does not yet exist, an empty cell is materialized so the format
+        sticks if the user later types a number into it.
+        """
+        state = self._sheet_state(sheet_name)
+        cells = state["cells"]
+        coords = a1_to_coords(target_a1)
+        existing = cells.get(coords)
+        if existing is None:
+            cells[coords] = CellState(value="", decimals=decimals)
+        else:
+            existing.decimals = decimals
+        return {"cell": target_a1, "decimals": decimals}
+
     def write_user_range(self, target_a1: str, payload: list[list], user_id: str = "User", sheet_name: str | None = None) -> str:
         state = self._sheet_state(sheet_name)
         start_r, start_c = a1_to_coords(target_a1)
@@ -404,13 +459,18 @@ class GridOSKernel:
                     formula_str = val
                     computed_val = self._evaluate_formula_string(val, r, c, sheet_name)
 
-                existing_locked = cells.get((r, c)).locked if (r, c) in cells and cells[(r, c)].locked else False
+                existing_cell = cells.get((r, c))
+                existing_locked = existing_cell.locked if existing_cell and existing_cell.locked else False
+                # Preserve display-format on overwrite — the user set "show 2 decimals"
+                # and shouldn't lose it just because the underlying value changed.
+                existing_decimals = existing_cell.decimals if existing_cell else None
                 cells[(r, c)] = CellState(
                     value=computed_val,
                     formula=formula_str,
                     datatype=type(computed_val).__name__,
                     locked=existing_locked,
                     agent_owner=agent_id,
+                    decimals=existing_decimals,
                 )
 
         self._rebuild_dependencies(sheet_name)
