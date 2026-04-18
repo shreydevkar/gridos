@@ -39,7 +39,7 @@ Everything here stays dormant unless `SAAS_MODE=true`. The public OSS path impor
 - **Multi-workbook storage** (`cloud/supabase_store.py`) — each user's workbooks live in `public.workbooks.grid_state` (jsonb), protected by row-level security. A landing-page workbook picker handles list / create / rename / delete.
 - **Bring-your-own-key LLMs** (`cloud/user_keys.py`) — each user enters their own Gemini/Anthropic/Groq/OpenRouter key from the in-app Settings panel; rows live in `public.user_api_keys` behind RLS. The operator never pays LLM bills — the product is GridOS itself (cloud save, multi-workbook, agentic UX), not the tokens.
 - **Per-user kernel isolation** (`main.py` kernel pool) — a `ContextVar`-bound kernel per `(user_id, workbook_id)`, LRU-capped at 64. Two tabs on different workbooks (or two users on the same process) never step on each other's in-memory state.
-- **Per-tier quotas** (`cloud/config.py`) — two independent caps per subscription tier. **Monthly agentic tokens** (`free=100k`, `pro=5M`, `enterprise=unlimited`) are the product limit — enforced at `/agent/chat` with a 402 at the cap, even though the user is paying their own LLM bill, so tiers stay meaningful. **Cloud workbook slots** (`free=3`, `pro=50`, `enterprise=unlimited`) cap per-user storage.
+- **Per-tier quotas** (`cloud/config.py`) — four subscription tiers with two independent caps. **Monthly agentic tokens** (`free=100k`, `plus=1M`, `pro=5M`, `enterprise=unlimited`) are the product limit — enforced at `/agent/chat` with a 402 at the cap, even though the user is paying their own LLM bill, so tiers stay meaningful. **Cloud workbook slots** (`free=3`, `plus=10`, `pro=50`, `enterprise=unlimited`) cap per-user storage.
 - **Usage analytics** — every successful LLM response logs to `public.usage_logs`; a Postgres trigger rolls it into `public.user_usage` for the account popover's progress bar.
 
 Run the migrations in `cloud/migrations/` (numbered `0001_init.sql`, `0002_usage_rollup.sql`, …) in the Supabase SQL Editor before pointing a server at your project.
@@ -163,12 +163,14 @@ SUPABASE_JWT_SECRET=<JWT secret>             # server-side token verification
 
 Each tier still has a monthly **agentic-token budget** that caps how many tokens the product will run on the user's key (see `cloud/config.py`). This is the SaaS paywall, not an operator-cost control — the user pays the LLM bill either way, but upgrading unlocks a bigger budget of agentic automation.
 
-Optional tuning (defaults shown):
+Optional tuning (defaults shown — `enterprise` is always unlimited on both axes):
 
 ```
 FREE_TIER_MONTHLY_TOKENS=100000    # monthly agentic-token budget; 0 = unlimited
+PLUS_TIER_MONTHLY_TOKENS=1000000
 PRO_TIER_MONTHLY_TOKENS=5000000
 FREE_TIER_MAX_WORKBOOKS=3          # cloud storage slots per user; 0 = unlimited
+PLUS_TIER_MAX_WORKBOOKS=10
 PRO_TIER_MAX_WORKBOOKS=50
 ```
 

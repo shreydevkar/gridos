@@ -76,37 +76,48 @@ def _env_int(name: str, default: int) -> int:
 # Monthly per-tier token caps. These are **product** tier limits, not
 # operator-cost controls — GridOS SaaS is BYOK so the user pays their own
 # LLM bills, but each tier still gets a monthly budget of agentic tokens as
-# part of the plan (Free = try-it amount, Pro = serious-use amount,
-# Enterprise = unlimited). Enforced in /agent/chat and /agent/chat/chain
-# via cloud/usage.over_quota_check() which returns 402 at the cap; the
-# account popover's progress bar renders the usage-to-cap ratio.
+# part of the plan. Enforced in /agent/chat and /agent/chat/chain via
+# cloud/usage.over_quota_check() which returns 402 at the cap; the account
+# popover's progress bar renders the usage-to-cap ratio.
+#
+# Tier psychology (4-price anchor + "contact us"):
+#   Free       → try-it amount; hit a real ceiling quickly
+#   Plus       → low-friction entry paid tier; removes Free's pain
+#   Pro        → main plan; anchored so it looks like the sweet spot
+#   Enterprise → unlimited; makes Pro look reasonable
 #
 # 0 means unlimited (enterprise, and anyone overriding via env for dev).
-FREE_TIER_MONTHLY_TOKENS: int = _env_int("FREE_TIER_MONTHLY_TOKENS", 100_000)
-PRO_TIER_MONTHLY_TOKENS: int = _env_int("PRO_TIER_MONTHLY_TOKENS", 5_000_000)
+FREE_TIER_MONTHLY_TOKENS: int = _env_int("FREE_TIER_MONTHLY_TOKENS",   100_000)
+PLUS_TIER_MONTHLY_TOKENS: int = _env_int("PLUS_TIER_MONTHLY_TOKENS", 1_000_000)
+PRO_TIER_MONTHLY_TOKENS:  int = _env_int("PRO_TIER_MONTHLY_TOKENS",  5_000_000)
 
 # Cloud workbook slots per tier. 0 means unlimited (enterprise).
-FREE_TIER_MAX_WORKBOOKS: int = _env_int("FREE_TIER_MAX_WORKBOOKS", 3)
-PRO_TIER_MAX_WORKBOOKS: int = _env_int("PRO_TIER_MAX_WORKBOOKS", 50)
+FREE_TIER_MAX_WORKBOOKS: int = _env_int("FREE_TIER_MAX_WORKBOOKS",  3)
+PLUS_TIER_MAX_WORKBOOKS: int = _env_int("PLUS_TIER_MAX_WORKBOOKS", 10)
+PRO_TIER_MAX_WORKBOOKS:  int = _env_int("PRO_TIER_MAX_WORKBOOKS",  50)
 
 
 def tier_limit(tier: str) -> int:
     """Monthly token cap for the given subscription tier. 0 means unlimited."""
     t = (tier or "free").lower()
-    if t == "pro":
-        return PRO_TIER_MONTHLY_TOKENS
     if t == "enterprise":
         return 0  # unlimited
+    if t == "pro":
+        return PRO_TIER_MONTHLY_TOKENS
+    if t == "plus":
+        return PLUS_TIER_MONTHLY_TOKENS
     return FREE_TIER_MONTHLY_TOKENS
 
 
 def max_workbooks(tier: str) -> int:
     """Workbook-slot cap for the given subscription tier. 0 means unlimited."""
     t = (tier or "free").lower()
-    if t == "pro":
-        return PRO_TIER_MAX_WORKBOOKS
     if t == "enterprise":
         return 0
+    if t == "pro":
+        return PRO_TIER_MAX_WORKBOOKS
+    if t == "plus":
+        return PLUS_TIER_MAX_WORKBOOKS
     return FREE_TIER_MAX_WORKBOOKS
 
 
