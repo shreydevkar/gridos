@@ -73,19 +73,17 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Monthly per-tier token caps for quota enforcement. 0 (or a value read as
-# non-positive) means "unlimited".
+# Monthly per-tier token caps. These are **product** tier limits, not
+# operator-cost controls — GridOS SaaS is BYOK so the user pays their own
+# LLM bills, but each tier still gets a monthly budget of agentic tokens as
+# part of the plan (Free = try-it amount, Pro = serious-use amount,
+# Enterprise = unlimited). Enforced in /agent/chat and /agent/chat/chain
+# via cloud/usage.over_quota_check() which returns 402 at the cap; the
+# account popover's progress bar renders the usage-to-cap ratio.
 #
-# Default is 0 (unlimited) because GridOS SaaS is BYOK — each user brings
-# their own LLM keys via the Settings panel; rows live in
-# `public.user_api_keys`. The operator never pays LLM bills, so token caps
-# would be punishing users for using their own paid accounts. We still log
-# every call to `public.usage_logs` for the account popover's analytics.
-#
-# Set these to non-zero if you want soft abuse protection (e.g. a runaway
-# loop burning server CPU on model requests, even if tokens are user-paid).
-FREE_TIER_MONTHLY_TOKENS: int = _env_int("FREE_TIER_MONTHLY_TOKENS", 0)
-PRO_TIER_MONTHLY_TOKENS: int = _env_int("PRO_TIER_MONTHLY_TOKENS", 0)
+# 0 means unlimited (enterprise, and anyone overriding via env for dev).
+FREE_TIER_MONTHLY_TOKENS: int = _env_int("FREE_TIER_MONTHLY_TOKENS", 100_000)
+PRO_TIER_MONTHLY_TOKENS: int = _env_int("PRO_TIER_MONTHLY_TOKENS", 5_000_000)
 
 # Cloud workbook slots per tier. 0 means unlimited (enterprise).
 FREE_TIER_MAX_WORKBOOKS: int = _env_int("FREE_TIER_MAX_WORKBOOKS", 3)
