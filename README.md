@@ -33,7 +33,14 @@ A FastAPI app that:
 Minimal HTML + vanilla JS + Tailwind UI for editing cells, previewing AI suggestions, and managing sheets.
 
 ### `/cloud` — Managed (SaaS) tier, optional
-Everything here stays dormant unless `SAAS_MODE=true`. The public OSS path imports nothing from this folder into the hot loop — the only always-mounted endpoint is `GET /cloud/status`, which the frontend reads on bootstrap to decide whether to surface login / billing UI. When enabled, `cloud/supabase_store.py` (backed by Supabase Postgres + RLS) replaces the flat-file persistence layer so each user's workbooks live in the cloud. Run `cloud/migrations/0001_init.sql` in the Supabase SQL Editor before pointing a server at your project.
+Everything here stays dormant unless `SAAS_MODE=true`. The public OSS path imports nothing from this folder into the hot loop — the only always-mounted endpoint is `GET /cloud/status`, which the frontend reads on bootstrap to decide whether to surface login / billing UI. When enabled, the cloud tier adds:
+
+- **Supabase JWT auth** (`cloud/auth.py`) — email/password + Google OAuth, routes ES256/RS256 tokens through JWKS and HS256 through a shared secret.
+- **Multi-workbook storage** (`cloud/supabase_store.py`) — each user's workbooks live in `public.workbooks.grid_state` (jsonb), protected by row-level security. A landing-page workbook picker handles list / create / rename / delete.
+- **Per-tier quotas** (`cloud/usage.py` + `cloud/config.py`) — monthly token caps and cloud-workbook slot caps per subscription tier (`free`, `pro`, `enterprise`). Quota checks run before every LLM call and return 402 when exceeded.
+- **Usage analytics** — every successful LLM response logs to `public.usage_logs`; a Postgres trigger rolls it into `public.user_usage` for the account popover's progress bar.
+
+Run the migrations in `cloud/migrations/` (numbered `0001_init.sql`, `0002_usage_rollup.sql`, …) in the Supabase SQL Editor before pointing a server at your project.
 
 ### `/core/workbook_store.py` — Persistence seam
 `WorkbookStore` protocol with two implementations: `FileWorkbookStore` (OSS, flat files on disk) and `SupabaseWorkbookStore` (SaaS). Endpoints call `store.save(scope, state_dict)` without branching on mode.
@@ -49,7 +56,9 @@ Everything here stays dormant unless `SAAS_MODE=true`. The public OSS path impor
 - **Preset templates** — built-in starters (Simple DCF, Monthly Budget, Break-Even, Loan Amortization, Income Statement) plus user-saved templates, with origin badges to tell them apart.
 - **Collision resolution** — shifts data to avoid overwriting occupied or locked cells.
 - **Cell locking** — users can mark ranges read-only so the AI can't touch them.
-- **State persistence** — workbooks serialize to `.gridos` files; import/export via the File menu.
+- **State persistence** — workbooks serialize to `.gridos` files; import/export via the File menu. In SaaS mode, save also writes to Supabase so the workbook (and its chat thread) roam across browsers.
+- **`.xlsx` round-trip** — download any workbook as `.xlsx` (openpyxl) and drag into Google Sheets, or import an Excel file back into GridOS to replace the current workbook's contents.
+- **Chat shortcuts** — typing `clear all` / `delete all` in the chat bypasses the LLM entirely and runs the clear-sheet command directly, so common housekeeping phrases don't burn tokens or hit provider rate limits.
 - **Preview/apply flow** — AI writes go through a preview step before committing, with a pre-apply guard that blocks formulas whose inputs are empty.
 - **Chain mode** — the agent auto-applies each step, observes formula results, and keeps going until the plan is done.
 
@@ -61,7 +70,8 @@ Everything here stays dormant unless `SAAS_MODE=true`. The public OSS path impor
 | LLM providers | Google Gemini (`google-genai`), Anthropic Claude (`anthropic`), Groq + OpenRouter (`openai` SDK pointed at their OpenAI-compatible endpoints) |
 | API | FastAPI + Uvicorn |
 | Frontend | HTML + vanilla JS + Chart.js |
-| Persistence | Custom `.gridos` file format |
+| Persistence (OSS) | Custom `.gridos` file format (+ `.xlsx` round-trip via `openpyxl`) |
+| Persistence (SaaS) | Supabase Postgres + RLS (`public.workbooks`, `public.users`, `public.usage_logs`) |
 
 ## Running locally
 
@@ -126,6 +136,50 @@ Open http://127.0.0.1:8000. The model picker in the chat composer lists every mo
 
 Add more by editing `core/providers/catalog.py`. The UI picks them up on next page load as long as the owning provider has a configured key.
 
+## Running as a hosted SaaS
+
+The cloud tier is optional — set `SAAS_MODE=true` and point the server at a Supabase project, and every request is auth-gated, multi-tenant, and quota-tracked.
+
+### One-time Supabase setup
+
+1. Create a Supabase project.
+2. Open **SQL Editor** and run `cloud/migrations/0001_init.sql` (tables + RLS) and `cloud/migrations/0002_usage_rollup.sql` (usage trigger) in order.
+3. **Authentication → Providers** — enable Email and (optionally) Google. Google needs a Google Cloud Console OAuth 2.0 Client with `https://<project>.supabase.co/auth/v1/callback` as an authorized redirect URI.
+4. **Project Settings → API** — copy the `URL`, `anon public` key, `service_role` key, and `JWT Secret`.
+
+### Required env
+
+```
+SAAS_MODE=true
+SUPABASE_URL=https://<project>.supabase.co
+SUPABASE_ANON_KEY=<anon public key>         # browser-safe, RLS enforced
+SUPABASE_SERVICE_ROLE_KEY=<service role key> # SERVER ONLY, bypasses RLS
+SUPABASE_JWT_SECRET=<JWT secret>             # server-side token verification
+```
+
+Plus at least one LLM provider key from the OSS list above. Optional tuning:
+
+```
+FREE_TIER_MONTHLY_TOKENS=100000    # 0 = unlimited (disables enforcement)
+PRO_TIER_MONTHLY_TOKENS=5000000
+FREE_TIER_MAX_WORKBOOKS=3          # 0 = unlimited
+PRO_TIER_MAX_WORKBOOKS=50
+```
+
+### Deploying to Render (free tier)
+
+Render's free web service is a good fit — the FastAPI backend serves the static frontend directly, so no separate static host is needed.
+
+1. Push the repo to GitHub.
+2. Create a Render **Web Service** pointed at the repo.
+   - Build: `pip install -r requirements.txt`
+   - Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+   - Health check path: `/healthz`
+3. Paste every env var from above into Render's dashboard (never commit them).
+4. Deploy. Render assigns a `*.onrender.com` URL; add it to Supabase **Authentication → URL Configuration → Site URL** so OAuth redirects resolve.
+
+Render's free instances sleep after ~15 min of inactivity (~30–60s cold start on first hit). Point a free UptimeRobot monitor at `/healthz` every 5 minutes to keep the dyno warm during the day.
+
 ## GridOS UI Pictures:
 <img width="1920" height="1095" alt="Screenshot 2026-04-17 171916" src="https://github.com/user-attachments/assets/2b69ef11-69b0-4fce-8415-b29166e3dbd3" />
 
@@ -145,6 +199,10 @@ Add more by editing `core/providers/catalog.py`. The UI picks them up on next pa
 - [x] Chat thread persists with the workbook — survives reload + `.gridos` export/import
 - [x] Pre-apply formula-dependency guard (blocks `#DIV/0!` before it hits the sheet)
 - [x] Router call pinned to fastest small model for ~40% wall-clock speedup
+- [x] `.xlsx` round-trip (openpyxl) for Excel + Google Sheets interop
+- [x] Optional SaaS tier: Supabase auth, multi-workbook cloud storage, per-tier token + slot quotas, usage analytics
+- [ ] Per-user kernel isolation — server currently holds one global kernel per process, so concurrent SaaS users on the same worker can collide (blocking before a public URL)
+- [ ] Stripe checkout + webhook for tier upgrades (Phase 4c)
 - [ ] Range-based vector operations and cross-sheet referencing
 - [ ] External connectors (stock / weather / etc.)
 - [ ] Provider-native structured output (Claude tool-use / OpenAI JSON mode) for stricter JSON reliability
