@@ -6,7 +6,11 @@ class GroqProvider(Provider):
     display_name = "Groq"
 
     _BASE_URL = "https://api.groq.com/openai/v1"
-    _MAX_TOKENS = 4096
+    # Multi-intent agent responses (e.g. a 25-rectangle 3-statement model)
+    # comfortably push 6–8K tokens of JSON. 4096 was capping them mid-payload
+    # → finish_reason=length → empty text → 422. 16K leaves headroom for the
+    # biggest realistic deliverables; Groq supports up to 32K on most models.
+    _MAX_TOKENS = 16384
 
     def __init__(self, api_key: str):
         super().__init__(api_key)

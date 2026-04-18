@@ -724,14 +724,17 @@ Proposed macros are NOT saved automatically — the user reviews and approves th
 """.strip()
 
 
-# Router prefers the fastest configured small model — classification is trivial
-# and doesn't need frontier quality. Wall-clock savings are visible on every chat.
+# Router prefers the fastest configured small NON-REASONING model. Classification
+# is trivial and doesn't need frontier quality OR chain-of-thought — and reasoning
+# models (gpt-oss-20b, gpt-oss-120b) silently burn the entire output budget on
+# <thinking> tokens before producing the one-word agent id, hitting finish_reason
+# =length. Llama 3.1 8B is small, fast, and writes the answer immediately.
 # Ordered fastest-first; first entry whose provider has a key wins.
 _ROUTER_MODEL_PREFERENCE = [
-    ("openai/gpt-oss-20b", "groq"),              # ~1000 tps
-    ("llama-3.1-8b-instant", "groq"),            # ~560 tps
+    ("llama-3.1-8b-instant", "groq"),            # ~560 tps, no reasoning overhead
     ("gemini-3.1-flash-lite-preview", "gemini"), # Google's fastest
     ("claude-haiku-4-5-20251001", "anthropic"),  # Anthropic's fastest
+    ("meta-llama/llama-3.2-3b-instruct:free", "openrouter"),  # tiny + free fallback
 ]
 
 
