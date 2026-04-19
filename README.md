@@ -2,6 +2,8 @@
 
 > **Live SaaS**: [gridos.onrender.com](https://gridos.onrender.com) · **Docs**: [gridos.mintlify.app](https://gridos.mintlify.app) · **Quickstart**: [gridos.mintlify.app/quickstart](https://gridos.mintlify.app/quickstart)
 
+![GridOS demo — build a model by talking to the sheet](./assets/demo.gif)
+
 GridOS pairs a deterministic Python kernel with an LLM to build a spreadsheet you can edit by talking to it. Agents read the current grid state, return structured JSON write-intents, and the kernel previews, collision-checks, and applies them — so the AI can edit the sheet without clobbering locked or occupied cells.
 
 Bring-your-own-key: plug in **Google Gemini**, **Anthropic Claude**, **Groq**, or **OpenRouter** from the in-app settings panel and switch models per-request from the chat composer. Start a fresh workbook by describing what you want to build from the landing page, or open a template — same backend, either entry point.
