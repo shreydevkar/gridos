@@ -41,6 +41,7 @@ class Provider:
         model: str,
         system_instruction: str,
         user_message: str,
+        max_output_tokens: Optional[int] = None,
     ) -> ProviderResponse:
         raise NotImplementedError
 

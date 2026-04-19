@@ -33,9 +33,11 @@ class OpenRouterProvider(Provider):
         model: str,
         system_instruction: str,
         user_message: str,
+        max_output_tokens: int | None = None,
     ) -> ProviderResponse:
         # openai>=2.0 deprecated `max_tokens` in favor of `max_completion_tokens`.
         # Try the new name first, fall back to the legacy name for older SDKs.
+        effective_max = max_output_tokens if max_output_tokens is not None else self._MAX_TOKENS
         create_kwargs = dict(
             model=model,
             messages=[
@@ -46,12 +48,12 @@ class OpenRouterProvider(Provider):
         try:
             response = self._client.chat.completions.create(
                 **create_kwargs,
-                max_completion_tokens=self._MAX_TOKENS,
+                max_completion_tokens=effective_max,
             )
         except TypeError:
             response = self._client.chat.completions.create(
                 **create_kwargs,
-                max_tokens=self._MAX_TOKENS,
+                max_tokens=effective_max,
             )
 
         text = ""

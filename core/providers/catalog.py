@@ -117,7 +117,15 @@ def get_model_entry(model_id: str) -> Optional[dict]:
 
 
 def default_model_id(available_providers: set[str]) -> Optional[str]:
-    """Pick a sensible default from the first provider that has a key configured."""
+    """Pick a sensible default from the first provider that has a key configured.
+
+    Order: Gemini → Anthropic → Groq → OpenRouter. Gemini leads because Flash
+    Lite's free tier has ~250K TPM — 30x what Groq's free tier gives even on
+    their biggest models — so first-time users with a fresh Gemini key can
+    actually build a DCF or 3-statement model without hitting TPM 413s. Groq
+    is faster per-token but its 6–8K TPM free-tier cap can't fit our typical
+    agent prompt + multi-intent JSON output.
+    """
     if "gemini" in available_providers:
         return _FALLBACK_BY_PROVIDER["gemini"]
     if "anthropic" in available_providers:

@@ -25,13 +25,15 @@ class AnthropicProvider(Provider):
         model: str,
         system_instruction: str,
         user_message: str,
+        max_output_tokens: int | None = None,
     ) -> ProviderResponse:
         # Claude doesn't have a JSON-mode flag; we rely on the system prompt's
         # "OUTPUT FORMAT: strictly valid JSON" contract. `_parse_ai_response`
         # on the caller side strips ``` fences if the model wraps them.
+        effective_max = max_output_tokens if max_output_tokens is not None else self._MAX_TOKENS
         response = self._client.messages.create(
             model=model,
-            max_tokens=self._MAX_TOKENS,
+            max_tokens=effective_max,
             system=system_instruction,
             messages=[{"role": "user", "content": user_message}],
         )

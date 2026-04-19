@@ -18,8 +18,12 @@ class GeminiProvider(Provider):
         model: str,
         system_instruction: str,
         user_message: str,
+        max_output_tokens: int | None = None,
     ) -> ProviderResponse:
-        config = types.GenerateContentConfig(system_instruction=system_instruction)
+        config_kwargs = {"system_instruction": system_instruction}
+        if max_output_tokens is not None:
+            config_kwargs["max_output_tokens"] = max_output_tokens
+        config = types.GenerateContentConfig(**config_kwargs)
         response = self._client.models.generate_content(
             model=model,
             contents=user_message,

@@ -7,10 +7,14 @@ class GroqProvider(Provider):
 
     _BASE_URL = "https://api.groq.com/openai/v1"
     # Multi-intent agent responses (e.g. a 25-rectangle 3-statement model)
-    # comfortably push 6–8K tokens of JSON. 4096 was capping them mid-payload
-    # → finish_reason=length → empty text → 422. 16K leaves headroom for the
-    # biggest realistic deliverables; Groq supports up to 32K on most models.
-    _MAX_TOKENS = 16384
+    # comfortably push 6–8K tokens of JSON. Was 16384, but Groq's free-tier
+    # TPM bucket counts the RESERVED max_completion_tokens up-front — a 16K
+    # reservation on a 3.5K prompt = ~20K "requested", which blew past the
+    # 8K free-tier cap on gpt-oss-120b even for simple DCF prompts. 8192
+    # still clears multi-intent JSON in practice while halving the up-front
+    # TPM reservation. Paying-tier users can raise this per call via the
+    # `max_output_tokens` kwarg if they hit `finish_reason=length`.
+    _MAX_TOKENS = 8192
 
     def __init__(self, api_key: str):
         super().__init__(api_key)
@@ -30,7 +34,13 @@ class GroqProvider(Provider):
         model: str,
         system_instruction: str,
         user_message: str,
+        max_output_tokens: int | None = None,
     ) -> ProviderResponse:
+        # Groq's free-tier TPM counts RESERVED max_completion_tokens against the
+        # bucket up-front, so always using _MAX_TOKENS=16384 instantly blows the
+        # 6K TPM cap on tiny models like llama-3.1-8b even for router-sized
+        # prompts. Honor the caller's override when given (router passes ~64).
+        effective_max = max_output_tokens if max_output_tokens is not None else self._MAX_TOKENS
         create_kwargs = dict(
             model=model,
             messages=[
@@ -41,12 +51,12 @@ class GroqProvider(Provider):
         try:
             response = self._client.chat.completions.create(
                 **create_kwargs,
-                max_completion_tokens=self._MAX_TOKENS,
+                max_completion_tokens=effective_max,
             )
         except TypeError:
             response = self._client.chat.completions.create(
                 **create_kwargs,
-                max_tokens=self._MAX_TOKENS,
+                max_tokens=effective_max,
             )
 
         text = ""

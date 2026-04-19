@@ -540,6 +540,7 @@ def call_model(
     user_message: str,
     model_id: Optional[str] = None,
     max_attempts: int = 4,
+    max_output_tokens: Optional[int] = None,
 ):
     """Route the call through the configured provider for the requested model.
     Retries on transient errors with exponential backoff (~1s, ~2s, ~4s).
@@ -547,7 +548,13 @@ def call_model(
     The router path passes agent_id="router" — that's the only caller allowed
     to reach router_only models like llama-3.1-8b. User-facing chat calls
     can't accidentally pick those rate-capped models even via stale
-    localStorage."""
+    localStorage.
+
+    `max_output_tokens` overrides the provider's default completion cap when
+    passed. Matters for Groq, whose free-tier TPM bucket counts reserved
+    completion tokens up-front — a router call reserving 16K would 413 even
+    with a 500-token prompt. Callers that need short answers (router, etc.)
+    should pass a small cap."""
     model, provider = _resolve_model(model_id, allow_router_only=(agent_id == "router"))
 
     last_exc: Optional[Exception] = None
@@ -558,6 +565,7 @@ def call_model(
                 model=model,
                 system_instruction=system_instruction,
                 user_message=user_message,
+                max_output_tokens=max_output_tokens,
             )
             break
         except Exception as exc:
@@ -796,6 +804,10 @@ Return ONLY the lowercase agent id that best fits the task. No other text.
         system_instruction="You are a routing classifier. Respond with only a lowercase agent id.",
         user_message=instruction,
         model_id=_pick_router_model(model_id),
+        # Router answers are a single lowercase word; reserving more would
+        # blow Groq's free-tier 6K TPM bucket upfront (bucket counts reserved
+        # completion tokens, not just what the model actually emits).
+        max_output_tokens=32,
     )
     candidate = res.text.strip().lower().split()[0] if res.text else "general"
     return candidate if candidate in AGENTS else "general"
