@@ -28,6 +28,37 @@ _TOKEN_PATTERN = re.compile(
 )
 
 
+_PERCENT_SUFFIX = re.compile(r"(\d+\.\d*|\.\d+|\d+)\s*%")
+# Handles $A1, A$1, $A$1 — all three Excel absolute-ref shapes.
+_ABSOLUTE_CELL_REF = re.compile(r"\$?([A-Za-z]+)\$?(\d+)")
+_UNICODE_OP_MAP = {
+    "\u2212": "-",  # U+2212 minus sign (LLMs sometimes emit this for negatives)
+    "\u2013": "-",  # en-dash
+    "\u2014": "-",  # em-dash
+    "\u00d7": "*",  # multiplication sign
+    "\u2217": "*",  # asterisk operator
+    "\u00f7": "/",  # division sign
+}
+
+
+def _normalize_excel_formula(expr: str) -> str:
+    """Defang common Excel-isms that our parser doesn't natively accept.
+
+    LLM agents are trained on Excel examples and routinely emit formulas
+    with dollar-sign absolute refs, percent literals, or unicode math
+    operators. Rather than fail those with #PARSE_ERROR!, rewrite them
+    to their grid-native equivalents before tokenizing.
+    """
+    for src_char, dst_char in _UNICODE_OP_MAP.items():
+        if src_char in expr:
+            expr = expr.replace(src_char, dst_char)
+    # $C$5 / $C5 / C$5 → C5 (no fill-down semantics here, so $ is noise)
+    expr = _ABSOLUTE_CELL_REF.sub(r"\1\2", expr)
+    # 15% → (15*0.01), 0.5% → (0.5*0.01)
+    expr = _PERCENT_SUFFIX.sub(r"(\1*0.01)", expr)
+    return expr
+
+
 def _tokenize_formula(src: str):
     """Tokenize a GridOS cell formula.
 
@@ -511,7 +542,7 @@ class GridOSKernel:
         state = self._sheet_state(sheet_name)
         parser = _ExpressionEvaluator(self.evaluator, state, (target_r, target_c))
         try:
-            return parser.run(expr[1:])
+            return parser.run(_normalize_excel_formula(expr[1:]))
         except _FormulaParseError:
             return "#PARSE_ERROR!"
         except TypeError:
