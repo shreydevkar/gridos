@@ -485,9 +485,16 @@ def _providers_for_current_request() -> Dict[str, Provider]:
 def _resolve_model(
     model_id: Optional[str],
     providers: Optional[Dict[str, Provider]] = None,
+    *,
+    allow_router_only: bool = False,
 ) -> tuple[str, Provider]:
     """Pick a model + provider. Falls back to a sensible default if model_id is
-    missing or its provider has no key configured."""
+    missing or its provider has no key configured.
+
+    `allow_router_only=True` is set internally when this is the router call —
+    user-facing chat calls leave it False so a stale localStorage pointing at
+    a tiny rate-capped model (e.g. llama-3.1-8b-instant on Groq) silently
+    falls back to the provider default instead of 413-ing on TPM."""
     if providers is None:
         providers = _providers_for_current_request()
     configured = _configured_provider_ids(providers)
@@ -498,7 +505,11 @@ def _resolve_model(
         )
     entry = get_model_entry(model_id) if model_id else None
     if entry and entry["provider"] in providers:
-        return entry["id"], providers[entry["provider"]]
+        if entry.get("router_only") and not allow_router_only:
+            # Stale model pick — drop through to fallback rather than fail loudly.
+            entry = None
+        else:
+            return entry["id"], providers[entry["provider"]]
     fallback_id = default_model_id(configured)
     if not fallback_id:
         raise HTTPException(status_code=400, detail="No usable model available.")
@@ -531,8 +542,13 @@ def call_model(
     max_attempts: int = 4,
 ):
     """Route the call through the configured provider for the requested model.
-    Retries on transient errors with exponential backoff (~1s, ~2s, ~4s)."""
-    model, provider = _resolve_model(model_id)
+    Retries on transient errors with exponential backoff (~1s, ~2s, ~4s).
+
+    The router path passes agent_id="router" — that's the only caller allowed
+    to reach router_only models like llama-3.1-8b. User-facing chat calls
+    can't accidentally pick those rate-capped models even via stale
+    localStorage."""
+    model, provider = _resolve_model(model_id, allow_router_only=(agent_id == "router"))
 
     last_exc: Optional[Exception] = None
     response = None
@@ -2705,13 +2721,18 @@ async def marketplace_toggle(
 async def list_available_models(user: AuthUser = Depends(require_user)):
     """Every model whose provider currently has a working key. The UI uses this to
     populate the per-chat model picker. In SaaS the answer is per-user (keys live
-    in `public.user_api_keys`); in OSS it's the global disk-backed PROVIDERS."""
+    in `public.user_api_keys`); in OSS it's the global disk-backed PROVIDERS.
+
+    Models marked `router_only` (e.g. tiny rate-capped Groq models that the
+    classifier path uses internally) are filtered out — they're too small to
+    handle the agent's full system prompt and would 413 on every real chat."""
     _current_user.set(user)
     configured = _configured_provider_ids(_providers_for_current_request())
     default_id = default_model_id(configured)
     models = [
         {**entry, "available": entry["provider"] in configured}
         for entry in MODEL_CATALOG
+        if not entry.get("router_only")
     ]
     return {
         "models": models,

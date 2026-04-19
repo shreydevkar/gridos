@@ -93,6 +93,11 @@ MODEL_CATALOG: list[dict] = [
         "provider": "groq",
         "display_name": "Llama 3.1 8B (Groq, instant)",
         "description": "Llama 3.1 8B via Groq. Tiny + extremely fast; good for router/classifier calls.",
+        # Router-only — Groq's free tier caps this model at 6K TPM, which is
+        # below our agent system_instruction size (~3.5K finance prompt + ~1K
+        # output spec + grid + history). Hidden from the chat composer's model
+        # picker; the router still reaches it via _ROUTER_MODEL_PREFERENCE.
+        "router_only": True,
     },
 ]
 
