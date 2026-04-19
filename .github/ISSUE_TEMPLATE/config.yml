@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://gridos.mintlify.app
+    about: Check the docs before opening an issue — most setup questions are answered there.
+  - name: Live demo
+    url: https://gridos.onrender.com
+    about: Try GridOS live before filing a bug.

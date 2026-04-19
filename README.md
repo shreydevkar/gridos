@@ -74,6 +74,27 @@ In SaaS mode an in-app **Marketplace** (gear icon → grid icon in the menubar) 
 - **String literals in formulas** — formulas accept quoted strings (`=GREET("Shrey")`, `=BLACK_SCHOLES(100, 100, 1, 0.05, 0.2, "call")`), enabling plugins that take labels or enum-style switches without needing cell references.
 - **Per-cell decimal precision** — two toolbar buttons (`.0←` / `.00→`) round the displayed number without touching the stored value, so downstream formulas still see full precision.
 
+## How is GridOS different from X?
+
+The short version: GridOS is the only one of these that's **open-source, self-hostable, and designed as a kernel you can extend with plugins**. Everything else is a closed SaaS.
+
+| | GridOS | Excel + Copilot | Rows.com | Equals.app | Causal |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **Open source** | ✅ MIT | ❌ | ❌ | ❌ | ❌ |
+| **Self-hostable** | ✅ `uvicorn main:app` | ❌ | ❌ | ❌ | ❌ |
+| **Bring-your-own LLM key** | ✅ Gemini / Claude / Groq / OpenRouter | ❌ (Microsoft-hosted) | ❌ | ❌ | ❌ |
+| **Pluggable formulas / agents / models** | ✅ Drop a dir into `plugins/` | ❌ | Limited integrations | Limited integrations | ❌ |
+| **AI writes are preview-first, not blind** | ✅ Collision-checked + locked-cell-aware | Partial | Partial | Partial | N/A |
+| **Multi-section builds in one call** | ✅ `intents` array packs a whole model | ❌ step-by-step | ❌ | ❌ | ❌ |
+| **Free tier without credit card** | ✅ (self-host or BYOK) | Microsoft 365 required | Free tier exists | Paid | Free tier exists |
+| **Primary audience** | Developers + power users who want to extend | Microsoft 365 users | Data teams | Finance teams | Startup finance / planning |
+
+**When GridOS wins:** you want to extend the spreadsheet itself (custom formulas, domain-specific agents, connect your own models), self-host, or use LLM providers that aren't OpenAI.
+
+**When the others win:** you're already in Microsoft 365 and want AI inside the exact spreadsheet your team is already using (Copilot); you're building dashboards with live integrations to Stripe/HubSpot/Postgres without code (Rows); you're a finance team that wants a Google-Sheets-like collaborative SaaS with database-backed cells (Equals); you're building startup financial models with variables and scenarios (Causal).
+
+GridOS doesn't try to be the best finance planning tool or the best dashboard tool. It tries to be **the best spreadsheet-shaped surface for developers to build on top of**, and a usable AI spreadsheet as a side-effect.
+
 ## Documentation
 
 Full docs live at **[gridos.mintlify.app](https://gridos.mintlify.app)**. Jumping-off points:
