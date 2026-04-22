@@ -1,0 +1,7 @@
+{
+  "name": "Shopify",
+  "description": "Import live Shopify store metrics into cells: =SHOPIFY_REVENUE, =SHOPIFY_ORDER_COUNT, =SHOPIFY_AVG_ORDER_VALUE, =SHOPIFY_PRODUCT_COUNT. Configure via SHOPIFY_STORE_DOMAIN + SHOPIFY_ADMIN_TOKEN env vars.",
+  "category": "integrations",
+  "author": "GridOS",
+  "version": "0.1.0"
+}
