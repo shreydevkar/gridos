@@ -2,7 +2,9 @@ import json
 import os
 import random
 import re
+import sys
 import time
+import uuid
 from collections import OrderedDict
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -17,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from agents import load_agents
-from core.engine import GridOSKernel
+from core.engine import GridOSKernel, VersionConflict
 from core.functions import FormulaEvaluator
 from core.macros import MacroError, compile_macro
 from core.models import AgentIntent, WriteResponse
@@ -642,26 +644,75 @@ class CellUpdateRequest(BaseModel):
     cell: str
     value: Optional[str] = ""
     sheet: Optional[str] = None
+    # Optional {a1: version} map for optimistic concurrency. If supplied and
+    # the stored version disagrees, the kernel raises VersionConflict and the
+    # endpoint returns 409.
+    expected_versions: Optional[Dict[str, int]] = None
 
 
 class RangeUpdateRequest(BaseModel):
     target_cell: str
     values: list[list[str | int | float | bool | None]]
     sheet: Optional[str] = None
+    expected_versions: Optional[Dict[str, int]] = None
 
 
 class PreviewApplyRequest(BaseModel):
     sheet: Optional[str] = None
-    agent_id: str
-    # Single-rectangle path (legacy, still valid for simple writes)
+    agent_id: Optional[str] = None
+    # Server-minted token from /agent/chat. When present, the server ignores
+    # any client-supplied target_cell/values/intents and commits the exact
+    # payload the user saw in the preview — the guardrail's whole point.
+    preview_token: Optional[str] = None
+    # Legacy single-rectangle path. Kept for OSS-mode tests and for back-compat
+    # with older clients; SaaS mode refuses apply without a preview_token.
     target_cell: Optional[str] = None
     values: Optional[list[list]] = None
-    # Multi-rectangle path — list of {target_cell, values} dicts, applied
-    # in order so later intents can reference cells written by earlier ones.
-    # When intents is set, target_cell/values at the top level are ignored.
     intents: Optional[list[Dict[str, Any]]] = None
     shift_direction: str = "right"
     chart_spec: Optional[Dict[str, Any]] = None
+
+
+# ---------- Preview stash (guardrail) ----------
+#
+# Every /agent/chat response is stamped with a preview_token and the exact
+# payload the user will see. On /agent/apply the server re-reads that payload
+# from the stash — the client cannot substitute different values after the
+# fact, which is the whole point of the preview gate. Tokens are single-use,
+# TTL-bounded, and bounded in count so a flood of previews can't leak memory.
+_PREVIEW_TTL_SECONDS = 15 * 60
+_PREVIEW_STASH_MAX = 512
+_preview_stash: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
+_preview_stash_lock = Lock()
+
+
+def _preview_stash_put(payload: dict) -> str:
+    token = uuid.uuid4().hex
+    now = time.time()
+    with _preview_stash_lock:
+        # Opportunistic eviction — cheaper than a background sweeper and the
+        # stash never grows beyond a few hundred entries in practice.
+        cutoff = now - _PREVIEW_TTL_SECONDS
+        stale = [k for k, (ts, _) in _preview_stash.items() if ts < cutoff]
+        for k in stale:
+            _preview_stash.pop(k, None)
+        while len(_preview_stash) >= _PREVIEW_STASH_MAX:
+            _preview_stash.popitem(last=False)
+        _preview_stash[token] = (now, payload)
+    return token
+
+
+def _preview_stash_consume(token: str) -> Optional[dict]:
+    """Single-use lookup — popping here means a user can't double-apply the
+    same preview, which otherwise could race with a concurrent edit."""
+    with _preview_stash_lock:
+        entry = _preview_stash.pop(token, None)
+    if entry is None:
+        return None
+    ts, payload = entry
+    if time.time() - ts > _PREVIEW_TTL_SECONDS:
+        return None
+    return payload
 
 
 class SheetCreateRequest(BaseModel):
@@ -745,6 +796,22 @@ If the user asks for a NEW named formula/metric that is not already listed in US
     "body": "=DIVIDE(MINUS(A, B), A)"   // MUST only call registered primitives. Nested primitive calls ARE allowed here (this is the one place nesting is permitted — macro bodies are composed expressions). No infix operators, no references to other user macros.
 }
 Proposed macros are NOT saved automatically — the user reviews and approves them. In the SAME response, do NOT write any cell values that call the proposed macro (it isn't registered yet). Keep "values" null or write unrelated cells. The user will re-ask after approval to use the new macro.
+
+If the user asks for a named formula that is NOT expressible as a pure composition of registered primitives (e.g. it needs external HTTP, a SaaS API, local compute like regex or HTTP fetch, or domain logic more complex than arithmetic) — so a macro_spec wouldn't cut it — you MAY instead propose a full plugin by filling in plugin_spec:
+{
+    "slug": "my_plugin",               // lowercase letters/digits/underscore, starts with a letter
+    "name": "My Plugin",
+    "description": "One-line pitch.",
+    "example_formula": "=MY_ADD(2, 3)", // shown back to the user so they know how to call it after install
+    "plugin_py": "def register(kernel):\\n    @kernel.formula(\\"MY_ADD\\")\\n    def add(a, b):\\n        return a + b\\n"
+}
+Rules for plugin_py:
+- MUST define a top-level `register(kernel)` that registers every formula via `@kernel.formula(\"NAME\")`.
+- MUST be self-contained — only stdlib imports (or explicitly available third-party libs the server already has).
+- MUST NOT import filesystem-mutating or network-destructive modules beyond what's needed.
+- Return scalar/string values from formulas (no 2D arrays — spreadsheet cells are single-valued).
+- On auth/offline/remote failure, return a sentinel string like "#MYPLUGIN_AUTH!" — do NOT return fake numbers.
+Proposed plugins are NOT auto-installed. The user reviews the code in a preview card and clicks "Install" explicitly. In the SAME response, do NOT call the new formula from any cell — it isn't registered yet; values should be null. The user will re-ask after install to actually use it.
 """.strip()
 
 
@@ -1024,6 +1091,38 @@ def _normalize_multi_intents(raw: Any) -> list[dict]:
     return out
 
 
+def _validate_proposed_plugin(raw: Any) -> tuple[Optional[dict], Optional[str]]:
+    """Shape-check an agent-proposed plugin without executing it.
+
+    We deliberately do NOT exec the code — that's the install step, gated by
+    explicit user approval through /dev/plugins/upload. Here we just confirm
+    the JSON shape is sane so the frontend can render it in the preview card.
+    """
+    if not raw or not isinstance(raw, dict):
+        return None, None
+    slug = str(raw.get("slug") or "").strip().lower()
+    plugin_py = str(raw.get("plugin_py") or "")
+    if not slug or not plugin_py:
+        return None, "Plugin proposal missing slug or plugin_py."
+    if not _SLUG_RE.match(slug):
+        return None, f"Invalid plugin slug {slug!r}: must be lowercase letters/digits/underscores, start with a letter."
+    if "def register" not in plugin_py:
+        return None, "Plugin proposal must define a register(kernel) function."
+    # Syntax-check so the agent can't propose broken Python and waste a preview
+    # turn. The user will see this error in the card immediately.
+    try:
+        compile(plugin_py, f"<proposed:{slug}>", "exec")
+    except SyntaxError as e:
+        return None, f"Plugin proposal SyntaxError: {e.msg} (line {e.lineno})"
+    return {
+        "slug": slug,
+        "name": str(raw.get("name") or slug).strip(),
+        "description": str(raw.get("description") or "").strip(),
+        "example_formula": str(raw.get("example_formula") or "").strip(),
+        "plugin_py": plugin_py,
+    }, None
+
+
 def _validate_proposed_macro(raw: Any) -> tuple[Optional[dict], Optional[str]]:
     """Dry-compile an agent-proposed macro. Returns (normalized_spec, error_message)."""
     if not raw or not isinstance(raw, dict):
@@ -1103,6 +1202,7 @@ def generate_agent_preview(req: ChatRequest) -> dict:
     raw_intents = ai_data.get("intents")
     chart_spec = ai_data.get("chart_spec")
     proposed_macro, macro_error = _validate_proposed_macro(ai_data.get("macro_spec"))
+    proposed_plugin, plugin_error = _validate_proposed_plugin(ai_data.get("plugin_spec"))
     plan = _sanitize_plan(ai_data.get("plan"))
     fallback_target = req.selected_cells[0] if req.selected_cells else "A1"
 
@@ -1143,7 +1243,7 @@ def generate_agent_preview(req: ChatRequest) -> dict:
                 ),
             )
 
-        return {
+        response = {
             "category": agent_id,
             "reasoning": ai_data.get("reasoning"),
             "sheet": sheet,
@@ -1158,8 +1258,20 @@ def generate_agent_preview(req: ChatRequest) -> dict:
             "chart_spec": chart_spec,
             "proposed_macro": proposed_macro,
             "macro_error": macro_error,
+            "proposed_plugin": proposed_plugin,
+            "plugin_error": plugin_error,
             "plan": plan,
         }
+        response["preview_token"] = _preview_stash_put({
+            "sheet": sheet,
+            "agent_id": agent_id,
+            "intents": echoed_intents,
+            "target_cell": None,
+            "values": None,
+            "chart_spec": chart_spec,
+            "shift_direction": "right",
+        })
+        return response
 
     has_values = isinstance(raw_values, list) and any(
         any(v not in ("", None) for v in row) for row in raw_values if isinstance(row, list)
@@ -1171,7 +1283,7 @@ def generate_agent_preview(req: ChatRequest) -> dict:
         #   2. Chart-only / macro-proposal-only turn.
         #   3. Plan-declaration turn that deferred the first write.
         # The UI hides the Apply button when values is null and no chart is attached.
-        return {
+        response = {
             "category": agent_id,
             "reasoning": ai_data.get("reasoning"),
             "sheet": sheet,
@@ -1185,8 +1297,22 @@ def generate_agent_preview(req: ChatRequest) -> dict:
             "chart_spec": chart_spec,
             "proposed_macro": proposed_macro,
             "macro_error": macro_error,
+            "proposed_plugin": proposed_plugin,
+            "plugin_error": plugin_error,
             "plan": plan,
         }
+        # Stash for chart-only approvals; no-op responses (pure ack) still get
+        # a token but it's cheap and avoids client branching.
+        response["preview_token"] = _preview_stash_put({
+            "sheet": sheet,
+            "agent_id": agent_id,
+            "intents": None,
+            "target_cell": None,
+            "values": None,
+            "chart_spec": chart_spec,
+            "shift_direction": "right",
+        })
+        return response
 
     intent = AgentIntent(
         agent_id=agent_id,
@@ -1215,7 +1341,7 @@ def generate_agent_preview(req: ChatRequest) -> dict:
             ),
         )
 
-    return {
+    response = {
         "category": agent_id,
         "reasoning": ai_data.get("reasoning"),
         "sheet": sheet,
@@ -1229,8 +1355,23 @@ def generate_agent_preview(req: ChatRequest) -> dict:
         "chart_spec": chart_spec,
         "proposed_macro": proposed_macro,
         "macro_error": macro_error,
+        "proposed_plugin": proposed_plugin,
+        "plugin_error": plugin_error,
         "plan": plan,
     }
+    response["preview_token"] = _preview_stash_put({
+        "sheet": sheet,
+        "agent_id": agent_id,
+        "intents": None,
+        # Stash the ORIGINAL request (e.g. "A1") not the collision-resolved
+        # target — process_agent_intent will re-resolve on apply so two rapid
+        # approvals against a dirty grid still find free space.
+        "target_cell": preview["original_target"],
+        "values": raw_values,
+        "chart_spec": chart_spec,
+        "shift_direction": "right",
+    })
+    return response
 
 
 # ---------- Endpoints ----------
@@ -1254,6 +1395,147 @@ async def list_plugins():
         "loaded": [r.to_dict() for r in PLUGIN_KERNEL.records],
         "errors": PLUGIN_KERNEL.errors,
     }
+
+
+# ---------- Developer plugin portal ----------
+#
+# In-UI surface for devs to upload/manage/test plugins without pushing to the
+# repo. Gated by GRIDOS_DEV_PORTAL_ENABLED because uploading Python = full RCE
+# on the server process. OSS users can opt in; SaaS refuses unconditionally
+# (the marketplace is the sanctioned path there).
+DEV_PORTAL_ENABLED = os.environ.get("GRIDOS_DEV_PORTAL_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+_SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{1,39}$")
+
+
+class DevPluginUploadRequest(BaseModel):
+    slug: str
+    manifest: Dict[str, Any] = {}
+    plugin_py: str
+
+
+class DevPluginTestRequest(BaseModel):
+    formula: str  # e.g. "GREET(\"world\")"
+
+
+def _dev_portal_guard():
+    if cloud_config.SAAS_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail="Developer portal is disabled in SaaS. Ship plugins via the marketplace.",
+        )
+    if not DEV_PORTAL_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="Developer portal is off. Set GRIDOS_DEV_PORTAL_ENABLED=1 and restart.",
+        )
+
+
+def _reload_plugin_slug(slug: str) -> dict:
+    """Re-run discover_and_load for a single slug and splice the result into
+    the running kernel. Formulas are idempotent (dict overwrite); agents and
+    models get merged in. Returns the record or the error dict."""
+    fresh = discover_plugins(PLUGINS_DIR, only={slug})
+    # Drop any stale record for this slug from the global list so /plugins
+    # reflects the reload.
+    PLUGIN_KERNEL.records[:] = [r for r in PLUGIN_KERNEL.records if r.slug != slug]
+    PLUGIN_KERNEL.errors[:] = [e for e in PLUGIN_KERNEL.errors if e.get("plugin") != slug]
+    PLUGIN_KERNEL.records.extend(fresh.records)
+    PLUGIN_KERNEL.errors.extend(fresh.errors)
+    for agent_id, spec in fresh.agents.items():
+        AGENTS[agent_id] = spec
+        PLUGIN_KERNEL.agents[agent_id] = spec
+    MODEL_CATALOG.extend(fresh.models)
+    PLUGIN_KERNEL.models.extend(fresh.models)
+    if fresh.records:
+        return {"ok": True, "record": fresh.records[0].to_dict()}
+    if fresh.errors:
+        return {"ok": False, "error": fresh.errors[0]}
+    return {"ok": False, "error": {"plugin": slug, "error": "no register() call found"}}
+
+
+@app.post("/dev/plugins/upload")
+async def dev_plugin_upload(req: DevPluginUploadRequest):
+    _dev_portal_guard()
+    if not _SLUG_RE.match(req.slug):
+        raise HTTPException(
+            status_code=400,
+            detail="slug must match [a-z][a-z0-9_]{1,39} — lowercase, starts with a letter.",
+        )
+    target_dir = PLUGINS_DIR / req.slug
+    target_dir.mkdir(parents=True, exist_ok=True)
+    # Write manifest first — if the caller didn't send one, fabricate a minimal
+    # one so the loader has metadata to show in /plugins.
+    manifest = dict(req.manifest or {})
+    manifest.setdefault("name", req.slug)
+    manifest.setdefault("description", "Uploaded via developer portal.")
+    manifest.setdefault("category", "custom")
+    manifest.setdefault("author", "local")
+    manifest.setdefault("version", "0.1.0")
+    (target_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    (target_dir / "plugin.py").write_text(req.plugin_py, encoding="utf-8")
+
+    # Evict the previous module import so exec_module actually re-runs. Without
+    # this, Python caches the old module and the reload looks like a no-op.
+    sys.modules.pop(f"_gridos_plugin_{req.slug}", None)
+    result = _reload_plugin_slug(req.slug)
+    status = 200 if result.get("ok") else 400
+    return Response(
+        content=json.dumps(result),
+        status_code=status,
+        media_type="application/json",
+    )
+
+
+@app.delete("/dev/plugins/{slug}")
+async def dev_plugin_delete(slug: str):
+    _dev_portal_guard()
+    if not _SLUG_RE.match(slug):
+        raise HTTPException(status_code=400, detail="invalid slug")
+    target_dir = PLUGINS_DIR / slug
+    if not target_dir.exists():
+        raise HTTPException(status_code=404, detail="plugin not found")
+    # Pull formulas this plugin registered out of the live FORMULA_REGISTRY.
+    from core.functions import _REGISTRY as FORMULA_REGISTRY
+    record = next((r for r in PLUGIN_KERNEL.records if r.slug == slug), None)
+    if record:
+        for fname in record.formulas:
+            FORMULA_REGISTRY.pop(fname, None)
+        for agent_id in record.agents:
+            AGENTS.pop(agent_id, None)
+            PLUGIN_KERNEL.agents.pop(agent_id, None)
+    PLUGIN_KERNEL.records[:] = [r for r in PLUGIN_KERNEL.records if r.slug != slug]
+    PLUGIN_KERNEL.errors[:] = [e for e in PLUGIN_KERNEL.errors if e.get("plugin") != slug]
+    sys.modules.pop(f"_gridos_plugin_{slug}", None)
+    # Remove files. shutil.rmtree is the right primitive but we avoid a new
+    # import; manually walk.
+    for p in sorted(target_dir.rglob("*"), reverse=True):
+        try:
+            p.unlink() if p.is_file() else p.rmdir()
+        except OSError:
+            pass
+    try:
+        target_dir.rmdir()
+    except OSError:
+        pass
+    return {"ok": True, "slug": slug}
+
+
+@app.post("/dev/plugins/test")
+async def dev_plugin_test(req: DevPluginTestRequest):
+    _dev_portal_guard()
+    # Run the expression through the engine in an ephemeral kernel so the
+    # caller's live workbook isn't touched. Prefixes `=` if missing.
+    expr = req.formula.strip()
+    if not expr.startswith("="):
+        expr = "=" + expr
+    probe = GridOSKernel()
+    try:
+        value = probe._evaluate_formula_string(expr, 0, 0)
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    return {"ok": True, "value": value}
 
 
 @app.get("/")
@@ -1329,6 +1611,39 @@ async def apply_agent_preview(
     req: PreviewApplyRequest,
     k: GridOSKernel = Depends(current_kernel_dep),
 ):
+    # Guardrail: if the client passes a preview_token, we re-read the payload
+    # the user actually saw and apply THAT — not whatever is in the body. This
+    # closes the "LLM/client substitutes different values post-preview" hole.
+    if req.preview_token:
+        stashed = _preview_stash_consume(req.preview_token)
+        if stashed is None:
+            raise HTTPException(
+                status_code=410,
+                detail="Preview expired or already applied. Re-ask the agent.",
+            )
+        # Server-authoritative payload. The only client-controllable field we
+        # still honor is `sheet`, because the user may have switched sheets
+        # between preview and apply — and writing to the active sheet is the
+        # intuitive expectation.
+        req = PreviewApplyRequest(
+            sheet=req.sheet or stashed["sheet"],
+            agent_id=stashed["agent_id"],
+            target_cell=stashed["target_cell"],
+            values=stashed["values"],
+            intents=stashed["intents"],
+            shift_direction=stashed["shift_direction"],
+            chart_spec=stashed["chart_spec"],
+        )
+    elif cloud_config.SAAS_MODE:
+        # In SaaS mode the token is mandatory. OSS mode keeps the legacy shape
+        # so local tests and older self-hosted clients don't break.
+        raise HTTPException(
+            status_code=400,
+            detail="Missing preview_token. SaaS mode requires the server-minted token from /agent/chat.",
+        )
+    if not req.agent_id:
+        raise HTTPException(status_code=400, detail="agent_id is required.")
+
     # Multi-intent path — apply N rectangles atomically (well, sequentially —
     # later intents may reference cells written by earlier ones).
     if req.intents:
@@ -1756,6 +2071,26 @@ async def agent_write(
     intent: AgentIntent,
     k: GridOSKernel = Depends(current_kernel_dep),
 ):
+    """Legacy un-gated write — bypasses the preview/approve guardrail.
+
+    Kept ONLY for OSS-mode integration tests (test_harness.py, test_chat.py,
+    test_recalc.py) that seed the grid before assertions. Refused in SaaS mode
+    because in production the kernel must be the sole gatekeeper and the
+    preview→apply flow is the only sanctioned path for agent-sourced writes.
+    """
+    if cloud_config.SAAS_MODE:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Direct agent writes are disabled. Use /agent/chat → /agent/apply "
+                "so every write goes through a user-approved preview."
+            ),
+        )
+    print(
+        f"[GUARDRAIL] /agent/write bypassed preview gate "
+        f"(agent_id={intent.agent_id} target={intent.target_start_a1}). "
+        f"OSS/test mode only."
+    )
     try:
         requested_a1, actual_a1 = kernel.process_agent_intent(intent)
         return WriteResponse(
@@ -1863,8 +2198,21 @@ async def update_cell(
     k: GridOSKernel = Depends(current_kernel_dep),
 ):
     try:
-        target = kernel.write_user_cell(req.cell.upper(), req.value, user_id="User", sheet_name=req.sheet)
+        target = kernel.write_user_range(
+            req.cell.upper(),
+            [[req.value]],
+            user_id="User",
+            sheet_name=req.sheet,
+            expected_versions=req.expected_versions,
+        )
         return {"status": "Success", "cell": target, "sheet": req.sheet or kernel.active_sheet}
+    except VersionConflict as vc:
+        raise HTTPException(status_code=409, detail={
+            "message": "Cell changed since you loaded it. Refresh and retry.",
+            "cell": vc.cell,
+            "expected": vc.expected,
+            "actual": vc.actual,
+        })
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -1875,8 +2223,21 @@ async def update_range(
     k: GridOSKernel = Depends(current_kernel_dep),
 ):
     try:
-        target = kernel.write_user_range(req.target_cell.upper(), req.values, user_id="User", sheet_name=req.sheet)
+        target = kernel.write_user_range(
+            req.target_cell.upper(),
+            req.values,
+            user_id="User",
+            sheet_name=req.sheet,
+            expected_versions=req.expected_versions,
+        )
         return {"status": "Success", "target": target, "sheet": req.sheet or kernel.active_sheet}
+    except VersionConflict as vc:
+        raise HTTPException(status_code=409, detail={
+            "message": "A cell in this range changed since you loaded it. Refresh and retry.",
+            "cell": vc.cell,
+            "expected": vc.expected,
+            "actual": vc.actual,
+        })
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
