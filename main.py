@@ -107,6 +107,12 @@ _current_user: ContextVar[Optional["AuthUser"]] = ContextVar("gridos_current_use
 # 'owner' so OSS and untagged SaaS paths behave as before. Read by
 # _require_editor() inside write endpoints when viewer-mode is enabled.
 _current_role: ContextVar[str] = ContextVar("gridos_current_role", default="owner")
+# Request-scoped WorkbookScope resolved by current_kernel_dep *after* the ACL
+# lookup. Endpoints MUST read from here (via _scope_from_context) instead of
+# recomputing via _scope_for(user, workbook_id) — otherwise they lose the
+# resolved owner_id and /system/save ends up upserting the row with the
+# caller's user_id, silently transferring ownership away from the owner.
+_current_scope: ContextVar[Optional["WorkbookScope"]] = ContextVar("gridos_current_scope", default=None)
 _kernel_pool: "OrderedDict[tuple[str, str], GridOSKernel]" = OrderedDict()
 _kernel_pool_lock = Lock()
 # Cap pool size so an abusive bot can't OOM the process. LRU-evict the oldest
@@ -423,7 +429,24 @@ async def current_kernel_dep(
     _current_kernel.set(k)
     _current_user.set(user)
     _current_role.set(role)
+    _current_scope.set(scope)
     return k
+
+
+def _scope_from_context() -> "WorkbookScope":
+    """Read the resolved scope set by current_kernel_dep. Endpoints that
+    persist workbook state (save, load, rename, delete) MUST use this —
+    recomputing scope via _scope_for(user, wb_id) loses the owner_id and
+    the upsert path then rewrites public.workbooks.user_id to the caller,
+    silently flipping ownership. Raises if the ContextVar is unset, which
+    means the endpoint is missing Depends(current_kernel_dep)."""
+    scope = _current_scope.get()
+    if scope is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Internal error: scope unset. Endpoint is missing Depends(current_kernel_dep).",
+        )
+    return scope
 
 
 def _require_editor() -> None:
@@ -2549,7 +2572,11 @@ async def save_grid(
     user: AuthUser = Depends(require_user),
     k: GridOSKernel = Depends(current_kernel_dep),
 ):
-    scope = _scope_for(user, workbook_id)
+    # Use the ACL-resolved scope (set by current_kernel_dep). A local
+    # _scope_for(user, workbook_id) here would drop owner_id and the
+    # upsert would rewrite user_id to the caller — silently flipping
+    # ownership away from the original owner when a collaborator saves.
+    scope = _scope_from_context()
     workbook_store.save(scope, kernel.export_state_dict())
     return {"status": "Success", "workbook_id": scope.workbook_id}
 
@@ -2560,7 +2587,7 @@ async def load_grid(
     user: AuthUser = Depends(require_user),
     k: GridOSKernel = Depends(current_kernel_dep),
 ):
-    scope = _scope_for(user, workbook_id)
+    scope = _scope_from_context()
     state = workbook_store.load(scope)
     if state is None:
         return {"status": "Error", "message": "No save file found."}
@@ -2646,7 +2673,18 @@ async def rename_workbook(
     user: AuthUser = Depends(require_user),
 ):
     _require_saas_storage()
-    scope = _scope_for(user, workbook_id)
+    # Rename is an owner-only op — we don't let editor collaborators rename
+    # someone else's workbook out from under them. Resolve ownership
+    # explicitly so the scope passed to rename() targets the correct row.
+    try:
+        access = workbook_store.resolve_workbook_access(user.id, workbook_id)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Access check failed: {e}")
+    if access is None:
+        raise HTTPException(status_code=404, detail="Workbook not found.")
+    if access["role"] != "owner":
+        raise HTTPException(status_code=403, detail="Only the workbook owner can rename.")
+    scope = _scope_for(user, workbook_id, owner_id=access["owner_id"])
     workbook_store.rename(scope, req.title)
     return {"status": "Success", "workbook_id": workbook_id, "title": req.title.strip()[:120]}
 
@@ -2657,7 +2695,17 @@ async def delete_workbook(
     user: AuthUser = Depends(require_user),
 ):
     _require_saas_storage()
-    scope = _scope_for(user, workbook_id)
+    # Same story as rename — owner-only, and the scope needs the right
+    # owner_id so the DELETE targets the real workbook row.
+    try:
+        access = workbook_store.resolve_workbook_access(user.id, workbook_id)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Access check failed: {e}")
+    if access is None:
+        raise HTTPException(status_code=404, detail="Workbook not found.")
+    if access["role"] != "owner":
+        raise HTTPException(status_code=403, detail="Only the workbook owner can delete.")
+    scope = _scope_for(user, workbook_id, owner_id=access["owner_id"])
     workbook_store.delete(scope)
     return {"status": "Success", "workbook_id": workbook_id}
 
