@@ -334,6 +334,10 @@ let scopeMode = "selection";
 let previewState = null;
 let chainMode = false;
 let assistantOpen = true;
+// When an /agent/chat or /agent/chat/chain fetch is in flight, this holds the
+// AbortController so the kill-switch in the composer can cancel it. null when
+// idle. Used by requestPreview / runChain / send-btn handler.
+let agentAbortController = null;
 let dragFillState = null;
 let resizeState = null;
 let formulaPickState = null;
@@ -1271,6 +1275,20 @@ function wireProposedMacroButtons(container, onDismiss) {
             if (onDismiss) onDismiss();
         });
     });
+    // Self-evolving formula loop: agent proposed a full plugin. Install button
+    // POSTs to /dev/plugins/upload. The button disables itself after a
+    // successful install so a double-click can't re-upload.
+    container.querySelectorAll("[data-install-plugin]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+            let spec;
+            try { spec = JSON.parse(btn.dataset.installPlugin); }
+            catch { return; }
+            btn.disabled = true;
+            btn.textContent = "Installing…";
+            await installProposedPlugin(spec);
+            btn.textContent = "Installed";
+        });
+    });
 }
 
 async function saveProposedMacro(spec, block) {
@@ -1338,6 +1356,10 @@ function buildPreviewCardBody(payload, { includeActions = true, idSuffix = "card
         ? `<div style="margin-top:8px;color:var(--danger);font-size:11px;">Macro proposal ignored: ${escapeHtml(payload.macro_error)}</div>`
         : "";
     const macroBlock = renderProposedMacroBlock(payload.proposed_macro, { idSuffix });
+    const pluginError = payload.plugin_error
+        ? `<div style="margin-top:8px;color:var(--danger);font-size:11px;">Plugin proposal ignored: ${escapeHtml(payload.plugin_error)}</div>`
+        : "";
+    const pluginBlock = renderProposedPluginBlock(payload.proposed_plugin, { idSuffix });
     const planBlock = renderPlanBlock(payload.plan);
 
     let actionsRow = "";
@@ -1365,9 +1387,69 @@ function buildPreviewCardBody(payload, { includeActions = true, idSuffix = "card
         ${planBlock}
         ${macroError}
         ${macroBlock}
+        ${pluginError}
+        ${pluginBlock}
         ${actionsRow}
     `;
     return { html, canApply };
+}
+
+function renderProposedPluginBlock(spec, options = {}) {
+    if (!spec || typeof spec !== "object") return "";
+    const suffix = options.idSuffix ? `-${options.idSuffix}` : "";
+    const btnId = `install-plugin-btn${suffix}`;
+    const slug = escapeHtml(spec.slug || "");
+    const example = spec.example_formula ? `<div style="margin-top:4px;font-family:monospace;color:var(--text-mutedder);">Usage: <code>${escapeHtml(spec.example_formula)}</code></div>` : "";
+    return `
+        <div class="proposed-macro-block" style="margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:6px;background:#fff;">
+            <div style="font-weight:600;font-size:12px;">Proposed plugin: <code>${slug}</code></div>
+            <div style="font-size:11px;color:var(--text-mutedder);margin:2px 0 6px;">${escapeHtml(spec.description || spec.name || "")}</div>
+            <pre style="background:#f5f7f9;padding:8px;border-radius:4px;font-size:11px;max-height:180px;overflow:auto;margin:0;"><code>${escapeHtml(spec.plugin_py || "")}</code></pre>
+            ${example}
+            <div style="margin-top:8px;display:flex;gap:6px;">
+                <button class="primary-btn" id="${btnId}" data-install-plugin='${escapeHtml(JSON.stringify(spec))}'>Install plugin</button>
+            </div>
+        </div>
+    `;
+}
+
+async function installProposedPlugin(spec) {
+    if (!spec || !spec.slug || !spec.plugin_py) {
+        addLog("system", "Can't install: plugin proposal is missing slug or code.");
+        return;
+    }
+    try {
+        setStatus("Installing plugin");
+        const res = await fetch(`${API_BASE}/dev/plugins/upload`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                slug: spec.slug,
+                manifest: {
+                    name: spec.name || spec.slug,
+                    description: spec.description || "Installed from agent proposal.",
+                },
+                plugin_py: spec.plugin_py,
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            const err = data.error?.error || data.detail || `HTTP ${res.status}`;
+            if (res.status === 403) {
+                addLog("system", "Plugin install disabled. Set GRIDOS_DEV_PORTAL_ENABLED=1 (OSS only) and restart.");
+            } else {
+                addLog("system", escapeHtml(`Plugin install failed: ${err}`));
+            }
+            setStatus("Recover");
+            return;
+        }
+        const registered = (data.record?.formulas || []).join(", ") || "(no formulas)";
+        addLog("system", `Plugin <code>${escapeHtml(spec.slug)}</code> installed. Registered: ${escapeHtml(registered)}. Re-ask to use it.`);
+        setStatus("Ready");
+    } catch (e) {
+        addLog("system", escapeHtml(`Plugin install failed: ${e.message}`));
+        setStatus("Recover");
+    }
 }
 
 function renderPreviewAsChatMessage() {
@@ -1469,11 +1551,14 @@ async function requestPreview() {
 
     setStatus("Thinking");
     const thinking = addLog("thinking", `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`);
+    agentAbortController = new AbortController();
+    syncSendButtonState();
     try {
         const res = await fetch(`${API_BASE}/agent/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
+            signal: agentAbortController.signal,
         });
         const data = await res.json();
         thinking.remove();
@@ -1492,8 +1577,16 @@ async function requestPreview() {
         setStatus("Awaiting approval");
     } catch (error) {
         if (thinking.parentElement) thinking.remove();
-        addLog("system", escapeHtml(`Preview failed: ${error.message}`));
-        setStatus("Recover");
+        if (error.name === "AbortError") {
+            addLog("system", "Cancelled by user.");
+            setStatus("Cancelled");
+        } else {
+            addLog("system", escapeHtml(`Preview failed: ${error.message}`));
+            setStatus("Recover");
+        }
+    } finally {
+        agentAbortController = null;
+        syncSendButtonState();
     }
 }
 
@@ -1503,12 +1596,15 @@ async function runChain(prompt, payload) {
     addLog("system", "Chain mode engaged — each step auto-applies and is observed.");
     const thinking = addLog("thinking", `<span class="dot"></span><span class="dot"></span><span class="dot"></span>`);
     const before = snapshotGrid();
+    agentAbortController = new AbortController();
+    syncSendButtonState();
 
     try {
         const res = await fetch(`${API_BASE}/agent/chat/chain`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
+            signal: agentAbortController.signal,
         });
         const data = await res.json();
         thinking.remove();
@@ -1536,8 +1632,19 @@ async function runChain(prompt, payload) {
         setStatus(`Chain finished (${data.iterations_used} step${data.iterations_used === 1 ? "" : "s"})`);
     } catch (error) {
         if (thinking.parentElement) thinking.remove();
-        addLog("system", escapeHtml(`Chain failed: ${error.message}`));
-        setStatus("Recover");
+        if (error.name === "AbortError") {
+            // Cancelled mid-chain — steps that already committed on the server
+            // are real. Refresh the grid so the UI matches server truth.
+            addLog("system", "Chain cancelled by user. Steps committed before cancel are preserved.");
+            setStatus("Cancelled");
+            await fetchGrid();
+        } else {
+            addLog("system", escapeHtml(`Chain failed: ${error.message}`));
+            setStatus("Recover");
+        }
+    } finally {
+        agentAbortController = null;
+        syncSendButtonState();
     }
 }
 
@@ -1616,23 +1723,28 @@ function renderChainSteps(data) {
 async function applyPreview() {
     if (!previewState) return;
     const before = snapshotGrid();
-    const hasChart = Boolean(previewState.chart_spec);
     const body = {
         sheet: workbook.active_sheet,
-        agent_id: previewState.agent_id,
-        shift_direction: "right",
-        chart_spec: previewState.chart_spec || null,
     };
-    // Multi-intent path — pack every rectangle the agent emitted into the
-    // apply request so the backend can write them all in one round-trip.
-    if (Array.isArray(previewState.intents) && previewState.intents.length) {
-        body.intents = previewState.intents.map((it) => ({
-            target_cell: it.original_request || it.target_cell,
-            values: it.values,
-        }));
+    // Guardrail: when the server minted a preview_token, that's ALL we send.
+    // The server re-reads the exact payload from its stash, so the client
+    // can't substitute different values between preview and apply.
+    if (previewState.preview_token) {
+        body.preview_token = previewState.preview_token;
     } else {
-        body.target_cell = previewState.original_request || previewState.target_cell || "A1";
-        body.values = Array.isArray(previewState.values) ? previewState.values : [];
+        // Fallback only for older/offline servers that don't mint tokens.
+        body.agent_id = previewState.agent_id;
+        body.shift_direction = "right";
+        body.chart_spec = previewState.chart_spec || null;
+        if (Array.isArray(previewState.intents) && previewState.intents.length) {
+            body.intents = previewState.intents.map((it) => ({
+                target_cell: it.original_request || it.target_cell,
+                values: it.values,
+            }));
+        } else {
+            body.target_cell = previewState.original_request || previewState.target_cell || "A1";
+            body.values = Array.isArray(previewState.values) ? previewState.values : [];
+        }
     }
     try {
         setStatus("Applying");
@@ -1690,12 +1802,34 @@ function autoGrowInput() {
 function syncSendButtonState() {
     const btn = document.getElementById("send-btn");
     const input = document.getElementById("assistant-input");
-    if (btn && input) btn.disabled = input.value.trim().length === 0;
+    if (!btn || !input) return;
+    if (agentAbortController) {
+        // A request is in flight — button morphs into a stop button. Always
+        // enabled so the user can cancel regardless of what's in the composer.
+        btn.classList.add("is-stop");
+        btn.disabled = false;
+        btn.title = "Stop (cancel in-flight request)";
+    } else {
+        btn.classList.remove("is-stop");
+        btn.disabled = input.value.trim().length === 0;
+        btn.title = "Send (Enter)";
+    }
 }
 
 function toggleAssistant(force) {
     assistantOpen = typeof force === "boolean" ? force : !assistantOpen;
     document.getElementById("assistant-panel").classList.toggle("hidden", !assistantOpen);
+    syncBothPanelsOpen();
+}
+
+function syncBothPanelsOpen() {
+    // When both the chat and charts panels are visible, narrow viewports need
+    // to stack charts below the workspace (see media query in index.html).
+    // Drive that with a class on .app-shell so the CSS can react purely.
+    const shell = document.querySelector(".app-shell");
+    const chartsOpen = !document.getElementById("charts-panel")?.hasAttribute("hidden");
+    if (!shell) return;
+    shell.classList.toggle("both-panels-open", Boolean(assistantOpen && chartsOpen));
 }
 
 function beginResize(kind, key, startPos) {
@@ -1920,6 +2054,55 @@ function recordAction(beforeSnapshot) {
     if (undoStack.length > UNDO_LIMIT) undoStack.shift();
     redoStack = [];
     refreshUndoRedoButtons();
+    scheduleAutoSave();
+}
+
+// ======== Auto-save ========
+// Debounced silent save so session timeouts and kernel restarts never lose
+// work. Only in SaaS mode — OSS keeps the manual export path. A single pending
+// timer; every mutation reschedules so a rapid-fire sequence of edits turns
+// into a single POST at idle, not one per keystroke.
+const AUTOSAVE_DEBOUNCE_MS = 4000;
+let autoSaveTimer = null;
+let autoSaveInFlight = false;
+let autoSaveDirty = false;
+
+function scheduleAutoSave() {
+    if (cloudStatus?.mode !== "saas") return;
+    autoSaveDirty = true;
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(runAutoSave, AUTOSAVE_DEBOUNCE_MS);
+}
+
+async function runAutoSave() {
+    autoSaveTimer = null;
+    if (!autoSaveDirty) return;
+    if (autoSaveInFlight) {
+        // Another save is still in flight — retry a bit later so we don't
+        // interleave requests against the same workbook row.
+        autoSaveTimer = setTimeout(runAutoSave, 1500);
+        return;
+    }
+    autoSaveInFlight = true;
+    autoSaveDirty = false;
+    try {
+        await flushChatPersist();
+        const qs = activeWorkbookId ? `?workbook_id=${encodeURIComponent(activeWorkbookId)}` : "";
+        const res = await fetch(`${API_BASE}/system/save${qs}`, { method: "POST" });
+        if (!res.ok) throw new Error(`Autosave failed (${res.status})`);
+        setStatus("Autosaved");
+        // Restore "Ready" after a beat so the autosave flash doesn't linger
+        // past the next user interaction.
+        setTimeout(() => { if (document.getElementById("status-pill")?.textContent === "Autosaved") setStatus("Ready"); }, 1500);
+    } catch (err) {
+        // Stay quiet in the pill (autosave is best-effort), but log so the
+        // user can see if it's been failing repeatedly.
+        addLog("system", escapeHtml(`Autosave: ${err.message}`));
+        // Re-mark dirty so the next mutation retries.
+        autoSaveDirty = true;
+    } finally {
+        autoSaveInFlight = false;
+    }
 }
 
 function refreshUndoRedoButtons() {
@@ -2561,6 +2744,9 @@ async function handleMenuAction(action) {
         case "open-library-tools":
             openLibraryModal("tools");
             break;
+        case "dev-portal":
+            openDevPortalModal();
+            break;
     }
 }
 
@@ -2800,6 +2986,134 @@ function attachSettingsEvents() {
     document.getElementById("marketplace-modal-backdrop")?.addEventListener("click", (e) => {
         if (e.target === e.currentTarget) closeMarketplaceModal();
     });
+
+    document.getElementById("devportal-modal-close")?.addEventListener("click", closeDevPortalModal);
+    document.getElementById("devportal-modal-backdrop")?.addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) closeDevPortalModal();
+    });
+    document.getElementById("devportal-upload")?.addEventListener("click", devPortalUpload);
+    document.getElementById("devportal-test")?.addEventListener("click", devPortalTest);
+}
+
+// ======== Developer plugin portal ========
+
+async function openDevPortalModal() {
+    const backdrop = document.getElementById("devportal-modal-backdrop");
+    if (!backdrop) return;
+    backdrop.removeAttribute("hidden");
+    await renderDevPortalLoadedList();
+}
+
+function closeDevPortalModal() {
+    const backdrop = document.getElementById("devportal-modal-backdrop");
+    if (backdrop) backdrop.setAttribute("hidden", "");
+}
+
+async function renderDevPortalLoadedList() {
+    const host = document.getElementById("devportal-loaded");
+    if (!host) return;
+    host.innerHTML = "Loading…";
+    try {
+        const res = await fetch(`${API_BASE}/plugins`);
+        const data = await res.json();
+        if (!data.loaded?.length) {
+            host.innerHTML = `<div class="hint" style="margin:0;">No plugins loaded.</div>`;
+            return;
+        }
+        host.innerHTML = data.loaded.map((r) => `
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border-soft);font-size:12px;">
+                <code>${escapeHtml(r.slug)}</code>
+                <span style="flex:1;color:var(--text-mutedder);">${escapeHtml((r.formulas || []).join(", ")) || "—"}</span>
+                <button class="icon-btn" data-devportal-delete="${escapeHtml(r.slug)}" title="Delete">✕</button>
+            </div>
+        `).join("");
+        host.querySelectorAll("[data-devportal-delete]").forEach((btn) => {
+            btn.addEventListener("click", () => devPortalDelete(btn.dataset.devportalDelete));
+        });
+    } catch (e) {
+        host.innerHTML = `<div class="hint" style="color:var(--danger);margin:0;">Failed to load plugins: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function devPortalUpload() {
+    const slug = (document.getElementById("devportal-slug").value || "").trim().toLowerCase();
+    const desc = (document.getElementById("devportal-desc").value || "").trim();
+    const code = document.getElementById("devportal-code").value || "";
+    const result = document.getElementById("devportal-result");
+    if (!slug || !code) {
+        result.textContent = "slug and plugin.py are required.";
+        result.style.color = "var(--danger)";
+        return;
+    }
+    result.style.color = "var(--text-mutedder)";
+    result.textContent = "Uploading…";
+    try {
+        const res = await fetch(`${API_BASE}/dev/plugins/upload`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                slug,
+                manifest: { name: slug, description: desc || "Uploaded via dev portal." },
+                plugin_py: code,
+            }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            const err = data.error?.error || data.detail || `HTTP ${res.status}`;
+            result.style.color = "var(--danger)";
+            result.textContent = `Upload failed: ${err}`;
+            return;
+        }
+        result.textContent = `Registered: ${(data.record?.formulas || []).join(", ") || "(no formulas)"}`;
+        await renderDevPortalLoadedList();
+    } catch (e) {
+        result.style.color = "var(--danger)";
+        result.textContent = `Upload failed: ${e.message}`;
+    }
+}
+
+async function devPortalTest() {
+    const formula = (document.getElementById("devportal-test-formula").value || "").trim();
+    const result = document.getElementById("devportal-result");
+    if (!formula) {
+        result.textContent = "Type a formula to test, e.g. MY_ADD(2, 3)";
+        return;
+    }
+    result.style.color = "var(--text-mutedder)";
+    result.textContent = "Running…";
+    try {
+        const res = await fetch(`${API_BASE}/dev/plugins/test`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ formula }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            result.style.color = "var(--danger)";
+            result.textContent = `Error: ${data.error || data.detail || `HTTP ${res.status}`}`;
+            return;
+        }
+        result.textContent = `=${formula} → ${JSON.stringify(data.value)}`;
+    } catch (e) {
+        result.style.color = "var(--danger)";
+        result.textContent = `Error: ${e.message}`;
+    }
+}
+
+async function devPortalDelete(slug) {
+    if (!confirm(`Delete plugin "${slug}"? This removes the directory on disk.`)) return;
+    const result = document.getElementById("devportal-result");
+    try {
+        const res = await fetch(`${API_BASE}/dev/plugins/${encodeURIComponent(slug)}`, { method: "DELETE" });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        result.style.color = "var(--text-mutedder)";
+        result.textContent = `Deleted ${slug}.`;
+        await renderDevPortalLoadedList();
+    } catch (e) {
+        result.style.color = "var(--danger)";
+        result.textContent = `Delete failed: ${e.message}`;
+    }
 }
 
 // ======== Plugin marketplace ========
@@ -3592,6 +3906,7 @@ function toggleChartsPanel(force) {
     const want = force !== undefined ? force : panel.hasAttribute("hidden");
     if (want) panel.removeAttribute("hidden");
     else panel.setAttribute("hidden", "");
+    syncBothPanelsOpen();
 }
 
 function openChartModal(existingId) {
@@ -3765,7 +4080,13 @@ async function bootstrap() {
         clearChatConversation();
     });
     const sendBtn = document.getElementById("send-btn");
-    if (sendBtn) sendBtn.addEventListener("click", requestPreview);
+    if (sendBtn) sendBtn.addEventListener("click", () => {
+        if (agentAbortController) {
+            agentAbortController.abort();
+            return;
+        }
+        requestPreview();
+    });
     const composerInput = document.getElementById("assistant-input");
     composerInput.addEventListener("input", () => {
         autoGrowInput();
@@ -3774,6 +4095,12 @@ async function bootstrap() {
     composerInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter" && !event.shiftKey) {
             event.preventDefault();
+            // Enter while a request is in flight = abort. Matches the visible
+            // stop button so either affordance cancels.
+            if (agentAbortController) {
+                agentAbortController.abort();
+                return;
+            }
             if (!event.repeat) requestPreview();
         }
     });

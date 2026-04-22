@@ -622,6 +622,11 @@
             display: flex;
             flex-direction: column;
             min-height: 0;
+            /* Same stacking-context guard as .assistant — without this the
+               grid's position:relative descendants can paint on top of the
+               charts panel when the workspace overflows. */
+            position: relative;
+            z-index: 10;
         }
         .charts-panel[hidden] { display: none; }
         .charts-panel-header {
@@ -1531,6 +1536,14 @@
             transition: flex-basis 180ms ease, width 180ms ease;
             overflow: hidden;
             min-height: 0;
+            /* Force a stacking context above .grid-wrap, which is
+               position:relative and would otherwise paint its table cells over
+               this panel when the workspace runs out of horizontal room. This
+               is what was causing the "chat goes underneath the spreadsheet"
+               regression — the grid's positioned descendants painted on top of
+               a statically-positioned sibling. */
+            position: relative;
+            z-index: 10;
         }
 
         .assistant.hidden {
@@ -1936,10 +1949,22 @@
             cursor: not-allowed;
         }
 
+        .composer-send.is-stop {
+            background: #d93025;
+            border-radius: 6px;
+        }
+
+        .composer-send.is-stop:hover { background: #b3271e; }
+        .composer-send.is-stop:disabled { background: #d93025; cursor: pointer; opacity: 1; }
+
         .composer-send svg {
             width: 16px;
             height: 16px;
         }
+
+        .composer-send .stop-icon { display: none; }
+        .composer-send.is-stop .send-icon { display: none; }
+        .composer-send.is-stop .stop-icon { display: inline; }
 
         .composer-hint {
             font-size: 10px;
@@ -2068,6 +2093,47 @@
             .assistant { --assistant-w: 320px; }
         }
 
+        /* Progressive sidebar shrink so the grid never gets squeezed to zero
+           when chat + charts are both open. Horizontal flex is preserved at
+           every breakpoint — no flex-wrap, because with `workspace { flex: 1 }`
+           the workspace would grab the whole first row and push the assistant
+           underneath the grid. */
+        @media (max-width: 1280px) {
+            :root { --assistant-w: 300px; }
+            .charts-panel { width: 280px; }
+            .workspace { min-width: 260px; }
+        }
+        @media (max-width: 1100px) {
+            :root { --assistant-w: 280px; }
+            .charts-panel { width: 260px; }
+            .workspace { min-width: 220px; }
+        }
+        @media (max-width: 960px) {
+            :root { --assistant-w: 260px; }
+            .charts-panel { width: 240px; }
+            .workspace { min-width: 180px; }
+        }
+        /* Below ~860px, horizontal layout can't fit all three even at min widths.
+           Switch to CSS Grid: workspace + assistant share row 1, charts docks
+           across row 2. Grid is deterministic — unlike flex-wrap, cells land
+           exactly where we place them. */
+        @media (max-width: 860px) {
+            .app-shell.both-panels-open {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) var(--assistant-w);
+                grid-template-rows: minmax(0, 1fr) auto;
+            }
+            .app-shell.both-panels-open .workspace { grid-column: 1; grid-row: 1; min-width: 0; }
+            .app-shell.both-panels-open .assistant { grid-column: 2; grid-row: 1; }
+            .app-shell.both-panels-open .charts-panel {
+                grid-column: 1 / -1;
+                grid-row: 2;
+                width: auto;
+                max-height: 40vh;
+                border-left: none;
+                border-top: 1px solid var(--border-soft);
+            }
+        }
         @media (max-width: 820px) {
             .assistant { display: none; }
         }
@@ -2123,6 +2189,8 @@
                         <li data-menu-action="toggle-assistant">Toggle assistant panel<span class="menu-shortcut"></span></li>
                         <li data-menu-action="toggle-charts">Toggle charts panel<span class="menu-shortcut"></span></li>
                         <li data-menu-action="reset-column-widths">Reset column widths<span class="menu-shortcut"></span></li>
+                        <li class="menu-divider" role="separator"></li>
+                        <li data-menu-action="dev-portal">Developer plugin portal…<span class="menu-shortcut"></span></li>
                     </ul>
                 </div>
                 <div class="menubar-menu-group">
@@ -2301,7 +2369,8 @@
                 <div class="composer-input-row">
                     <textarea id="assistant-input" class="assistant-input" rows="1" placeholder="Ask GridOS…"></textarea>
                     <button type="button" class="composer-send" id="send-btn" title="Send (Enter)" disabled>
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                        <svg class="send-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
+                        <svg class="stop-icon" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
                     </button>
                 </div>
                 <div class="composer-hint" id="composer-hint">Selection: A1 · Preview-safe by default</div>
@@ -2505,6 +2574,34 @@
                     and the agents become available to the router.
                 </p>
                 <div id="marketplace-list" class="marketplace-list"></div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Developer plugin portal (OSS only; gated by GRIDOS_DEV_PORTAL_ENABLED) -->
+    <div class="chart-modal-backdrop" id="devportal-modal-backdrop" hidden>
+        <div class="library-modal" role="dialog" aria-modal="true" aria-labelledby="devportal-modal-title">
+            <div class="library-modal-header">
+                <h3 id="devportal-modal-title">Developer plugin portal</h3>
+                <button class="icon-btn" id="devportal-modal-close" type="button" title="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <section class="library-tab-panel active" style="display:flex;flex-direction:column;gap:12px;">
+                <p class="hint" style="margin-top:0;">
+                    Upload a plugin directly into the running kernel. Slug must be lowercase letters/digits/underscores.
+                    The plugin.py must define <code>register(kernel)</code>. OSS-only; set <code>GRIDOS_DEV_PORTAL_ENABLED=1</code> to enable.
+                </p>
+                <div id="devportal-loaded"></div>
+                <label style="font-size:12px;font-weight:600;">Slug<input type="text" id="devportal-slug" placeholder="my_plugin" style="display:block;width:100%;margin-top:4px;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-family:monospace;" /></label>
+                <label style="font-size:12px;font-weight:600;">Description<input type="text" id="devportal-desc" placeholder="One-line pitch" style="display:block;width:100%;margin-top:4px;padding:6px 8px;border:1px solid var(--border);border-radius:4px;" /></label>
+                <label style="font-size:12px;font-weight:600;">plugin.py<textarea id="devportal-code" spellcheck="false" style="display:block;width:100%;height:180px;margin-top:4px;padding:8px;border:1px solid var(--border);border-radius:4px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;" placeholder="def register(kernel):&#10;    @kernel.formula(&quot;MY_ADD&quot;)&#10;    def add(a, b):&#10;        return a + b"></textarea></label>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <button class="primary-btn" id="devportal-upload" type="button">Upload &amp; reload</button>
+                    <input type="text" id="devportal-test-formula" placeholder='Test: MY_ADD(2, 3)' style="flex:1;padding:6px 8px;border:1px solid var(--border);border-radius:4px;font-family:monospace;" />
+                    <button class="primary-btn" id="devportal-test" type="button">Run</button>
+                </div>
+                <div id="devportal-result" style="font-family:monospace;font-size:12px;color:var(--text-mutedder);min-height:18px;"></div>
             </section>
         </div>
     </div>
