@@ -317,28 +317,62 @@ class SupabaseWorkbookStore:
 
     def list_shared_with_user(self, user_id: str) -> list[dict]:
         """Workbooks shared with this user (not owned by them). Returns
-        [{id, title, updated_at, owner_email, role}] for the Load modal."""
+        [{id, title, updated_at, owner_email, role}] for the Load modal.
+
+        Three flat queries + local stitch instead of nested PostgREST
+        embeds — the embedded `users(email)` inside `workbooks(...)` was
+        erroring out on prod (500), same class of issue as
+        list_collaborators. Volume is tiny (usually a handful of shares
+        per user), so the extra round-trips are invisible."""
         if not user_id:
             return []
-        res = (
+        # 1. Collab rows — (workbook_id, role) for this user.
+        collab_res = (
             self._client.table("workbook_collaborators")
-            .select("role, workbooks(id, title, updated_at, users(email))")
+            .select("workbook_id, role")
             .eq("user_id", user_id)
             .execute()
         )
-        out = []
-        for r in res.data or []:
-            wb = r.get("workbooks") or {}
-            owner = wb.get("users") or {}
-            if not wb.get("id"):
-                continue
-            out.append({
+        collab_rows = collab_res.data or []
+        if not collab_rows:
+            return []
+        role_by_wb = {r["workbook_id"]: r.get("role") for r in collab_rows if r.get("workbook_id")}
+        wb_ids = list(role_by_wb.keys())
+
+        # 2. Workbook metadata for those ids.
+        wb_res = (
+            self._client.table("workbooks")
+            .select("id, title, updated_at, user_id")
+            .in_("id", wb_ids)
+            .execute()
+        )
+        wb_rows = wb_res.data or []
+
+        # 3. Owner emails — single IN query across the distinct owner ids.
+        owner_ids = list({r["user_id"] for r in wb_rows if r.get("user_id")})
+        email_by_owner: dict[str, str] = {}
+        if owner_ids:
+            owners_res = (
+                self._client.table("users")
+                .select("id, email")
+                .in_("id", owner_ids)
+                .execute()
+            )
+            for u in owners_res.data or []:
+                if u.get("id"):
+                    email_by_owner[u["id"]] = u.get("email") or ""
+
+        out = [
+            {
                 "id": wb["id"],
                 "title": wb.get("title") or "Untitled workbook",
                 "updated_at": wb.get("updated_at"),
-                "owner_email": owner.get("email"),
-                "role": r.get("role"),
-            })
-        # Sort newest-first to match the owned-workbooks list ordering.
+                "owner_email": email_by_owner.get(wb.get("user_id", ""), ""),
+                "role": role_by_wb.get(wb["id"]),
+            }
+            for wb in wb_rows
+            if wb.get("id")
+        ]
+        # Newest-first to match the owned-workbooks ordering on the landing page.
         out.sort(key=lambda d: d.get("updated_at") or "", reverse=True)
         return out
