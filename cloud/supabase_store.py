@@ -214,28 +214,47 @@ class SupabaseWorkbookStore:
         """Return every collaborator on this workbook with their email. Used
         by the owner-facing Share… modal to show who has access.
 
-        Shape: [{user_id, email, role, invited_at, accepted_at}]."""
+        Shape: [{user_id, email, role, invited_at, accepted_at}].
+
+        Two queries instead of a PostgREST embedded select — the
+        workbook_collaborators table has two FKs to public.users (user_id
+        and invited_by), which makes `users(email)` ambiguous and errors
+        out with a 500. Two queries keeps it unambiguous and is cheap —
+        collaborator counts are tiny."""
         if not workbook_id:
             return []
-        # Supabase PostgREST supports embedded selects; `users(email)` expands
-        # the FK join in one round-trip so we avoid N+1 lookups.
-        res = (
+        rows_res = (
             self._client.table("workbook_collaborators")
-            .select("user_id, role, invited_at, accepted_at, users(email)")
+            .select("user_id, role, invited_at, accepted_at")
             .eq("workbook_id", workbook_id)
             .order("invited_at", desc=False)
             .execute()
         )
-        out = []
-        for r in res.data or []:
-            out.append({
+        rows = rows_res.data or []
+        if not rows:
+            return []
+        user_ids = list({r["user_id"] for r in rows if r.get("user_id")})
+        email_by_id: dict[str, str] = {}
+        if user_ids:
+            emails_res = (
+                self._client.table("users")
+                .select("id, email")
+                .in_("id", user_ids)
+                .execute()
+            )
+            for u in emails_res.data or []:
+                if u.get("id"):
+                    email_by_id[u["id"]] = u.get("email") or ""
+        return [
+            {
                 "user_id": r.get("user_id"),
-                "email": (r.get("users") or {}).get("email"),
+                "email": email_by_id.get(r.get("user_id", ""), ""),
                 "role": r.get("role"),
                 "invited_at": r.get("invited_at"),
                 "accepted_at": r.get("accepted_at"),
-            })
-        return out
+            }
+            for r in rows
+        ]
 
     def add_collaborator_by_email(
         self,
