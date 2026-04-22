@@ -400,10 +400,17 @@ async def current_kernel_dep(
         try:
             access = workbook_store.resolve_workbook_access(user.id, wb_id)
         except Exception as e:
-            # A Supabase hiccup shouldn't 500 a page load — fall back to the
-            # legacy "you own your own workbook" behavior and log.
+            # NEVER silently grant ownership on ACL failure — a previous
+            # version of this block fell back to owner=user.id, which combined
+            # with the save/upsert path could quietly transfer workbook
+            # ownership from the original owner to whichever user happened to
+            # be visiting when Supabase hiccupped. Better to 500 and refuse
+            # the request than to corrupt a workbook's user_id field.
             print(f"[acl] resolve_workbook_access failed: {e}")
-            access = {"owner_id": user.id, "role": "owner"}
+            raise HTTPException(
+                status_code=503,
+                detail="Access check failed. Refresh in a moment.",
+            )
         if access is None:
             raise HTTPException(
                 status_code=404,

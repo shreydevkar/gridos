@@ -371,7 +371,11 @@ class SupabaseWorkbookStore:
                 "role": role_by_wb.get(wb["id"]),
             }
             for wb in wb_rows
-            if wb.get("id")
+            # Filter out rows where the caller is ALSO the owner. These can
+            # arise when a stale collaborator row survives an ownership
+            # change — without this filter the UI showed the caller's own
+            # workbook as "shared with me from yourself".
+            if wb.get("id") and wb.get("user_id") != user_id
         ]
         # Newest-first to match the owned-workbooks ordering on the landing page.
         out.sort(key=lambda d: d.get("updated_at") or "", reverse=True)
