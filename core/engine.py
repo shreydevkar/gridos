@@ -1,5 +1,6 @@
 import json
 import re
+import threading
 import uuid
 from copy import deepcopy
 from typing import Optional
@@ -13,12 +14,29 @@ class _FormulaParseError(Exception):
     pass
 
 
+class VersionConflict(Exception):
+    """Raised by write_user_range when an optimistic-concurrency check fails.
+    Carries the cell id, the expected version, and the actual version so the
+    API layer can render an actionable 409 for the client."""
+    def __init__(self, cell: str, expected: int, actual: int):
+        self.cell = cell
+        self.expected = expected
+        self.actual = actual
+        super().__init__(f"Cell {cell} version {actual} does not match expected {expected}")
+
+
 _TOKEN_PATTERN = re.compile(
     r'(?P<STRING>"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')'
     r"|(?P<NUMBER>\d+\.\d*|\.\d+|\d+)"
     r"|(?P<CELL>[A-Za-z]+\d+)"
     r"|(?P<NAME>[A-Za-z_][A-Za-z0-9_]*)"
     r"|(?P<POW>\*\*|\^)"
+    # Comparison first — longest alternatives first so <> / <= / >= aren't
+    # misread as < followed by stray token. '=' appears here as equality
+    # because the leading '=' that opens every formula is stripped before
+    # tokenizing (see _evaluate_formula_string).
+    r"|(?P<CMP><>|<=|>=|<|>|=)"
+    r"|(?P<CONCAT>&)"
     r"|(?P<OP>[+\-*/])"
     r"|(?P<LPAREN>\()"
     r"|(?P<RPAREN>\))"
@@ -88,6 +106,48 @@ def _tokenize_formula(src: str):
 _STRING_ESCAPES = {"\\n": "\n", "\\t": "\t", "\\\"": "\"", "\\'": "'", "\\\\": "\\"}
 
 
+def _as_concat_str(v) -> str:
+    """Excel-compatible string coercion for the & operator.
+    Booleans render as TRUE/FALSE; integer-valued floats drop the .0."""
+    if isinstance(v, bool):
+        return "TRUE" if v else "FALSE"
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
+def _formula_compare(left, right, op: str) -> bool:
+    """Comparison for =, <>, <, >, <=, >=. Numbers compare numerically; strings
+    case-insensitive (matches Excel). Cross-type (num vs str) is never equal
+    rather than raising — users type heterogeneous cells all the time."""
+    if isinstance(left, bool) or isinstance(right, bool):
+        left = int(left) if isinstance(left, bool) else left
+        right = int(right) if isinstance(right, bool) else right
+    same_kind = (
+        isinstance(left, (int, float)) and isinstance(right, (int, float))
+    ) or (
+        isinstance(left, str) and isinstance(right, str)
+    )
+    if not same_kind:
+        return op == "<>"
+    if isinstance(left, str):
+        left = left.lower()
+        right = right.lower()
+    if op == "=":
+        return left == right
+    if op == "<>":
+        return left != right
+    if op == "<":
+        return left < right
+    if op == ">":
+        return left > right
+    if op == "<=":
+        return left <= right
+    if op == ">=":
+        return left >= right
+    raise _FormulaParseError(f"Unknown comparison operator: {op!r}")
+
+
 def _unquote_string(raw: str) -> str:
     """Strip surrounding quotes and decode a small set of escapes."""
     body = raw[1:-1]
@@ -109,8 +169,11 @@ def _unquote_string(raw: str) -> str:
 class _ExpressionEvaluator:
     """Recursive-descent evaluator for GridOS cell formulas.
 
-    Grammar (standard precedence):
-        expression  -> term (('+' | '-') term)*
+    Grammar (Excel-compatible precedence, lowest to highest):
+        expression  -> comparison
+        comparison  -> concat ((= | <> | < | > | <= | >=) concat)*
+        concat      -> additive ('&' additive)*
+        additive    -> term (('+' | '-') term)*
         term        -> unary (('*' | '/') unary)*
         unary       -> ('+' | '-') unary | power
         power       -> primary (('^' | '**') unary)?   # right-associative
@@ -150,6 +213,29 @@ class _ExpressionEvaluator:
         return self._advance()
 
     def _parse_expression(self):
+        return self._parse_comparison()
+
+    def _parse_comparison(self):
+        result = self._parse_concat()
+        while self._peek()[0] == "CMP":
+            op = self._advance()[1]
+            right = self._parse_concat()
+            # Returning int 1/0 matches Excel's numeric coercion of booleans —
+            # IF(A1=B1, x, y) works with no extra casting, and 1*TRUE stays sane.
+            result = 1 if _formula_compare(result, right, op) else 0
+        return result
+
+    def _parse_concat(self):
+        result = self._parse_additive()
+        while self._peek()[0] == "CONCAT":
+            self._advance()
+            right = self._parse_additive()
+            # Excel's '&' is string-first: both operands become their display
+            # form before joining. Mirror that so =A1&" "&B1 with numbers works.
+            result = _as_concat_str(result) + _as_concat_str(right)
+        return result
+
+    def _parse_additive(self):
         result = self._parse_term()
         while self._peek()[0] == "OP" and self._peek()[1] in ("+", "-"):
             op = self._advance()[1]
@@ -271,7 +357,11 @@ class _ExpressionEvaluator:
             try:
                 return float(value.strip())
             except ValueError:
-                return 0.0
+                # Preserve the raw string. Numeric ops (+ - * /) will raise
+                # TypeError → #VALUE!; string ops (&, comparisons) will work.
+                # Treating text as 0.0 here silently corrupted =A1&B1 with
+                # real strings — that regression is what this fix addresses.
+                return value
         return 0.0
 
 
@@ -283,6 +373,13 @@ class GridOSKernel:
         self.active_sheet = "Sheet1"
         self.workbook_name: str = "Untitled workbook"
         self.chat_log: list[dict] = []
+        # RLock so a write inside another write (e.g. a formula recalc that
+        # observes a dependent cell's state) doesn't deadlock against itself.
+        # The lock is per-kernel, not per-sheet, because cross-sheet formula
+        # refs make a single sheet's lock insufficient. When shared workbooks
+        # land and one kernel is serving N users, this lock is what prevents
+        # interleaved commits from corrupting the cell graph.
+        self._write_lock = threading.RLock()
         self._ensure_sheet(self.active_sheet)
 
     def set_chat_log(self, entries: list[dict]) -> list[dict]:
@@ -484,55 +581,78 @@ class GridOSKernel:
             existing.decimals = decimals
         return {"cell": target_a1, "decimals": decimals}
 
-    def write_user_range(self, target_a1: str, payload: list[list], user_id: str = "User", sheet_name: str | None = None) -> str:
-        state = self._sheet_state(sheet_name)
-        start_r, start_c = a1_to_coords(target_a1)
+    def write_user_range(self, target_a1: str, payload: list[list], user_id: str = "User", sheet_name: str | None = None, expected_versions: dict | None = None) -> str:
+        """Commit a rectangle of user-typed values.
 
-        for r_offset, row in enumerate(payload):
-            for c_offset, _ in enumerate(row):
-                coords = (start_r + r_offset, start_c + c_offset)
-                existing = state["cells"].get(coords)
-                if existing and existing.locked:
-                    raise ValueError(f"Cell {coords_to_a1(*coords)} is locked.")
+        `expected_versions` is an optional {a1: int} map used for optimistic
+        concurrency on shared workbooks. If any addressed cell's stored
+        version differs from the caller's expectation, the whole write is
+        rejected with VersionConflict — the caller should refetch and retry.
+        """
+        with self._write_lock:
+            state = self._sheet_state(sheet_name)
+            start_r, start_c = a1_to_coords(target_a1)
 
-        self._commit_write(start_r, start_c, payload, user_id, sheet_name)
-        return target_a1
+            for r_offset, row in enumerate(payload):
+                for c_offset, _ in enumerate(row):
+                    coords = (start_r + r_offset, start_c + c_offset)
+                    existing = state["cells"].get(coords)
+                    if existing and existing.locked:
+                        raise ValueError(f"Cell {coords_to_a1(*coords)} is locked.")
+                    if expected_versions:
+                        a1 = coords_to_a1(*coords)
+                        if a1 in expected_versions:
+                            actual = existing.version if existing else 0
+                            if actual != expected_versions[a1]:
+                                raise VersionConflict(a1, expected_versions[a1], actual)
+
+            self._commit_write(start_r, start_c, payload, user_id, sheet_name)
+            return target_a1
 
     def _commit_write(self, start_r: int, start_c: int, payload: list[list], agent_id: str, sheet_name: str | None = None):
-        state = self._sheet_state(sheet_name)
-        cells = state["cells"]
+        # Serialize every commit so two concurrent writers (multi-user
+        # scenario, or an agent-apply racing with a user edit) can't interleave
+        # partial updates. The RLock means a recalc triggered from inside the
+        # commit — which itself can call back into the kernel — still works.
+        with self._write_lock:
+            state = self._sheet_state(sheet_name)
+            cells = state["cells"]
 
-        for r_offset, row_data in enumerate(payload):
-            for c_offset, raw_val in enumerate(row_data):
-                r = start_r + r_offset
-                c = start_c + c_offset
+            for r_offset, row_data in enumerate(payload):
+                for c_offset, raw_val in enumerate(row_data):
+                    r = start_r + r_offset
+                    c = start_c + c_offset
 
-                val = self._normalize_user_value(raw_val)
-                computed_val = val
-                formula_str = None
+                    val = self._normalize_user_value(raw_val)
+                    computed_val = val
+                    formula_str = None
 
-                if isinstance(val, str) and val.startswith("="):
-                    formula_str = val
-                    computed_val = self._evaluate_formula_string(val, r, c, sheet_name)
+                    if isinstance(val, str) and val.startswith("="):
+                        formula_str = val
+                        computed_val = self._evaluate_formula_string(val, r, c, sheet_name)
 
-                existing_cell = cells.get((r, c))
-                existing_locked = existing_cell.locked if existing_cell and existing_cell.locked else False
-                # Preserve display-format on overwrite — the user set "show 2 decimals"
-                # and shouldn't lose it just because the underlying value changed.
-                existing_decimals = existing_cell.decimals if existing_cell else None
-                cells[(r, c)] = CellState(
-                    value=computed_val,
-                    formula=formula_str,
-                    datatype=type(computed_val).__name__,
-                    locked=existing_locked,
-                    agent_owner=agent_id,
-                    decimals=existing_decimals,
-                )
+                    existing_cell = cells.get((r, c))
+                    existing_locked = existing_cell.locked if existing_cell and existing_cell.locked else False
+                    existing_decimals = existing_cell.decimals if existing_cell else None
+                    # Optimistic-concurrency version. Bump on every commit so
+                    # clients that cached version N can detect their write is
+                    # stale. Starts at 1 for a new cell (0 == sentinel "never
+                    # written").
+                    prev_version = existing_cell.version if existing_cell else 0
+                    cells[(r, c)] = CellState(
+                        value=computed_val,
+                        formula=formula_str,
+                        datatype=type(computed_val).__name__,
+                        locked=existing_locked,
+                        agent_owner=agent_id,
+                        decimals=existing_decimals,
+                        version=prev_version + 1,
+                    )
 
-        self._rebuild_dependencies(sheet_name)
-        affected = [(start_r + r_offset, start_c + c_offset) for r_offset, row in enumerate(payload) for c_offset, _ in enumerate(row)]
-        for r, c in affected:
-            self._recalculate(r, c, sheet_name=sheet_name)
+            self._rebuild_dependencies(sheet_name)
+            affected = [(start_r + r_offset, start_c + c_offset) for r_offset, row in enumerate(payload) for c_offset, _ in enumerate(row)]
+            for r, c in affected:
+                self._recalculate(r, c, sheet_name=sheet_name)
 
     def _evaluate_formula_string(self, formula: str, target_r: int, target_c: int, sheet_name: str | None = None):
         expr = formula.strip()

@@ -11,6 +11,10 @@ class CellState(BaseModel):
     # The stored `value` is never rounded — formatting is applied in the
     # frontend at render time so downstream formula references stay precise.
     decimals: Optional[int] = None
+    # Monotonic version counter — bumped on every commit. Lets concurrent
+    # writers do optimistic locking: a write that expects version N fails if
+    # the stored version is > N. Starts at 0 for freshly created cells.
+    version: int = 0
 
 class AgentIntent(BaseModel):
     agent_id: str
