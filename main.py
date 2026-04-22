@@ -4,6 +4,8 @@ import random
 import re
 import sys
 import time
+import urllib.error
+import urllib.request
 import uuid
 from collections import OrderedDict
 from contextvars import ContextVar
@@ -327,6 +329,62 @@ def _register_macros_into_fresh(k: GridOSKernel) -> None:
             continue
 
 
+def _make_realtime_broadcaster(workbook_id: str):
+    """Factory: return a post_commit hook that POSTs cell changes to the
+    Supabase Realtime broadcast API on channel `workbook:<wb_id>`. Clients
+    subscribed to that channel receive the event and apply it locally so
+    collaborators see each other's edits without refreshing.
+
+    We POST with the service-role key because the Realtime broadcast API
+    requires elevated privileges. The same key is already used for every
+    workbook_store call, so there's no new secret surface.
+
+    Failures (network blip, Supabase brownout) are logged and swallowed —
+    the commit itself already succeeded and the other user will pick up the
+    change on their next save/refresh cycle."""
+    supabase_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    service_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not supabase_url or not service_key:
+        # Misconfigured environment — return a no-op so the kernel still
+        # works; realtime just won't propagate.
+        return lambda _data: None
+    endpoint = f"{supabase_url}/realtime/v1/api/broadcast"
+    topic = f"workbook:{workbook_id}"
+
+    def _broadcast(data: dict) -> None:
+        acting = _current_user.get()
+        by_email = getattr(acting, "email", None) if acting else None
+        by_id = getattr(acting, "id", None) if acting else None
+        body = json.dumps({
+            "messages": [{
+                "topic": topic,
+                "event": "cells_changed",
+                "payload": {**data, "by_email": by_email, "by_id": by_id},
+            }]
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            endpoint,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "apikey": service_key,
+                "Authorization": f"Bearer {service_key}",
+            },
+            method="POST",
+        )
+        try:
+            # 3s timeout — the broadcast is fire-and-forget so we don't want a
+            # hung Supabase connection to slow every cell write.
+            with urllib.request.urlopen(req, timeout=3):
+                return
+        except urllib.error.URLError as e:
+            print(f"[realtime] broadcast to {topic} failed: {e}")
+        except Exception as e:
+            print(f"[realtime] unexpected broadcast error for {topic}: {e}")
+
+    return _broadcast
+
+
 def _kernel_for_scope(scope: WorkbookScope) -> GridOSKernel:
     """Resolve (or create) the GridOSKernel for this scope.
 
@@ -357,6 +415,13 @@ def _kernel_for_scope(scope: WorkbookScope) -> GridOSKernel:
                 k.apply_state_dict(state)
         except Exception as e:
             print(f"[kernel_pool] lazy-load failed for {key}: {e}")
+
+    # Realtime broadcast for the shared-workbook case. Every kernel gets one
+    # hook tied to its workbook_id so when User A writes, User B's tab sees
+    # the update through Supabase Realtime. Hooks run after the commit lock
+    # is released so the HTTP round-trip doesn't block concurrent writers.
+    if scope.workbook_id and scope.workbook_id != "default":
+        k.add_post_commit_hook(_make_realtime_broadcaster(scope.workbook_id))
 
     with _kernel_pool_lock:
         # A concurrent request may have created one first — dedup by returning

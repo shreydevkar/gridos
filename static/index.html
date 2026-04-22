@@ -2093,6 +2093,24 @@
             .assistant { --assistant-w: 320px; }
         }
 
+        /* Realtime flash highlight — brief yellow wash when a collaborator's
+           write lands on this cell. Keyframe rather than transition so the
+           effect restarts cleanly if the same cell flashes twice in quick
+           succession (see flashCellRemote's reflow trick). */
+        @keyframes gridosRemoteFlash {
+            0%   { background-color: rgba(255, 214, 10, 0.55); }
+            70%  { background-color: rgba(255, 214, 10, 0.20); }
+            100% { background-color: transparent; }
+        }
+        td[data-cell].remote-flash {
+            animation: gridosRemoteFlash 900ms ease-out;
+        }
+        /* Remote cursor label — the little email pill that sits above a
+           collaborator's selected cell. z-index 3 keeps it above the sticky
+           headers (z-index 2) without competing with the selection outline. */
+        .remote-cursor-overlay { animation: gridosRemoteCursorFade 160ms ease-out; }
+        @keyframes gridosRemoteCursorFade { from { opacity: 0; } to { opacity: 1; } }
+
         /* Progressive sidebar shrink so the grid never gets squeezed to zero
            when chat + charts are both open. Horizontal flex is preserved at
            every breakpoint — no flex-wrap, because with `workspace { flex: 1 }`

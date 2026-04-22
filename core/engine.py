@@ -380,7 +380,20 @@ class GridOSKernel:
         # land and one kernel is serving N users, this lock is what prevents
         # interleaved commits from corrupting the cell graph.
         self._write_lock = threading.RLock()
+        # Post-commit hooks: each is called with a dict {sheet, changes,
+        # agent_id} *after* the write lock is released. main.py uses this to
+        # broadcast cell changes over Supabase Realtime so other clients see
+        # the edit without refreshing. Engine stays domain-pure — it doesn't
+        # know about Supabase, only fires whatever callbacks were registered.
+        self._post_commit_hooks: list = []
         self._ensure_sheet(self.active_sheet)
+
+    def add_post_commit_hook(self, hook):
+        """Register a callback fired after every successful _commit_write.
+        Hook receives {sheet, changes, agent_id} where `changes` is a list
+        of {cell, value, formula, version}. Exceptions from hooks are logged
+        but never interrupt the commit path."""
+        self._post_commit_hooks.append(hook)
 
     def set_chat_log(self, entries: list[dict]) -> list[dict]:
         if not isinstance(entries, list):
@@ -614,6 +627,7 @@ class GridOSKernel:
         # scenario, or an agent-apply racing with a user edit) can't interleave
         # partial updates. The RLock means a recalc triggered from inside the
         # commit — which itself can call back into the kernel — still works.
+        hook_data = None
         with self._write_lock:
             state = self._sheet_state(sheet_name)
             cells = state["cells"]
@@ -653,6 +667,36 @@ class GridOSKernel:
             affected = [(start_r + r_offset, start_c + c_offset) for r_offset, row in enumerate(payload) for c_offset, _ in enumerate(row)]
             for r, c in affected:
                 self._recalculate(r, c, sheet_name=sheet_name)
+
+            # Snapshot the direct-write cells for realtime broadcast. Built
+            # inside the lock so the snapshot is coherent with the commit;
+            # fired outside the lock below so a slow Supabase HTTP call
+            # doesn't block other writers.
+            if self._post_commit_hooks:
+                changes = []
+                for r, c in affected:
+                    cell = cells.get((r, c))
+                    if cell is None:
+                        continue
+                    changes.append({
+                        "cell": coords_to_a1(r, c),
+                        "value": cell.value,
+                        "formula": cell.formula,
+                        "datatype": cell.datatype,
+                        "version": cell.version,
+                    })
+                hook_data = {
+                    "sheet": sheet_name or self.active_sheet,
+                    "changes": changes,
+                    "agent_id": agent_id,
+                }
+
+        if hook_data:
+            for hook in self._post_commit_hooks:
+                try:
+                    hook(hook_data)
+                except Exception as e:
+                    print(f"[post_commit_hook] {type(e).__name__}: {e}")
 
     def _evaluate_formula_string(self, formula: str, target_r: int, target_c: int, sheet_name: str | None = None):
         expr = formula.strip()

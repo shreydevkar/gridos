@@ -338,6 +338,18 @@ let assistantOpen = true;
 // AbortController so the kill-switch in the composer can cancel it. null when
 // idle. Used by requestPreview / runChain / send-btn handler.
 let agentAbortController = null;
+// Supabase Realtime channel for the current workbook. Populated after the
+// initial fetchGrid(). Null in OSS mode, or before subscription has opened.
+let realtimeChannel = null;
+let realtimeMyEmail = null;
+let realtimeMyId = null;
+// Debounces a fetchGrid() call after receiving remote cells_changed events
+// so a burst of writes (e.g. a 20-intent agent apply from another user)
+// collapses into a single refetch instead of 20 round-trips.
+let realtimeRefetchTimer = null;
+// Last cell we reported to presence — skip redundant .track() calls that
+// re-ship the same state on every mouse-move over the same cell.
+let realtimeLastCellReported = null;
 let dragFillState = null;
 let resizeState = null;
 let formulaPickState = null;
@@ -849,6 +861,10 @@ function syncSelectionUI() {
     // when the drag settles. mouseup runs syncSelectionUI again to catch up.
     if (!isSelecting) updateSelectionStats();
     highlightHeadersForSelection();
+    // Broadcast our selection to the realtime presence channel so the other
+    // user's tab shows our cursor. Throttled internally by caching the last
+    // cell we reported — dragging through 40 cells does not send 40 events.
+    if (!isSelecting) broadcastMySelection();
 }
 
 function highlightHeadersForSelection() {
@@ -3018,6 +3034,161 @@ function attachSettingsEvents() {
     });
 }
 
+// ======== Realtime (Supabase broadcast + presence) ========
+
+function colorForEmail(seed) {
+    if (!seed) return "hsl(210, 70%, 45%)";
+    let hash = 0;
+    for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+    const hue = Math.abs(hash) % 360;
+    return `hsl(${hue}, 70%, 45%)`;
+}
+
+async function subscribeToWorkbookRealtime() {
+    // Quit silently in any scenario where realtime can't work so we don't
+    // throw on the happy path and break workbook loading.
+    if (!supabaseClient || !activeWorkbookId) return;
+    if (cloudStatus?.mode !== "saas") return;
+    try {
+        const { data: { user } } = await supabaseClient.auth.getUser();
+        if (!user) return;
+        realtimeMyEmail = user.email || user.id;
+        realtimeMyId = user.id;
+
+        const topic = `workbook:${activeWorkbookId}`;
+        const channel = supabaseClient.channel(topic, {
+            config: {
+                broadcast: { self: false },   // don't echo our own writes back to us
+                presence: { key: user.id },
+            },
+        });
+
+        channel.on("broadcast", { event: "cells_changed" }, (msg) => {
+            handleRemoteCellsChanged(msg.payload || {});
+        });
+        channel.on("presence", { event: "sync" }, () => {
+            updateRemoteCursors(channel.presenceState());
+        });
+
+        await channel.subscribe(async (status) => {
+            if (status !== "SUBSCRIBED") return;
+            await channel.track({
+                email: realtimeMyEmail,
+                color: colorForEmail(realtimeMyEmail),
+                cell: selectedRange?.start || null,
+            });
+        });
+        realtimeChannel = channel;
+    } catch (e) {
+        console.warn("[realtime] subscribe failed:", e);
+    }
+}
+
+function handleRemoteCellsChanged(payload) {
+    // Flash the specific cells we were told changed — quick visual cue that
+    // something happened, independent of the debounced refetch below.
+    (payload.changes || []).forEach((ch) => {
+        if (ch.cell) flashCellRemote(ch.cell);
+    });
+    // Debounced full-grid refetch so a burst of events coalesces into one
+    // network round-trip. 200ms is long enough to batch a multi-intent apply
+    // and short enough to feel immediate.
+    if (realtimeRefetchTimer) clearTimeout(realtimeRefetchTimer);
+    realtimeRefetchTimer = setTimeout(async () => {
+        realtimeRefetchTimer = null;
+        // Don't clobber an in-progress cell edit — if the user has an input
+        // open, defer the refetch until they commit or cancel.
+        if (editingCell) {
+            realtimeRefetchTimer = setTimeout(() => handleRemoteCellsChanged({}), 600);
+            return;
+        }
+        try {
+            await fetchGrid();
+        } catch (e) {
+            console.warn("[realtime] fetchGrid after remote change failed:", e);
+        }
+    }, 200);
+}
+
+function flashCellRemote(a1) {
+    const td = document.querySelector(`td[data-cell="${a1}"]`);
+    if (!td) return;
+    td.classList.remove("remote-flash");
+    // Force a reflow so re-adding the class restarts the animation even if
+    // the cell flashes twice in quick succession.
+    void td.offsetWidth;
+    td.classList.add("remote-flash");
+    setTimeout(() => td.classList.remove("remote-flash"), 900);
+}
+
+function updateRemoteCursors(presenceState) {
+    // Wipe the previous overlay set — cheap because collaborators count is
+    // tiny and the DOM churn is invisible.
+    document.querySelectorAll(".remote-cursor-overlay").forEach((el) => el.remove());
+    if (!presenceState) return;
+    for (const key of Object.keys(presenceState)) {
+        const metas = presenceState[key];
+        if (!Array.isArray(metas)) continue;
+        // Each connected tab registers its own meta entry; only the most
+        // recent one matters for cursor placement.
+        const meta = metas[metas.length - 1];
+        if (!meta || !meta.cell) continue;
+        // Skip ourselves — our own selection is already rendered via the
+        // local selectedRange highlight.
+        if (realtimeMyEmail && meta.email === realtimeMyEmail) continue;
+        if (realtimeMyId && key === realtimeMyId) continue;
+        const td = document.querySelector(`td[data-cell="${meta.cell}"]`);
+        if (!td) continue;
+        const color = meta.color || colorForEmail(meta.email || key);
+        const overlay = document.createElement("div");
+        overlay.className = "remote-cursor-overlay";
+        overlay.style.cssText = `
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            box-shadow: inset 0 0 0 2px ${color};
+            z-index: 3;
+        `;
+        const label = document.createElement("div");
+        label.style.cssText = `
+            position: absolute;
+            top: -16px;
+            left: -1px;
+            background: ${color};
+            color: #fff;
+            font-size: 10px;
+            line-height: 14px;
+            padding: 1px 6px;
+            border-radius: 3px 3px 0 0;
+            white-space: nowrap;
+            font-family: var(--font-ui);
+            pointer-events: none;
+        `;
+        label.textContent = meta.email || "anon";
+        overlay.appendChild(label);
+        // Cell <td> defaults to static positioning — make sure the overlay's
+        // absolute inset:0 lands relative to the cell, not the page.
+        if (getComputedStyle(td).position === "static") td.style.position = "relative";
+        td.appendChild(overlay);
+    }
+}
+
+function broadcastMySelection() {
+    // Fire-and-forget presence update. Throttled via realtimeLastCellReported
+    // so mousemove through 50 cells doesn't send 50 track() calls.
+    if (!realtimeChannel) return;
+    const cell = selectedRange?.start || null;
+    if (cell === realtimeLastCellReported) return;
+    realtimeLastCellReported = cell;
+    try {
+        realtimeChannel.track({
+            email: realtimeMyEmail,
+            color: colorForEmail(realtimeMyEmail),
+            cell,
+        });
+    } catch (_) { /* track() on a closed channel is a no-op */ }
+}
+
 // ======== Workbook sharing ========
 
 function openShareModal() {
@@ -4162,6 +4333,12 @@ async function bootstrap() {
     await fetchGrid();
     setScope("selection");
     toggleAssistant(true);
+    // Subscribe to realtime cell broadcasts + presence. Fire-and-forget —
+    // SaaS-only, no-op in OSS. Subscribing after fetchGrid means the initial
+    // render is already on-screen before we start reacting to remote events,
+    // and the user's selection state is populated so the first presence
+    // .track() ships the right cell.
+    subscribeToWorkbookRealtime();
     refreshUndoRedoButtons();
     await refreshModelCatalog();
     attachSettingsEvents();
