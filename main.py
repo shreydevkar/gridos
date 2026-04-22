@@ -3,6 +3,7 @@ import os
 import random
 import re
 import sys
+import threading as _rt_threading
 import time
 import urllib.error
 import urllib.request
@@ -362,25 +363,26 @@ def _make_realtime_broadcaster(workbook_id: str):
                 "payload": {**data, "by_email": by_email, "by_id": by_id},
             }]
         }).encode("utf-8")
-        req = urllib.request.Request(
-            endpoint,
-            data=body,
-            headers={
-                "Content-Type": "application/json",
-                "apikey": service_key,
-                "Authorization": f"Bearer {service_key}",
-            },
-            method="POST",
-        )
-        try:
-            # 3s timeout — the broadcast is fire-and-forget so we don't want a
-            # hung Supabase connection to slow every cell write.
-            with urllib.request.urlopen(req, timeout=3):
-                return
-        except urllib.error.URLError as e:
-            print(f"[realtime] broadcast to {topic} failed: {e}")
-        except Exception as e:
-            print(f"[realtime] unexpected broadcast error for {topic}: {e}")
+        headers = {
+            "Content-Type": "application/json",
+            "apikey": service_key,
+            "Authorization": f"Bearer {service_key}",
+        }
+        # Run the HTTP POST in a detached thread so the write endpoint can
+        # return immediately. Before this, every cell write blocked up to 3s
+        # on the Supabase POST — making collab edits feel laggy because each
+        # response waited for the broadcast to round-trip.
+        def _fire_and_forget():
+            req = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=3):
+                    return
+            except urllib.error.URLError as e:
+                print(f"[realtime] broadcast to {topic} failed: {e}")
+            except Exception as e:
+                print(f"[realtime] unexpected broadcast error for {topic}: {e}")
+
+        _rt_threading.Thread(target=_fire_and_forget, daemon=True).start()
 
     return _broadcast
 

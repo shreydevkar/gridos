@@ -350,6 +350,14 @@ let realtimeRefetchTimer = null;
 // Last cell we reported to presence — skip redundant .track() calls that
 // re-ship the same state on every mouse-move over the same cell.
 let realtimeLastCellReported = null;
+// Leading-edge throttle state. Supabase Realtime throttles fast track()
+// calls server-side, so if the user arrow-keys through 10 cells in 500ms we
+// have to slow ourselves down and make sure the FINAL position lands.
+// Pattern: fire the first call immediately, drop the next N within the
+// cooldown, schedule a trailing-edge send to ship the final cell value.
+let realtimeTrackCooldownMs = 180;
+let realtimeLastTrackSentAt = 0;
+let realtimeTrailingTimer = null;
 let dragFillState = null;
 let resizeState = null;
 let formulaPickState = null;
@@ -862,9 +870,9 @@ function syncSelectionUI() {
     if (!isSelecting) updateSelectionStats();
     highlightHeadersForSelection();
     // Broadcast our selection to the realtime presence channel so the other
-    // user's tab shows our cursor. Throttled internally by caching the last
-    // cell we reported — dragging through 40 cells does not send 40 events.
-    if (!isSelecting) broadcastMySelection();
+    // user's tab shows our cursor. Throttled internally by the leading-edge
+    // + trailing-edge pattern so drags + held arrow keys don't flood.
+    broadcastMySelection();
 }
 
 function highlightHeadersForSelection() {
@@ -3085,21 +3093,35 @@ async function subscribeToWorkbookRealtime() {
 }
 
 function handleRemoteCellsChanged(payload) {
-    // Flash the specific cells we were told changed — quick visual cue that
-    // something happened, independent of the debounced refetch below.
+    // Apply the delivered cell values DIRECTLY to the local model so the
+    // single-cell case paints in one frame without waiting for a refetch.
+    // This is the "feels instant" path; the debounced fetchGrid below is the
+    // safety net that catches formula recalcs the broadcast didn't include.
     (payload.changes || []).forEach((ch) => {
-        if (ch.cell) flashCellRemote(ch.cell);
+        if (!ch.cell) return;
+        const prev = gridData[ch.cell] || {};
+        gridData[ch.cell] = {
+            ...prev,
+            value: ch.value,
+            formula: ch.formula,
+            datatype: ch.datatype,
+            version: ch.version,
+        };
+        flashCellRemote(ch.cell);
     });
-    // Debounced full-grid refetch so a burst of events coalesces into one
-    // network round-trip. 200ms is long enough to batch a multi-intent apply
-    // and short enough to feel immediate.
+    if ((payload.changes || []).length) {
+        refreshPopulatedCells();
+    }
+    // Safety-net refetch: formulas that depend on the changed cells may need
+    // recalc (our broadcast only ships direct writes). 50ms coalesces rapid
+    // bursts without feeling laggy on the happy path.
     if (realtimeRefetchTimer) clearTimeout(realtimeRefetchTimer);
     realtimeRefetchTimer = setTimeout(async () => {
         realtimeRefetchTimer = null;
-        // Don't clobber an in-progress cell edit — if the user has an input
-        // open, defer the refetch until they commit or cancel.
         if (editingCell) {
-            realtimeRefetchTimer = setTimeout(() => handleRemoteCellsChanged({}), 600);
+            // Defer until user commits or cancels their in-progress input so
+            // we don't clobber their typing.
+            realtimeRefetchTimer = setTimeout(() => handleRemoteCellsChanged({}), 400);
             return;
         }
         try {
@@ -3107,7 +3129,7 @@ function handleRemoteCellsChanged(payload) {
         } catch (e) {
             console.warn("[realtime] fetchGrid after remote change failed:", e);
         }
-    }, 200);
+    }, 50);
 }
 
 function flashCellRemote(a1) {
@@ -3174,19 +3196,43 @@ function updateRemoteCursors(presenceState) {
 }
 
 function broadcastMySelection() {
-    // Fire-and-forget presence update. Throttled via realtimeLastCellReported
-    // so mousemove through 50 cells doesn't send 50 track() calls.
+    // Leading-edge + trailing-edge throttle. Pattern:
+    //   - First call fires immediately, records the send time.
+    //   - Subsequent calls inside the cooldown window are coalesced — a
+    //     trailing timer is scheduled to ship the LATEST cell value once the
+    //     cooldown expires.
+    // This makes cursor updates feel instant on isolated clicks while still
+    // staying under Supabase Realtime's ~10 events/sec soft ceiling when the
+    // user holds down an arrow key.
     if (!realtimeChannel) return;
     const cell = selectedRange?.start || null;
     if (cell === realtimeLastCellReported) return;
-    realtimeLastCellReported = cell;
-    try {
-        realtimeChannel.track({
-            email: realtimeMyEmail,
-            color: colorForEmail(realtimeMyEmail),
-            cell,
-        });
-    } catch (_) { /* track() on a closed channel is a no-op */ }
+    const now = performance.now();
+    const sinceLast = now - realtimeLastTrackSentAt;
+    const fire = () => {
+        realtimeLastCellReported = selectedRange?.start || null;
+        realtimeLastTrackSentAt = performance.now();
+        try {
+            realtimeChannel.track({
+                email: realtimeMyEmail,
+                color: colorForEmail(realtimeMyEmail),
+                cell: realtimeLastCellReported,
+            });
+        } catch (_) { /* track() on a closed channel is a no-op */ }
+    };
+    if (sinceLast >= realtimeTrackCooldownMs) {
+        // Leading edge — ship immediately so single clicks land with no lag.
+        if (realtimeTrailingTimer) { clearTimeout(realtimeTrailingTimer); realtimeTrailingTimer = null; }
+        fire();
+    } else {
+        // Inside cooldown — schedule (or reschedule) a trailing send so the
+        // final cell value after a rapid burst always reaches peers.
+        if (realtimeTrailingTimer) clearTimeout(realtimeTrailingTimer);
+        realtimeTrailingTimer = setTimeout(() => {
+            realtimeTrailingTimer = null;
+            fire();
+        }, realtimeTrackCooldownMs - sinceLast + 10);
+    }
 }
 
 // ======== Workbook sharing ========
