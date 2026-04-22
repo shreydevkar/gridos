@@ -171,3 +171,155 @@ class SupabaseWorkbookStore:
             .eq("id", scope.workbook_id)
             .execute()
         )
+
+    # ---- Sharing (Phase 7) ------------------------------------------------
+
+    def resolve_workbook_access(self, user_id: str, workbook_id: str) -> Optional[dict]:
+        """Return {'owner_id': uuid, 'role': 'owner'|'editor'|'viewer'} if this
+        user may access this workbook, else None.
+
+        The API layer calls this before routing a request to a kernel. Owner
+        → role='owner' (full permissions). Collaborator → whatever role the
+        grant carries. Unknown pair → None (→ 404 from the caller)."""
+        if not user_id or not workbook_id:
+            return None
+        row = (
+            self._client.table("workbooks")
+            .select("id, user_id")
+            .eq("id", workbook_id)
+            .limit(1)
+            .execute()
+        )
+        workbook_rows = row.data or []
+        if not workbook_rows:
+            return None
+        owner_id = workbook_rows[0]["user_id"]
+        if owner_id == user_id:
+            return {"owner_id": owner_id, "role": "owner"}
+        # Not the owner — check the collaborator table.
+        collab = (
+            self._client.table("workbook_collaborators")
+            .select("role")
+            .eq("workbook_id", workbook_id)
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+        collab_rows = collab.data or []
+        if not collab_rows:
+            return None
+        return {"owner_id": owner_id, "role": collab_rows[0]["role"]}
+
+    def list_collaborators(self, workbook_id: str) -> list[dict]:
+        """Return every collaborator on this workbook with their email. Used
+        by the owner-facing Share… modal to show who has access.
+
+        Shape: [{user_id, email, role, invited_at, accepted_at}]."""
+        if not workbook_id:
+            return []
+        # Supabase PostgREST supports embedded selects; `users(email)` expands
+        # the FK join in one round-trip so we avoid N+1 lookups.
+        res = (
+            self._client.table("workbook_collaborators")
+            .select("user_id, role, invited_at, accepted_at, users(email)")
+            .eq("workbook_id", workbook_id)
+            .order("invited_at", desc=False)
+            .execute()
+        )
+        out = []
+        for r in res.data or []:
+            out.append({
+                "user_id": r.get("user_id"),
+                "email": (r.get("users") or {}).get("email"),
+                "role": r.get("role"),
+                "invited_at": r.get("invited_at"),
+                "accepted_at": r.get("accepted_at"),
+            })
+        return out
+
+    def add_collaborator_by_email(
+        self,
+        workbook_id: str,
+        inviter_id: str,
+        email: str,
+        role: str,
+    ) -> dict:
+        """Invite a user by email. Requires the invitee to already have a
+        GridOS account (public.users row). Returns the grant row.
+
+        Raises LookupError if the email isn't registered, ValueError on bad
+        inputs. Upserts so re-inviting the same email just updates the role
+        instead of erroring."""
+        if not workbook_id or not inviter_id or not email:
+            raise ValueError("workbook_id, inviter_id, and email are required.")
+        if role not in ("editor", "viewer"):
+            raise ValueError(f"role must be 'editor' or 'viewer', got {role!r}")
+        target = (
+            self._client.table("users")
+            .select("id, email")
+            .eq("email", email.strip().lower())
+            .limit(1)
+            .execute()
+        )
+        target_rows = target.data or []
+        if not target_rows:
+            raise LookupError(f"No GridOS account found for {email}")
+        target_id = target_rows[0]["id"]
+        if target_id == inviter_id:
+            raise ValueError("Cannot invite yourself.")
+        payload = {
+            "workbook_id": workbook_id,
+            "user_id": target_id,
+            "role": role,
+            "invited_by": inviter_id,
+        }
+        (
+            self._client.table("workbook_collaborators")
+            .upsert(payload, on_conflict="workbook_id,user_id")
+            .execute()
+        )
+        return {
+            "user_id": target_id,
+            "email": target_rows[0]["email"],
+            "role": role,
+        }
+
+    def remove_collaborator(self, workbook_id: str, user_id: str) -> None:
+        """Revoke access. No-op if the grant doesn't exist."""
+        if not workbook_id or not user_id:
+            return
+        (
+            self._client.table("workbook_collaborators")
+            .delete()
+            .eq("workbook_id", workbook_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+
+    def list_shared_with_user(self, user_id: str) -> list[dict]:
+        """Workbooks shared with this user (not owned by them). Returns
+        [{id, title, updated_at, owner_email, role}] for the Load modal."""
+        if not user_id:
+            return []
+        res = (
+            self._client.table("workbook_collaborators")
+            .select("role, workbooks(id, title, updated_at, users(email))")
+            .eq("user_id", user_id)
+            .execute()
+        )
+        out = []
+        for r in res.data or []:
+            wb = r.get("workbooks") or {}
+            owner = wb.get("users") or {}
+            if not wb.get("id"):
+                continue
+            out.append({
+                "id": wb["id"],
+                "title": wb.get("title") or "Untitled workbook",
+                "updated_at": wb.get("updated_at"),
+                "owner_email": owner.get("email"),
+                "role": r.get("role"),
+            })
+        # Sort newest-first to match the owned-workbooks list ordering.
+        out.sort(key=lambda d: d.get("updated_at") or "", reverse=True)
+        return out

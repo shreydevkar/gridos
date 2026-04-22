@@ -2747,6 +2747,9 @@ async function handleMenuAction(action) {
         case "dev-portal":
             openDevPortalModal();
             break;
+        case "share":
+            openShareModal();
+            break;
     }
 }
 
@@ -2993,6 +2996,138 @@ function attachSettingsEvents() {
     });
     document.getElementById("devportal-upload")?.addEventListener("click", devPortalUpload);
     document.getElementById("devportal-test")?.addEventListener("click", devPortalTest);
+
+    // Share modal (SaaS only; the File → Share… menu item is hidden in OSS).
+    document.getElementById("share-modal-close")?.addEventListener("click", closeShareModal);
+    document.getElementById("share-modal-backdrop")?.addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) closeShareModal();
+    });
+    document.getElementById("share-invite-btn")?.addEventListener("click", submitShareInvite);
+    document.getElementById("share-invite-email")?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); submitShareInvite(); }
+    });
+    document.getElementById("share-link-copy")?.addEventListener("click", () => {
+        const input = document.getElementById("share-link-input");
+        if (!input?.value) return;
+        navigator.clipboard?.writeText(input.value).then(() => {
+            setShareFeedback("Link copied.", "ok");
+        }).catch(() => {
+            input.select();
+            setShareFeedback("Clipboard blocked — use Ctrl+C.", "err");
+        });
+    });
+}
+
+// ======== Workbook sharing ========
+
+function openShareModal() {
+    if (cloudStatus?.mode !== "saas") {
+        addLog("system", "Sharing is SaaS-only. Sign in on gridos.onrender.com to share workbooks.");
+        return;
+    }
+    if (!activeWorkbookId) {
+        addLog("system", "Save this workbook before sharing — it needs a stable id to share.");
+        return;
+    }
+    const backdrop = document.getElementById("share-modal-backdrop");
+    if (!backdrop) return;
+    backdrop.removeAttribute("hidden");
+    // Populate the shareable link — matches the landing-page routing
+    // (/workbook?id=<uuid>) so the invitee lands on the right workbook after
+    // sign-in. The invite itself (inserted into workbook_collaborators) is
+    // what actually grants access; the link alone does nothing.
+    const linkInput = document.getElementById("share-link-input");
+    if (linkInput) {
+        const url = new URL(window.location.origin + "/workbook");
+        url.searchParams.set("id", activeWorkbookId);
+        linkInput.value = url.toString();
+    }
+    document.getElementById("share-invite-email").value = "";
+    setShareFeedback("", "mute");
+    renderCollaboratorList();
+}
+
+function closeShareModal() {
+    const backdrop = document.getElementById("share-modal-backdrop");
+    if (backdrop) backdrop.setAttribute("hidden", "");
+}
+
+function setShareFeedback(text, kind) {
+    const el = document.getElementById("share-feedback");
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = kind === "err" ? "var(--danger)" : kind === "ok" ? "var(--success, #188038)" : "var(--text-mutedder)";
+}
+
+async function renderCollaboratorList() {
+    const host = document.getElementById("share-collaborator-list");
+    if (!host) return;
+    host.innerHTML = `<div class="hint" style="margin:0;">Loading…</div>`;
+    try {
+        const res = await fetch(`${API_BASE}/workbook/${encodeURIComponent(activeWorkbookId)}/collaborators`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        const list = data.collaborators || [];
+        if (!list.length) {
+            host.innerHTML = `<div class="hint" style="margin:0;">No collaborators yet. Invite someone above.</div>`;
+            return;
+        }
+        host.innerHTML = list.map((c) => `
+            <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border-soft);">
+                <div style="flex:1;font-size:12px;">
+                    <div><strong>${escapeHtml(c.email || c.user_id)}</strong></div>
+                    <div style="color:var(--text-mutedder);font-size:11px;">${escapeHtml(c.role)}${c.accepted_at ? " · accepted" : " · invited"}</div>
+                </div>
+                <button class="icon-btn" data-share-revoke="${escapeHtml(c.user_id)}" data-share-email="${escapeHtml(c.email || "")}" title="Revoke access">✕</button>
+            </div>
+        `).join("");
+        host.querySelectorAll("[data-share-revoke]").forEach((btn) => {
+            btn.addEventListener("click", () => revokeCollaborator(btn.dataset.shareRevoke, btn.dataset.shareEmail));
+        });
+    } catch (e) {
+        host.innerHTML = `<div class="hint" style="color:var(--danger);margin:0;">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function submitShareInvite() {
+    const emailEl = document.getElementById("share-invite-email");
+    const email = (emailEl?.value || "").trim().toLowerCase();
+    if (!email) return;
+    setShareFeedback("Inviting…", "mute");
+    try {
+        const res = await fetch(`${API_BASE}/workbook/${encodeURIComponent(activeWorkbookId)}/collaborators`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, role: "editor" }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+            setShareFeedback(data.detail || `Invite failed (${res.status})`, "err");
+            return;
+        }
+        setShareFeedback(`Invited ${data.collaborator?.email || email} as ${data.collaborator?.role || "editor"}.`, "ok");
+        emailEl.value = "";
+        await renderCollaboratorList();
+    } catch (e) {
+        setShareFeedback(`Invite failed: ${e.message}`, "err");
+    }
+}
+
+async function revokeCollaborator(userId, email) {
+    if (!userId) return;
+    if (!confirm(`Revoke access for ${email || userId}?`)) return;
+    setShareFeedback("Revoking…", "mute");
+    try {
+        const res = await fetch(`${API_BASE}/workbook/${encodeURIComponent(activeWorkbookId)}/collaborators/${encodeURIComponent(userId)}`, {
+            method: "DELETE",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        setShareFeedback(`Revoked access for ${email || userId}.`, "ok");
+        await renderCollaboratorList();
+    } catch (e) {
+        setShareFeedback(`Revoke failed: ${e.message}`, "err");
+    }
 }
 
 // ======== Developer plugin portal ========

@@ -102,6 +102,11 @@ _current_kernel: ContextVar[Optional[GridOSKernel]] = ContextVar("gridos_current
 # threading `user` through every intermediate helper (route_prompt → agent
 # preview → provider resolution).
 _current_user: ContextVar[Optional["AuthUser"]] = ContextVar("gridos_current_user", default=None)
+# Request-scoped role relative to the workbook being accessed. 'owner' when
+# the caller owns the workbook, 'editor'/'viewer' for collaborators. Default
+# 'owner' so OSS and untagged SaaS paths behave as before. Read by
+# _require_editor() inside write endpoints when viewer-mode is enabled.
+_current_role: ContextVar[str] = ContextVar("gridos_current_role", default="owner")
 _kernel_pool: "OrderedDict[tuple[str, str], GridOSKernel]" = OrderedDict()
 _kernel_pool_lock = Lock()
 # Cap pool size so an abusive bot can't OOM the process. LRU-evict the oldest
@@ -286,20 +291,24 @@ _load_hero_tools()
 # exist before Python evaluates the endpoint function signatures.
 
 
-def _scope_for(user: AuthUser, workbook_id: Optional[str] = None) -> WorkbookScope:
+def _scope_for(user: AuthUser, workbook_id: Optional[str] = None, owner_id: Optional[str] = None) -> WorkbookScope:
     """Map auth context to a WorkbookScope.
 
     OSS: single-user, single-workbook — user_id=None, workbook_id="default"
         (legacy `system_state.gridos` file). An explicit workbook_id is
         ignored.
-    SaaS: multi-workbook. Callers pass the active workbook's id; we fall
-        back to user.id for back-compat with the original one-workbook-per
-        -user behavior (used by save/load when the frontend doesn't pass
-        the id yet).
+    SaaS: multi-workbook. Scope's user_id is always the *owner* of the
+        workbook — not the caller — so a collaborator's request resolves
+        to the same kernel pool entry and Supabase row as the owner's.
+        `owner_id` is the pre-resolved owner uuid (from
+        resolve_workbook_access); when omitted we fall back to the caller's
+        own id, which handles the default-workbook case and back-compat
+        with endpoints that don't pass a workbook_id yet.
     """
     if not cloud_config.SAAS_MODE:
         return WorkbookScope(user_id=None, workbook_id="default")
-    return WorkbookScope(user_id=user.id, workbook_id=workbook_id or user.id)
+    effective_owner = owner_id or user.id
+    return WorkbookScope(user_id=effective_owner, workbook_id=workbook_id or effective_owner)
 
 
 def _register_macros_into_fresh(k: GridOSKernel) -> None:
@@ -372,13 +381,53 @@ async def current_kernel_dep(
 
     workbook_id resolution order: query param (back-compat with endpoints like
     /system/save that already accept it) → X-Workbook-Id header (default path
-    for everything else) → _scope_for fallback (user.id)."""
+    for everything else) → _scope_for fallback (user.id).
+
+    Sharing: when an explicit workbook_id is provided and it isn't a match for
+    the caller's own default workbook, we consult workbook_store to check the
+    ACL (owner / collaborator / unauthorized). The kernel pool key uses the
+    resolved owner_id so a shared workbook's live state is singleton — every
+    collaborator's request lands on the same kernel, triggering the already-
+    shipped RLock + version-bump concurrency primitives for free."""
     wb_id = workbook_id or x_workbook_id
-    scope = _scope_for(user, wb_id)
+    owner_id: Optional[str] = None
+    role = "owner"
+    if cloud_config.SAAS_MODE and wb_id and wb_id != user.id:
+        # Back-compat guard: the original SaaS behavior used user.id as the
+        # fallback workbook_id, so requests that pass that id behave exactly
+        # as before (no ACL lookup, just own it). Real workbook uuids always
+        # differ from the user's uuid, so the ACL path is taken.
+        try:
+            access = workbook_store.resolve_workbook_access(user.id, wb_id)
+        except Exception as e:
+            # A Supabase hiccup shouldn't 500 a page load — fall back to the
+            # legacy "you own your own workbook" behavior and log.
+            print(f"[acl] resolve_workbook_access failed: {e}")
+            access = {"owner_id": user.id, "role": "owner"}
+        if access is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Workbook not found or you don't have access.",
+            )
+        owner_id = access["owner_id"]
+        role = access["role"]
+    scope = _scope_for(user, wb_id, owner_id=owner_id)
     k = _kernel_for_scope(scope)
     _current_kernel.set(k)
     _current_user.set(user)
+    _current_role.set(role)
     return k
+
+
+def _require_editor() -> None:
+    """Raise 403 when a viewer tries to hit a write endpoint. Owners +
+    editors pass through. Call at the top of any endpoint that mutates the
+    workbook — saves, cell writes, sheet structure, chart CRUD, etc."""
+    if _current_role.get() == "viewer":
+        raise HTTPException(
+            status_code=403,
+            detail="This workbook was shared with you as a viewer — read-only.",
+        )
 
 
 # ---------- Provider registry + API-key storage ----------
@@ -1536,6 +1585,109 @@ async def dev_plugin_test(req: DevPluginTestRequest):
     except Exception as e:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
     return {"ok": True, "value": value}
+
+
+# ---------- Workbook sharing ----------
+
+
+class CollaboratorInviteRequest(BaseModel):
+    email: str
+    role: str = "editor"  # 'editor' | 'viewer' once viewer enforcement ships
+
+
+def _require_workbook_owner(user: AuthUser, workbook_id: str) -> None:
+    """Guard share-management endpoints — only the owner can list, invite,
+    or revoke collaborators. Collaborators who call these get 403."""
+    if not cloud_config.SAAS_MODE:
+        raise HTTPException(status_code=404, detail="Sharing is SaaS-only.")
+    try:
+        access = workbook_store.resolve_workbook_access(user.id, workbook_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Access check failed: {e}")
+    if access is None:
+        raise HTTPException(status_code=404, detail="Workbook not found.")
+    if access["role"] != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="Only the workbook owner can manage collaborators.",
+        )
+
+
+@app.post("/workbook/{workbook_id}/collaborators")
+async def invite_collaborator(
+    workbook_id: str,
+    req: CollaboratorInviteRequest,
+    user: AuthUser = Depends(require_user),
+):
+    _require_workbook_owner(user, workbook_id)
+    # v1 only ships editor-level grants. Schema + backend both accept 'viewer'
+    # for forward-compat, but the Share UI has no picker for it yet and
+    # _require_editor() isn't wired into write endpoints. Reject viewer for
+    # now to avoid silently misleading users.
+    if req.role not in ("editor",):
+        raise HTTPException(
+            status_code=400,
+            detail="v1 only supports role='editor'. Viewer role is coming soon.",
+        )
+    email = (req.email or "").strip().lower()
+    if "@" not in email or len(email) < 5:
+        raise HTTPException(status_code=400, detail="Please provide a valid email.")
+    try:
+        grant = workbook_store.add_collaborator_by_email(
+            workbook_id=workbook_id,
+            inviter_id=user.id,
+            email=email,
+            role=req.role,
+        )
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Invite failed: {e}")
+    return {"ok": True, "collaborator": grant}
+
+
+@app.get("/workbook/{workbook_id}/collaborators")
+async def list_workbook_collaborators(
+    workbook_id: str,
+    user: AuthUser = Depends(require_user),
+):
+    _require_workbook_owner(user, workbook_id)
+    return {"collaborators": workbook_store.list_collaborators(workbook_id)}
+
+
+@app.delete("/workbook/{workbook_id}/collaborators/{target_user_id}")
+async def revoke_collaborator(
+    workbook_id: str,
+    target_user_id: str,
+    user: AuthUser = Depends(require_user),
+):
+    _require_workbook_owner(user, workbook_id)
+    # Defensive: make sure we're not being asked to revoke the owner from
+    # their own workbook — the DB wouldn't have an owner row in the
+    # collaborators table, but a garbled request should fail loudly.
+    if target_user_id == user.id:
+        raise HTTPException(status_code=400, detail="You can't revoke your own owner access.")
+    workbook_store.remove_collaborator(workbook_id, target_user_id)
+    # Evict any kernel that was keyed against this user, so their next request
+    # has to re-resolve access (which will now 404). Without this they could
+    # keep writing against a cached kernel for up to the LRU window.
+    # Kernel pool is keyed by (owner_id, workbook_id) — collaborators resolve
+    # to the owner's key, so there's nothing to evict for the revoked user
+    # specifically. Their next request re-runs the ACL check and gets 404.
+    return {"ok": True}
+
+
+@app.get("/workbook/shared-with-me")
+async def list_shared_with_me(user: AuthUser = Depends(require_user)):
+    if not cloud_config.SAAS_MODE:
+        return {"workbooks": []}
+    try:
+        shared = workbook_store.list_shared_with_user(user.id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"List failed: {e}")
+    return {"workbooks": shared}
 
 
 @app.get("/")

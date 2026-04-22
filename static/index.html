@@ -2157,6 +2157,7 @@
                         <li data-menu-action="new-sheet">New sheet<span class="menu-shortcut"></span></li>
                         <li data-menu-action="save">Save workbook<span class="menu-shortcut">Ctrl+S</span></li>
                         <li data-menu-action="load">Load workbook<span class="menu-shortcut"></span></li>
+                        <li class="menu-saas-only" data-menu-action="share" style="display:none;">Share…<span class="menu-shortcut"></span></li>
                         <li class="menu-divider" role="separator"></li>
                         <li data-menu-action="download-gridos">Download as .gridos<span class="menu-shortcut"></span></li>
                         <li data-menu-action="download-xlsx">Download as .xlsx (Excel / Sheets)<span class="menu-shortcut"></span></li>
@@ -2574,6 +2575,43 @@
                     and the agents become available to the router.
                 </p>
                 <div id="marketplace-list" class="marketplace-list"></div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Share workbook (SaaS only) -->
+    <div class="chart-modal-backdrop" id="share-modal-backdrop" hidden>
+        <div class="library-modal" role="dialog" aria-modal="true" aria-labelledby="share-modal-title">
+            <div class="library-modal-header">
+                <h3 id="share-modal-title">Share workbook</h3>
+                <button class="icon-btn" id="share-modal-close" type="button" title="Close">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <section class="library-tab-panel active" style="display:flex;flex-direction:column;gap:14px;">
+                <p class="hint" id="share-hint" style="margin-top:0;">
+                    Invite collaborators by email. They need a GridOS account — they'll see this workbook in their
+                    <strong>Shared with me</strong> list and can edit it in real time alongside you.
+                </p>
+                <div style="display:flex;gap:6px;">
+                    <input type="email" id="share-invite-email" placeholder="collaborator@example.com" autocomplete="off" style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;" />
+                    <button class="primary-btn" id="share-invite-btn" type="button">Invite</button>
+                </div>
+                <div id="share-feedback" style="font-size:12px;color:var(--text-mutedder);min-height:16px;"></div>
+                <div>
+                    <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;">People with access</div>
+                    <div id="share-collaborator-list" style="display:flex;flex-direction:column;gap:4px;">
+                        <div class="hint" style="margin:0;">Loading…</div>
+                    </div>
+                </div>
+                <div>
+                    <div style="font-size:12px;font-weight:600;color:var(--text-muted);margin-bottom:6px;">Shareable link</div>
+                    <div style="display:flex;gap:6px;">
+                        <input type="text" id="share-link-input" readonly style="flex:1;padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:12px;font-family:monospace;" />
+                        <button class="primary-btn" id="share-link-copy" type="button">Copy</button>
+                    </div>
+                    <p class="hint" style="margin:4px 0 0;">Invitees open this link after accepting the invite above. The link alone doesn't grant access — an explicit invite is required.</p>
+                </div>
             </section>
         </div>
     </div>

@@ -1116,6 +1116,55 @@
                 // Network hiccup — keep the section hidden; user can still
                 // use hero-prompt / blank-card paths below.
             }
+            // Shared-with-me renders as a separate strip under the owned
+            // grid. Failure is silent — a user with no shares or no schema
+            // migration yet shouldn't see an error.
+            try {
+                const res = await fetch(`${API_BASE}/workbook/shared-with-me`);
+                if (!res.ok) return;
+                const data = await res.json();
+                renderSharedWorkbooks(data.workbooks || []);
+            } catch (_) { /* silent */ }
+        }
+
+        function renderSharedWorkbooks(list) {
+            let section = document.getElementById("shared-section");
+            // If nobody shared anything with us, hide the section entirely.
+            if (!list.length) {
+                if (section) section.hidden = true;
+                return;
+            }
+            // Lazy-create the section the first time we have shares to show.
+            if (!section) {
+                section = document.createElement("section");
+                section.id = "shared-section";
+                section.className = "section";
+                section.innerHTML = `
+                    <h2 class="section-title">Shared with me</h2>
+                    <div class="grid" id="shared-grid"></div>
+                `;
+                const workbooksSection = document.getElementById("workbooks-section");
+                workbooksSection.insertAdjacentElement("afterend", section);
+            }
+            section.hidden = false;
+            const grid = document.getElementById("shared-grid");
+            grid.innerHTML = "";
+            list.forEach((wb) => {
+                const card = document.createElement("div");
+                card.className = "card workbook-card";
+                const owner = wb.owner_email ? `from ${escapeHtml(wb.owner_email)}` : "shared";
+                card.innerHTML = `
+                    <div class="card-thumb workbook">${escapeHtml(wb.title || "Untitled")}</div>
+                    <div class="card-title">${escapeHtml(wb.title || "Untitled workbook")}</div>
+                    <div class="card-meta">
+                        <span>${owner} · ${escapeHtml(wb.role || "editor")}</span>
+                    </div>
+                `;
+                card.addEventListener("click", () => {
+                    window.location.href = `/workbook?id=${encodeURIComponent(wb.id)}`;
+                });
+                grid.appendChild(card);
+            });
         }
 
         // Fire as soon as we know we're signed into SaaS.
