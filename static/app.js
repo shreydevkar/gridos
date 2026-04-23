@@ -758,7 +758,14 @@ async function activateSheet(name) {
     // fire the activate + grid fetch in parallel (grid fetch targets the
     // sheet name directly via ?sheet=, so it doesn't need workbook state).
     if (workbook?.active_sheet === name) return;
-    workbook = { ...workbook, active_sheet: name };
+    // Flip the per-sheet `active` flag too — renderTabs reads it to decide
+    // which tab gets the bordered wrap + close button. Without this the old
+    // tab keeps its box until the next fetchWorkbook lands.
+    workbook = {
+        ...workbook,
+        active_sheet: name,
+        sheets: (workbook.sheets || []).map((s) => ({ ...s, active: s.name === name })),
+    };
     // Visual feedback first — the tab pill + active-tab styling change
     // before any network traffic lands.
     renderTabs();

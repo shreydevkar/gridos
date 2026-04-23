@@ -527,6 +527,19 @@
             overflow: auto;
             background: var(--bg);
             position: relative;
+            /* Suppress the browser's native blue text selection while the
+               user drags across cells — the grid has its own selection
+               model (the blue-tinted .selected class). Copy still works
+               because Ctrl+C is wired to copySelection(), not the native
+               text-selection clipboard path. */
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        /* Edit-mode inputs still need native selection so users can
+           double-click to select a word, shift-arrow to extend, etc. */
+        .grid-wrap input {
+            user-select: text;
+            -webkit-user-select: text;
         }
 
         /* ===== Chart overlays ===== */
