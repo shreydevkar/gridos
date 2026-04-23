@@ -55,7 +55,7 @@ Run both green before opening a PR.
 
 ## Reporting security issues
 
-Don't file public issues for security vulnerabilities. Email the maintainer (see the GitHub profile) with details. We'll acknowledge within a few days.
+Don't file public issues for security vulnerabilities. Email **gridosdev@gmail.com** with details — we'll acknowledge within 72 hours. See [`SECURITY.md`](./SECURITY.md) for the full policy and scope.
 
 ## License
 

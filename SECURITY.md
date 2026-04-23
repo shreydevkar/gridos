@@ -8,7 +8,7 @@ GridOS is pre-1.0 and ships from `master`. Fixes land on `master` and the hosted
 
 If you believe you've found a security issue in GridOS — secret exposure, auth bypass, SQL injection, privilege escalation between collaborators, kernel RCE through a formula, etc. — **please do not open a public issue**.
 
-Instead, email **marcocyl04@gmail.com** with:
+Instead, email **gridosdev@gmail.com** with:
 
 - A description of the vulnerability.
 - Steps to reproduce, or a proof-of-concept.
