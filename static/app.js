@@ -326,6 +326,11 @@ const UNDO_LIMIT = 50;
 
 let workbook = { active_sheet: "Sheet1", sheets: [] };
 let gridData = {};
+// Per-sheet snapshot cache so tab switches paint from memory before the
+// /debug/grid round-trip lands. Keyed by sheet name → {cells, charts}.
+// Populated every time fetchGrid completes; evicted when a write/remote
+// change targets that sheet so we never paint known-stale data.
+const gridCache = new Map();
 let selectedRange = { start: "A1", end: "A1" };
 let selectionAnchor = null;
 let isSelecting = false;
@@ -673,6 +678,7 @@ async function deleteSheet(name) {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || `Delete failed (${res.status})`);
+        gridCache.delete(name);
         workbook = { ...workbook, sheets: data.sheets, active_sheet: data.active_sheet };
         renderTabs();
         const activePill = document.getElementById("active-sheet-pill");
@@ -760,6 +766,20 @@ async function activateSheet(name) {
     if (activePill) activePill.textContent = name;
     clearPreview();
     selectedRange = { start: "A1", end: "A1" };
+    // Paint from the last-seen snapshot so the grid updates at click speed.
+    // fetchGrid(name) below will revalidate and repaint if the server state
+    // diverges (e.g. a realtime write landed while we were away).
+    const cached = gridCache.get(name);
+    if (cached) {
+        gridData = cached.cells;
+        sheetCharts = cached.charts;
+        refreshPopulatedCells();
+        syncSelectionUI();
+        repaintSelection();
+        repaintPreview();
+        renderCharts();
+        refreshChartsList();
+    }
     try {
         await Promise.all([
             fetch(`${API_BASE}/workbook/sheet/activate`, {
@@ -804,6 +824,11 @@ async function renameActiveSheet() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ old_name: current, new_name: proposed }),
     });
+    // Move the old sheet's cached snapshot to the new name so switching
+    // away-and-back after a rename doesn't hit the network needlessly.
+    const snap = gridCache.get(current);
+    gridCache.delete(current);
+    if (snap) gridCache.set(proposed, snap);
     workbook = await res.json();
     renderTabs();
     const activePill = document.getElementById("active-sheet-pill");
@@ -944,6 +969,9 @@ async function fetchGrid(sheetOverride) {
     const payload = await res.json();
     gridData = payload.cells || {};
     sheetCharts = payload.charts || [];
+    // Cache the fresh snapshot so a future activateSheet(targetSheet) can
+    // paint instantly before re-fetching.
+    gridCache.set(targetSheet, { cells: gridData, charts: sheetCharts });
     refreshPopulatedCells();
     syncSelectionUI();
     repaintSelection();
@@ -3395,6 +3423,9 @@ function handleRemoteCellsChanged(payload) {
     // set by the kernel's post-commit hook.
     const activeSheet = workbook?.active_sheet || null;
     if (payload?.sheet && activeSheet && payload.sheet !== activeSheet) {
+        // Drop the stale snapshot for that sheet so switching to it later
+        // triggers a real refetch instead of painting old values from cache.
+        gridCache.delete(payload.sheet);
         console.log(`[rt] skipping cells_changed for sheet ${payload.sheet} (active: ${activeSheet})`);
         return;
     }
