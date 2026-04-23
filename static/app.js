@@ -753,6 +753,14 @@ async function activateSheet(name) {
     clearPreview();
     selectedRange = { start: "A1", end: "A1" };
     await fetchGrid();
+    // Repaint cursors so peers on the old sheet disappear and peers on
+    // the new sheet (if any) appear. Also re-broadcast our own position
+    // with the new sheet name immediately so peers see us switch.
+    if (realtimeChannel) {
+        updateRemoteCursors();
+        realtimeLastCellReported = null;  // force next broadcast to fire
+        broadcastMySelection();
+    }
 }
 
 async function createSheet() {
@@ -3308,9 +3316,14 @@ async function subscribeToWorkbookRealtime() {
             // that as a 1×1 selection so this stays back-compat.
             const start = p.start || p.cell || null;
             const end = p.end || p.cell || start;
+            // Track the peer's sheet so the renderer can filter them out
+            // when they're on a different sheet from us. Missing sheet on
+            // the payload (older peer builds) is treated as matching so
+            // cross-version collab still renders a cursor.
             remoteCursors.set(p.userId, {
                 start,
                 end,
+                sheet: p.sheet || null,
                 email: p.email || "anon",
                 color: p.color || colorForEmail(p.email || p.userId),
                 ts: Date.now(),
@@ -3355,6 +3368,16 @@ async function subscribeToWorkbookRealtime() {
 
 function handleRemoteCellsChanged(payload) {
     const changes = payload?.changes || [];
+    // Filter by sheet — a broadcast for Sheet2 landing on a tab viewing
+    // Sheet1 would otherwise paint Sheet2's values into Sheet1's grid,
+    // which was causing "typing on Sheet2 makes the number show up on
+    // Sheet1" and generally buggy cross-tab behavior. payload.sheet is
+    // set by the kernel's post-commit hook.
+    const activeSheet = workbook?.active_sheet || null;
+    if (payload?.sheet && activeSheet && payload.sheet !== activeSheet) {
+        console.log(`[rt] skipping cells_changed for sheet ${payload.sheet} (active: ${activeSheet})`);
+        return;
+    }
     console.log(`[rt] cells_changed: ${changes.length} cells by ${payload?.by_email || "?"}`);
     // Apply the delivered cell values DIRECTLY to the local model so the
     // single-cell case paints in one frame without waiting for a refetch.
@@ -3426,9 +3449,13 @@ function renderRemoteCursors() {
     });
     document.querySelectorAll(".remote-cursor-overlay").forEach((el) => el.remove());
 
+    const activeSheet = workbook?.active_sheet || null;
     for (const [userId, state] of remoteCursors) {
         if (!state || !state.start) continue;
         if (userId === realtimeMyId) continue;
+        // Hide peer cursors that are on a different sheet. `state.sheet`
+        // is null on older peer builds; those get rendered (back-compat).
+        if (state.sheet && activeSheet && state.sheet !== activeSheet) continue;
         const color = state.color || colorForEmail(state.email || userId);
         const start = state.start;
         const end = state.end || start;
@@ -3523,6 +3550,10 @@ function broadcastMySelection() {
                     cell: liveEnd,
                     start: liveStart,
                     end: liveEnd,
+                    // Sheet name so peers on a different sheet don't render
+                    // a ghost cursor at a cell address that doesn't exist
+                    // in their current view.
+                    sheet: workbook?.active_sheet || null,
                 },
             });
         } catch (e) {
