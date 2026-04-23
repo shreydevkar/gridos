@@ -1,0 +1,7 @@
+{
+  "name": "GitHub",
+  "description": "Repo stats for any public GitHub repo: =GITHUB_STARS, =GITHUB_FORKS, =GITHUB_OPEN_ISSUES, =GITHUB_COMMITS_LAST_N_DAYS. Works with no auth on public repos; set GITHUB_TOKEN env var for higher rate limits and private repos.",
+  "category": "integrations",
+  "author": "GridOS",
+  "version": "0.1.0"
+}

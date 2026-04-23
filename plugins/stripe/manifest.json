@@ -1,0 +1,7 @@
+{
+  "name": "Stripe",
+  "description": "Live Stripe account metrics: =STRIPE_REVENUE, =STRIPE_CHARGE_COUNT, =STRIPE_MRR, =STRIPE_ACTIVE_SUBSCRIBERS, =STRIPE_CUSTOMER_COUNT. Auth via STRIPE_SECRET_KEY env var.",
+  "category": "integrations",
+  "author": "GridOS",
+  "version": "0.1.0"
+}
