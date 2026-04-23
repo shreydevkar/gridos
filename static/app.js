@@ -355,7 +355,7 @@ let realtimeLastCellReported = null;
 // have to slow ourselves down and make sure the FINAL position lands.
 // Pattern: fire the first call immediately, drop the next N within the
 // cooldown, schedule a trailing-edge send to ship the final cell value.
-let realtimeTrackCooldownMs = 180;
+let realtimeTrackCooldownMs = 80;
 let realtimeLastTrackSentAt = 0;
 let realtimeTrailingTimer = null;
 let dragFillState = null;
@@ -812,13 +812,10 @@ function updateCellDom(a1) {
     // destroy the <input> element and any in-progress keystrokes with it.
     // The commit path calls updateCellDom again once editing ends.
     if (editingCell === a1) return;
-    // Defensive: if the first child isn't the .cell-content div (e.g. it's
-    // the inline-editor input that we somehow didn't track in editingCell),
-    // skip rather than blindly rewriting.
-    const content = td.firstElementChild;
-    if (!content || !content.classList.contains("cell-content")) return;
     const state = gridData[a1];
     td.classList.toggle("locked", Boolean(state?.locked));
+    const content = td.firstElementChild;
+    if (!content) return;
     content.className = `cell-content${state?.formula ? " cell-formula" : ""}`;
     content.textContent = formatCellDisplay(state);
 }
@@ -3094,30 +3091,31 @@ async function subscribeToWorkbookRealtime() {
             updateRemoteCursors(channel.presenceState());
         });
 
-        await channel.subscribe(async (status) => {
+        await channel.subscribe(async (status, err) => {
+            console.log(`[rt] subscribe status: ${status}`, err || "");
             if (status !== "SUBSCRIBED") return;
             await channel.track({
                 email: realtimeMyEmail,
                 color: colorForEmail(realtimeMyEmail),
                 cell: selectedRange?.start || null,
             });
+            console.log(`[rt] subscribed + tracked initial cell: ${selectedRange?.start || null}`);
         });
         realtimeChannel = channel;
     } catch (e) {
-        console.warn("[realtime] subscribe failed:", e);
+        console.warn("[rt] subscribe failed:", e);
     }
 }
 
 function handleRemoteCellsChanged(payload) {
+    const changes = payload?.changes || [];
+    console.log(`[rt] cells_changed: ${changes.length} cells by ${payload?.by_email || "?"}`);
     // Apply the delivered cell values DIRECTLY to the local model so the
     // single-cell case paints in one frame without waiting for a refetch.
-    // This is the "feels instant" path; the debounced fetchGrid below is the
-    // safety net that catches formula recalcs the broadcast didn't include.
-    (payload.changes || []).forEach((ch) => {
+    changes.forEach((ch) => {
         if (!ch.cell) return;
         // Don't overwrite a cell we're currently editing — the user's
-        // typed-but-not-yet-committed value would vanish. They'll get the
-        // remote value on their next refetch or when editing ends.
+        // typed-but-not-yet-committed value would vanish.
         if (editingCell === ch.cell) return;
         const prev = gridData[ch.cell] || {};
         gridData[ch.cell] = {
@@ -3129,29 +3127,23 @@ function handleRemoteCellsChanged(payload) {
         };
         flashCellRemote(ch.cell);
     });
-    if ((payload.changes || []).length) {
+    if (changes.length) {
         refreshPopulatedCells();
-        // Remote overlays are children of <td> cells; refreshPopulatedCells
-        // can rewrite cell content and (for newly-touched cells) may have
-        // stomped an overlay. Re-apply presence so the cursor survives.
         if (realtimeChannel) updateRemoteCursors(realtimeChannel.presenceState());
     }
-    // Safety-net refetch: formulas that depend on the changed cells may need
-    // recalc (our broadcast only ships direct writes). 50ms coalesces rapid
-    // bursts without feeling laggy on the happy path.
+    // Safety-net refetch for formula recalcs that the broadcast didn't ship.
+    // Coalesced across rapid bursts. We DON'T defer-retry with an empty
+    // payload (that was a no-op); when editing ends, commitInlineEdit calls
+    // fetchGrid itself, which catches up the missed state.
     if (realtimeRefetchTimer) clearTimeout(realtimeRefetchTimer);
     realtimeRefetchTimer = setTimeout(async () => {
         realtimeRefetchTimer = null;
-        if (editingCell) {
-            // Defer until user commits or cancels their in-progress input so
-            // we don't clobber their typing.
-            realtimeRefetchTimer = setTimeout(() => handleRemoteCellsChanged({}), 400);
-            return;
-        }
+        if (editingCell) return;  // editing path will fetchGrid on commit
         try {
             await fetchGrid();
+            if (realtimeChannel) updateRemoteCursors(realtimeChannel.presenceState());
         } catch (e) {
-            console.warn("[realtime] fetchGrid after remote change failed:", e);
+            console.warn("[rt] fetchGrid after remote change failed:", e);
         }
     }, 50);
 }
