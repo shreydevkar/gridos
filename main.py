@@ -917,7 +917,15 @@ class WorkbookRenameRequest(BaseModel):
 
 BASE_SYSTEM_RULES = (
     "You are operating within GridOS. Check the \"locked\" metadata for every cell "
-    "before proposing a write. Do not attempt to overwrite locked cells."
+    "before proposing a write. Do not attempt to overwrite locked cells.\n\n"
+    "CROSS-SHEET REFERENCES: formulas may reference cells on other sheets in the "
+    "same workbook via `=SheetName!A1` syntax. Sheet names with spaces or special "
+    "characters must be single-quoted: `='Monthly Budget'!A1`. Sheet-name match is "
+    "case-insensitive. Missing sheet yields `#REF!`. Use cross-sheet refs when the "
+    "user asks to pull values from, or compute against, another sheet — e.g. "
+    "`=SUM(Data!A1:A10)` or `=Sheet1!B5 * 1.1`. ACTIVE SHEET below names the sheet "
+    "your writes land on by default; cross-sheet refs in values (not target_cell) "
+    "read from whichever sheet the ref names."
 )
 
 OUTPUT_FORMAT_SPEC = """
@@ -1060,6 +1068,40 @@ Return ONLY the lowercase agent id that best fits the task. No other text.
     return candidate if candidate in AGENTS else "general"
 
 
+def _plugin_formulas_for_prompt() -> str:
+    """Surface plugin-registered formulas from plugins that DON'T ship a
+    specialist agent. Plugins with agents (Shopify/Stripe/GitHub/Real Estate)
+    already document their formulas inside the agent's own system prompt, so
+    duplicating here would waste tokens. Respects the per-user install gate —
+    uninstalled plugins are hidden."""
+    import inspect
+    from core.functions import _REGISTRY as FORMULA_REGISTRY
+    from core.functions import _installed_plugins as _installed_cv
+    installed = _installed_cv.get()
+    lines: list[str] = []
+    for rec in PLUGIN_KERNEL.records:
+        if not rec.formulas or rec.agents:
+            continue
+        if installed is not None and rec.slug not in installed:
+            continue
+        for formula_name in rec.formulas:
+            fn = FORMULA_REGISTRY.get(formula_name)
+            if not fn:
+                continue
+            try:
+                sig = str(inspect.signature(fn))
+            except (TypeError, ValueError):
+                sig = "()"
+            lines.append(f"- {formula_name}{sig}  (plugin: {rec.slug})")
+    if not lines:
+        return ""
+    return (
+        "INSTALLED PLUGIN FORMULAS (orphan formulas — no specialist agent ships "
+        "with these plugins, so consult this list when a user request maps to one):\n"
+        + "\n".join(lines)
+    )
+
+
 def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> str:
     selected_summary = ", ".join(req.selected_cells) if req.selected_cells else "No cells selected."
     scope_line = "Selected cells only" if req.scope == "selection" else "Entire active sheet"
@@ -1113,6 +1155,8 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
         + ", ".join(primitive_names)
     )
 
+    plugin_formulas_section = _plugin_formulas_for_prompt()
+
     sections = [
         BASE_SYSTEM_RULES,
         f"ACTIVE SHEET: {req.sheet or kernel.active_sheet}\nVIEW SCOPE: {scope_line}\nSELECTED CELLS: {selected_summary}\n{bounds_line}",
@@ -1120,6 +1164,7 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
         f"READABLE GRID STATE:\n{context['formatted_data']}",
         charts_section,
         primitives_section,
+        plugin_formulas_section,
         macros_section,
         hero_section,
     ]
@@ -1134,7 +1179,7 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
         )
 
     sections.extend([agent["system_prompt"], OUTPUT_FORMAT_SPEC])
-    return "\n\n".join(sections)
+    return "\n\n".join(s for s in sections if s)
 
 
 def _extract_first_json_object(text: str) -> Optional[str]:
