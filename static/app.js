@@ -3226,13 +3226,15 @@ function renderRemoteCursors() {
 
         // Compute the rectangle covered by start..end. A1 helpers are
         // already on the page (a1ToCoords, coordsToA1) so we can just
-        // walk the bounding box.
+        // walk the bounding box. Note: a1ToCoords returns {row, col}
+        // — destructuring as an array gives undefined and the loop
+        // would never run, falling back to a 1-cell highlight.
         let topLeftCell = start;
         try {
-            const [sr, sc] = a1ToCoords(start);
-            const [er, ec] = a1ToCoords(end);
-            const top = Math.min(sr, er), bottom = Math.max(sr, er);
-            const left = Math.min(sc, ec), right = Math.max(sc, ec);
+            const s = a1ToCoords(start);
+            const e = a1ToCoords(end);
+            const top = Math.min(s.row, e.row), bottom = Math.max(s.row, e.row);
+            const left = Math.min(s.col, e.col), right = Math.max(s.col, e.col);
             topLeftCell = coordsToA1(top, left);
             let painted = 0;
             outer: for (let r = top; r <= bottom; r++) {
