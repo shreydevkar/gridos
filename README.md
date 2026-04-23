@@ -12,8 +12,8 @@ Bring-your-own-key: plug in **Google Gemini**, **Anthropic Claude**, **Groq**, o
 
 ### `/core` — Deterministic kernel
 The source of truth for cell state.
-- `engine.py` — coordinate mapping, write collisions, shift logic, lock enforcement, persistence.
-- `models.py` — Pydantic schemas for `AgentIntent` and `WriteResponse`.
+- `engine.py` — coordinate mapping, write collisions, shift logic, lock enforcement, persistence. **Thread-safe via per-kernel `RLock`** so concurrent writers (multi-user collab, agent-apply racing a user edit) can't interleave partial state. **Per-cell version counter** bumps on every commit; `VersionConflict` powers optimistic-locking. **Post-commit hook seam** (`add_post_commit_hook`) lets the orchestration layer broadcast cell changes without polluting the engine with transport concerns. Excel-compatible parser supports comparison ops (`=`, `<>`, `<`, `>`, `<=`, `>=`), string concat (`&`), and preserves text-cell values for non-numeric formulas.
+- `models.py` — Pydantic schemas for `AgentIntent`, `WriteResponse`, and `CellState` (incl. `version: int` for optimistic concurrency).
 - `functions.py` — registry of atomic formula operations (`SUM`, `MAX`, `MIN`, `MINUS`, `MULTIPLY`, `DIVIDE`, `AVERAGE`, `IF`, comparators, …).
 - `macros.py` — user-authored macros compiled on top of the primitive registry.
 - `utils.py` — A1 notation ↔ (row, col) coordinate translation.
@@ -31,10 +31,18 @@ A FastAPI app that:
 - **Pins the router/classifier call to the fastest configured small model** (GPT-OSS 20B > Llama 8B > Gemini Flash Lite > Claude Haiku) regardless of the user's dropdown choice — trivial task that doesn't need frontier quality; the user's model still drives the agent call.
 - Tolerates small-model quirks: balanced-brace extraction for prose-prefixed JSON, clear `422` errors with provider/model/finish_reason context, and a pre-apply formula guard that rejects previews referencing empty cells (blocks `#DIV/0!` before it touches the sheet).
 - Validates model output against locked ranges before applying.
-- Exposes REST endpoints for chat, preview/apply, direct cell writes, sheet management, save/load, template library, and per-provider API-key management (`/settings/providers`, `/settings/keys/*`, `/models/available`).
+- **Server-side preview-token stash** — every `/agent/chat` mints a single-use, TTL-bounded token. `/agent/apply` re-reads the stashed payload server-side and ignores client-supplied values, so the LLM can't substitute different writes between preview and commit. `/agent/write` is refused in SaaS mode (the only sanctioned path is `/agent/chat → /agent/apply`).
+- **Resolved-scope ContextVar** (`_current_scope`, `_scope_from_context()`) — collaborator requests resolve to the workbook owner's scope so save/load/rename/delete never silently flip ownership.
+- **Realtime broadcaster hook** — registers a post-commit closure on each kernel that POSTs cell deltas to Supabase Realtime in a daemon thread (fire-and-forget, never blocks the request).
+- Exposes REST endpoints for chat, preview/apply, direct cell writes, sheet management, save/load, template library, per-provider API-key management, the developer plugin portal, and shared-workbook collaborator CRUD.
 
 ### `/static` — Frontend
-Minimal HTML + vanilla JS + Tailwind UI for editing cells, previewing AI suggestions, and managing sheets.
+Minimal HTML + vanilla JS + Chart.js for editing cells, previewing AI suggestions, managing sheets, and rendering live multi-user state.
+
+- **Realtime cell + cursor sync** — subscribes to the Supabase Realtime channel `workbook:<wb_id>` on bootstrap. `cells_changed` events paint remote writes optimistically with a yellow flash + safety-net `fetchGrid` debounce (50ms). `cursor_at` events render Google-Sheets-style range highlights with colored borders, faint inner tint, and a floating email label. Throttled 80ms leading + trailing on the send side; 4s heartbeat re-broadcasts the current selection to recover from silent WebSocket reconnects; 8s TTL sweep removes ghost cursors when peers close their tab.
+- **Kill-switch composer** — `AbortController` wired through `/agent/chat` and `/agent/chat/chain`; the send button morphs into a red stop button while a request is in-flight. Click (or press Enter again) to cancel.
+- **Debounced cloud auto-save** — every undo-recorded mutation schedules a silent `/system/save` after 4s idle in SaaS mode. Single in-flight guard prevents interleaved saves; status pill flashes "Autosaved → Ready".
+- **Edit-collision protection** — when a remote broadcast arrives for a cell the local user is currently editing, the optimistic paint and refresh are deferred until the local edit commits or cancels. No clobbering mid-keystroke.
 
 ### `/cloud` — Managed (SaaS) tier, optional
 Everything here stays dormant unless `SAAS_MODE=true`. The public OSS path imports nothing from this folder into the hot loop — the only always-mounted endpoint is `GET /cloud/status`, which the frontend reads on bootstrap to decide whether to surface login / billing UI. When enabled, the cloud tier adds:
@@ -42,19 +50,24 @@ Everything here stays dormant unless `SAAS_MODE=true`. The public OSS path impor
 - **Supabase JWT auth** (`cloud/auth.py`) — email/password + Google OAuth, routes ES256/RS256 tokens through JWKS and HS256 through a shared secret.
 - **Multi-workbook storage** (`cloud/supabase_store.py`) — each user's workbooks live in `public.workbooks.grid_state` (jsonb), protected by row-level security. A landing-page workbook picker handles list / create / rename / delete.
 - **Bring-your-own-key LLMs** (`cloud/user_keys.py`) — each user enters their own Gemini/Anthropic/Groq/OpenRouter key from the in-app Settings panel; rows live in `public.user_api_keys` behind RLS. The operator never pays LLM bills — the product is GridOS itself (cloud save, multi-workbook, agentic UX), not the tokens.
-- **Per-user kernel isolation** (`main.py` kernel pool) — a `ContextVar`-bound kernel per `(user_id, workbook_id)`, LRU-capped at 64. Two tabs on different workbooks (or two users on the same process) never step on each other's in-memory state.
+- **Per-user kernel isolation** (`main.py` kernel pool) — a `ContextVar`-bound kernel per `(owner_id, workbook_id)`, LRU-capped at 64. Two tabs on different workbooks never step on each other's in-memory state. Collaborators on a *shared* workbook resolve to the **owner's** kernel pool entry, so both users see the same live state and the engine's RLock + version counter handle concurrent writes deterministically.
+- **Shared workbooks + realtime collab** (`cloud/migrations/0007_workbook_collaborators.sql`, `cloud/supabase_store.resolve_workbook_access`) — owner invites by email from File → Share…; invitee sees the workbook in a "Shared with me" strip on their landing page. Cell writes broadcast over Supabase Realtime channel `workbook:<wb_id>`; selection broadcasts go on the same channel as `cursor_at` events with start+end so peers see the full selection rectangle (faint colored fill + edge border + email label). v1 is editor-only and refresh-to-see-changes is replaced by sub-second push.
 - **Per-tier quotas** (`cloud/config.py`) — five subscription tiers with two independent caps. **Monthly agentic tokens** (`free=100k`, `plus=1M`, `student=5M`, `pro=5M`, `enterprise=unlimited`) are the product limit — enforced at `/agent/chat` with a 402 at the cap, even though the user is paying their own LLM bill, so tiers stay meaningful. **Cloud workbook slots** (`free=3`, `plus=10`, `student=25`, `pro=50`, `enterprise=unlimited`) cap per-user storage. The `student` tier is Pro-level on tokens and is intended to be unlocked by `.edu` email / GitHub Student Pack verification (enforcement ships with the Stripe phase).
 - **Usage analytics** — every successful LLM response logs to `public.usage_logs`; a Postgres trigger rolls it into `public.user_usage` for the account popover's progress bar.
 
-Run the migrations in `cloud/migrations/` (numbered `0001_init.sql`, `0002_usage_rollup.sql`, …) in the Supabase SQL Editor before pointing a server at your project.
+Run the migrations in `cloud/migrations/` (numbered `0001_init.sql` through `0007_workbook_collaborators.sql`) in the Supabase SQL Editor before pointing a server at your project.
 
 ### `/core/workbook_store.py` — Persistence seam
 `WorkbookStore` protocol with two implementations: `FileWorkbookStore` (OSS, flat files on disk) and `SupabaseWorkbookStore` (SaaS). Endpoints call `store.save(scope, state_dict)` without branching on mode.
 
 ### `/plugins` — Extensibility surface
-Drop a directory into `plugins/` with `plugin.py` + `manifest.json` and GridOS auto-loads it on boot. A plugin's `register(kernel)` function can register custom formulas (`@kernel.formula("BLACK_SCHOLES")`), specialist agents (`kernel.agent({...})`), and provider models (`kernel.model({...})`). Example plugins ship in-tree — see [`plugins/hello_world`](./plugins/hello_world), [`plugins/black_scholes`](./plugins/black_scholes), and [`plugins/real_estate`](./plugins/real_estate). Full authoring guide: [`plugins/README.md`](./plugins/README.md). Introspect what loaded (and what failed) at `GET /plugins`.
+Drop a directory into `plugins/` with `plugin.py` + `manifest.json` and GridOS auto-loads it on boot. A plugin's `register(kernel)` function can register custom formulas (`@kernel.formula("BLACK_SCHOLES")`), specialist agents (`kernel.agent({...})`), and provider models (`kernel.model({...})`). Example plugins ship in-tree — see [`plugins/hello_world`](./plugins/hello_world), [`plugins/black_scholes`](./plugins/black_scholes), [`plugins/real_estate`](./plugins/real_estate), and [`plugins/shopify`](./plugins/shopify) (live Shopify store metrics via `=SHOPIFY_REVENUE`, `=SHOPIFY_ORDER_COUNT`, `=SHOPIFY_AVG_ORDER_VALUE`, `=SHOPIFY_PRODUCT_COUNT` — auth via `SHOPIFY_STORE_DOMAIN` + `SHOPIFY_ADMIN_TOKEN` env vars). Full authoring guide: [`plugins/README.md`](./plugins/README.md). Introspect what loaded (and what failed) at `GET /plugins`.
 
 In SaaS mode an in-app **Marketplace** (gear icon → grid icon in the menubar) lets users browse the vetted plugin catalog and toggle per-user installs, persisted in `public.user_plugins`.
+
+**Developer plugin portal** (OSS only, gated by `GRIDOS_DEV_PORTAL_ENABLED=1`) — File → View → "Developer plugin portal…" opens a modal with the loaded-plugin list, a slug + plugin.py upload form, and an inline formula tester that runs against an ephemeral kernel so the live workbook stays clean. `POST /dev/plugins/upload` writes the files and hot-registers; `DELETE /dev/plugins/{slug}` unregisters and removes; `POST /dev/plugins/test` evaluates a formula in isolation. Refused unconditionally in SaaS — uploading Python = full RCE on the server, so the marketplace is the sanctioned distribution path there.
+
+**Self-evolving formula loop** — when a user asks for a formula that isn't expressible as a macro (needs HTTP, a SaaS API, custom Python), the agent can emit a `plugin_spec` field with `{slug, name, description, plugin_py, example_formula}`. The preview card renders the proposed code in a syntax-highlighted block with an **Install plugin** button that POSTs to the dev portal. Code is never exec'd without explicit user approval, button disables after install to block double-upload.
 
 ## Capabilities
 
@@ -75,6 +88,13 @@ In SaaS mode an in-app **Marketplace** (gear icon → grid icon in the menubar) 
 - **Multi-section builds in one call** — for structured deliverables (3-statement model, full operating model, DCF, multi-block dashboard), the agent emits an `intents` array packing every rectangle into a single response. One LLM call, one Apply click, ~6× fewer tokens than walking the same model through chain mode.
 - **String literals in formulas** — formulas accept quoted strings (`=GREET("Shrey")`, `=BLACK_SCHOLES(100, 100, 1, 0.05, 0.2, "call")`), enabling plugins that take labels or enum-style switches without needing cell references.
 - **Per-cell decimal precision** — two toolbar buttons (`.0←` / `.00→`) round the displayed number without touching the stored value, so downstream formulas still see full precision.
+- **Excel-compatible formula parser** — `=A1=B1`, `=IF(A1<>0, x, y)`, `=A1<=B1`, `=A1&" world"`, `=A1<B1+C1` all work. Comparison operators return 1/0 (Excel-style), `&` coerces both sides to display strings (booleans → `TRUE`/`FALSE`, integer-valued floats drop the `.0`), text-cell references stay as strings so numeric ops raise `#VALUE!` honestly instead of silently coercing to 0.
+- **Shared workbooks (SaaS)** — File → Share… invites a collaborator by email; both users edit the same live kernel with sub-second sync. **Realtime cell updates** paint with a yellow flash on the peer tab; **range cursors** show the other user's selection rectangle Google-Sheets-style with a colored border + faint inner tint + email label. Concurrent writes are serialized by a per-kernel `RLock` and per-cell version counter so two users can't corrupt each other's state.
+- **Optimistic-locking API** — `/grid/cell` and `/grid/range` accept an `expected_versions: {cell: int}` map and return **409 Conflict** when the stored version drifted. Lets future "merge or refresh" UX detect concurrent writes precisely instead of falling back to last-writer-wins.
+- **Composer kill-switch** — the send button morphs into a red stop button while an `/agent/chat` or `/agent/chat/chain` request is in-flight. Click (or press Enter again) to abort. Status pill flips to "Cancelled"; chain cancels refetch the grid so server-committed steps stay honest.
+- **Debounced cloud auto-save** — every undo-recorded mutation triggers a silent `/system/save` after 4s idle (SaaS only). No manual Ctrl+S required for cloud users; status pill flashes "Autosaved → Ready".
+- **Self-evolving formula loop** — for a formula that needs HTTP, an external API, or non-trivial Python, the agent proposes a full plugin (slug + plugin.py + example usage). The preview card shows the code; one click installs it via the developer portal and the new formula becomes immediately callable from any cell.
+- **Hardened guardrail** — every preview from `/agent/chat` mints a server-side single-use token; `/agent/apply` re-reads the stashed payload and ignores client-supplied values, so the LLM can't substitute different writes between preview and commit. The Python kernel is the only sanctioned path to mutate cells.
 
 ## How is GridOS different from X?
 
@@ -142,7 +162,8 @@ Full docs live at **[gridos.mintlify.app](https://gridos.mintlify.app)**. Jumpin
 | API | FastAPI + Uvicorn |
 | Frontend | HTML + vanilla JS + Chart.js |
 | Persistence (OSS) | Custom `.gridos` file format (+ `.xlsx` round-trip via `openpyxl`) |
-| Persistence (SaaS) | Supabase Postgres + RLS (`public.workbooks`, `public.users`, `public.usage_logs`, `public.user_api_keys`) |
+| Persistence (SaaS) | Supabase Postgres + RLS (`public.workbooks`, `public.users`, `public.usage_logs`, `public.user_api_keys`, `public.user_plugins`, `public.workbook_collaborators`) |
+| Realtime (SaaS) | Supabase Realtime broadcast — `workbook:<wb_id>` channel carries `cells_changed` + `cursor_at` events; server posts via REST, client subscribes via supabase-js |
 
 ## Running locally
 
@@ -218,7 +239,7 @@ The cloud tier is optional — set `SAAS_MODE=true` and point the server at a Su
 ### One-time Supabase setup
 
 1. Create a Supabase project.
-2. Open **SQL Editor** and run the numbered migrations in `cloud/migrations/` in order: `0001_init.sql` (tables + RLS), `0002_usage_rollup.sql` (usage trigger), `0003_user_api_keys.sql` (BYOK keys table).
+2. Open **SQL Editor** and run the numbered migrations in `cloud/migrations/` in order: `0001_init.sql` (tables + RLS), `0002_usage_rollup.sql` (usage trigger), `0003_user_api_keys.sql` (BYOK keys table), `0004_add_plus_tier.sql` + `0005_add_student_tier.sql` (tier check constraints), `0006_user_plugins.sql` (per-user plugin enablement), `0007_workbook_collaborators.sql` (shared-workbook ACL + extended `workbooks` RLS).
 3. **Authentication → Providers** — enable Email and (optionally) Google. Google needs a Google Cloud Console OAuth 2.0 Client with `https://<project>.supabase.co/auth/v1/callback` as an authorized redirect URI.
 4. **Project Settings → API** — copy the `URL`, `anon public` key, `service_role` key, and `JWT Secret`.
 
@@ -293,6 +314,18 @@ Render's free instances sleep after ~15 min of inactivity (~30–60s cold start 
 - [x] String literals in the formula parser — plugins can take quoted args like `=BLACK_SCHOLES(..., "call")`
 - [x] Per-cell decimal display precision — toolbar buttons adjust rounding without touching stored values
 - [x] Multi-rectangle agent responses (`intents` array) — whole multi-section models build in one LLM call instead of N chain turns
+- [x] Excel-compatible parser ops — comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`), string concat (`&`), and text-cell preservation in references
+- [x] Hardened guardrail — server-minted single-use preview tokens stop client-side payload substitution between preview and apply
+- [x] Composer kill-switch — `AbortController` cancels any in-flight `/agent/chat[/chain]` mid-call
+- [x] Debounced cloud auto-save — silent `/system/save` 4s after the last edit, SaaS only
+- [x] Concurrency primitives — per-kernel `RLock` + per-cell version counter + optimistic-locking 409 on `/grid/cell`
+- [x] Shared workbooks (v1, editor-only) — collaborators resolve to the owner's live kernel; invite/list/revoke endpoints + File → Share… modal + "Shared with me" landing-page strip
+- [x] Realtime collab — Supabase Realtime broadcast for `cells_changed` + `cursor_at` (full range selection); 80ms throttle, 4s heartbeat, 8s TTL sweep
+- [x] Self-evolving formula loop — agent emits `plugin_spec`; preview card installs via dev portal on user approval
+- [x] Developer plugin portal — File → View → "Developer plugin portal…" hot-uploads + tests + deletes plugins; gated by `GRIDOS_DEV_PORTAL_ENABLED` and refused in SaaS
+- [x] Shopify connector plugin — `=SHOPIFY_REVENUE` / `_ORDER_COUNT` / `_AVG_ORDER_VALUE` / `_PRODUCT_COUNT` with 60s cache and `#SHOPIFY_*!` sentinels on auth/network failure
+- [ ] Viewer role enforcement — schema column ready; need to wire `_require_editor()` into every mutation endpoint and surface the role choice in the Share UI
+- [ ] Invite-by-email for unregistered users (currently invitee must already have a GridOS account)
 - [ ] Stripe checkout + webhook for tier upgrades (Phase 4c)
 - [ ] `.edu` / GitHub Student Pack verification for the Student tier unlock
 - [ ] Range-based vector operations and cross-sheet referencing
@@ -311,7 +344,7 @@ Working on the kernel itself — new primitives, provider adapters, collision-en
 
 - Fork the repo and follow [Running locally](#running-locally) to get the server up.
 - Read the [Architecture](#architecture) section above for a map of `core/`, `main.py`, `cloud/`, and the static frontend.
-- Run `python test_platform.py && python test_plugins.py` before sending a PR. Both are offline — no network, no LLM calls.
+- Run `python test_platform.py && python test_ast_edge_cases.py && python test_plugins.py` before sending a PR. All three are offline — no network, no LLM calls. `test_ast_edge_cases.py` covers 21 parser cases (operator precedence, comparison ops, string concat, range refs, IF branches, circular-ref termination, deterministic failure on unknown functions).
 - PRs welcome for anything on the [Roadmap](#roadmap) or anything you think the project is missing. Open an issue first for larger architectural changes.
 
 ### 2. Plugin and extension developers
