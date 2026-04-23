@@ -1,0 +1,64 @@
+name: Tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  # Cancel in-flight runs for the same branch when a new push lands — saves
+  # CI minutes and keeps the build-status badge pointing at the latest commit.
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-suites:
+    name: Offline test suites (py ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Lower bound is the `requirements.txt` floor; upper is whatever
+        # ships on Render today. Run both so we catch forward-compat bugs.
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: test_platform.py (14 kernel/agent/context tests)
+        run: python test_platform.py
+
+      - name: test_ast_edge_cases.py (21 parser tests)
+        run: python test_ast_edge_cases.py
+
+      - name: test_plugins.py (plugin loader tests)
+        run: python test_plugins.py
+
+      - name: Import smoke (main.py + engine.py + supabase_store.py)
+        run: |
+          python -c "import ast; [ast.parse(open(f).read()) for f in ['main.py','core/engine.py','core/functions.py','core/plugins.py','cloud/supabase_store.py']]; print('py parses')"
+
+  # Cheap static checks that don't need Python deps — catches syntax
+  # regressions in the frontend before they 500 on prod.
+  frontend-syntax:
+    name: Frontend syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Parse static/app.js
+        run: node -e "new Function(require('fs').readFileSync('static/app.js','utf8')); console.log('app.js parses')"

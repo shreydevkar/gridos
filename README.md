@@ -1,5 +1,9 @@
 # GridOS: Agentic Spreadsheet
 
+[![Tests](https://github.com/shreydevkar/gridos/actions/workflows/tests.yml/badge.svg?branch=master)](https://github.com/shreydevkar/gridos/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Live deploy](https://img.shields.io/badge/live-gridos.onrender.com-brightgreen)](https://gridos.onrender.com)
+
 > **Live SaaS**: [gridos.onrender.com](https://gridos.onrender.com) · **Docs**: [gridos.mintlify.app](https://gridos.mintlify.app) · **Quickstart**: [gridos.mintlify.app/quickstart](https://gridos.mintlify.app/quickstart)
 
 ![GridOS demo — build a model by talking to the sheet](./assets/demo.gif)
