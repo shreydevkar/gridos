@@ -22,12 +22,17 @@ create table if not exists public.pending_invites (
     accepted_at timestamptz
 );
 
--- One pending invite per (workbook, email) at a time. Re-inviting the same
--- email upserts. Partial unique index so a promoted row (accepted_at set)
--- doesn't block a fresh invite if the owner later revokes + re-invites.
-create unique index if not exists pending_invites_workbook_email_idx
-    on public.pending_invites(workbook_id, lower(email))
-    where accepted_at is null;
+-- One pending invite per (workbook, email). PostgREST upserts target the
+-- constraint NAME via ON CONFLICT, which requires a plain unique constraint —
+-- partial and expression indexes aren't ON-CONFLICT-addressable. Emails are
+-- lowercased at the insert site (cloud/supabase_store.add_collaborator_by_email),
+-- so a plain (workbook_id, email) constraint is effectively case-insensitive.
+-- Re-inviting after revoke updates the same row (accepted_at re-set to null).
+alter table public.pending_invites
+    drop constraint if exists pending_invites_workbook_email_key;
+alter table public.pending_invites
+    add constraint pending_invites_workbook_email_key
+    unique (workbook_id, email);
 
 -- Fast lookup "which workbooks is <email> invited to" — drives the
 -- promotion trigger on signup.
