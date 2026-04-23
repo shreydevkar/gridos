@@ -1,7 +1,16 @@
 {
   "name": "GitHub",
-  "description": "Repo stats for any public GitHub repo: =GITHUB_STARS, =GITHUB_FORKS, =GITHUB_OPEN_ISSUES, =GITHUB_COMMITS_LAST_N_DAYS. Works with no auth on public repos; set GITHUB_TOKEN env var for higher rate limits and private repos.",
+  "description": "Repo stats for any public GitHub repo: =GITHUB_STARS, =GITHUB_FORKS, =GITHUB_OPEN_ISSUES, =GITHUB_COMMITS_LAST_N_DAYS. Optional token unlocks higher rate limits + private repos.",
   "category": "integrations",
   "author": "GridOS",
-  "version": "0.1.0"
+  "version": "0.2.0",
+  "secrets": [
+    {
+      "key": "TOKEN",
+      "label": "Personal access token (optional)",
+      "placeholder": "ghp_...",
+      "help": "Optional. Without a token you get 60 requests/hour on public repos; with one you get 5000/hour and can read private repos you have access to.",
+      "optional": true
+    }
+  ]
 }

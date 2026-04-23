@@ -20,13 +20,25 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 import traceback
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
 from core.functions import _FORMULA_PLUGIN_SOURCE, _REGISTRY as FORMULA_REGISTRY
+
+# Per-request map of per-user plugin secrets, shape:
+#   {"shopify": {"STORE_DOMAIN": "...", "ADMIN_TOKEN": "..."},
+#    "stripe":  {"SECRET_KEY": "..."}}
+# Set by main.py.current_kernel_dep from Supabase in SaaS mode; left unset in
+# OSS. Plugins read through PluginKernel.get_secret which also falls back to
+# os.environ so the operator-scoped-env-var workflow keeps working.
+_plugin_secrets: ContextVar[Optional[dict]] = ContextVar(
+    "gridos_plugin_secrets", default=None
+)
 
 
 @dataclass
@@ -101,6 +113,24 @@ class PluginKernel:
         if self._current is not None:
             self._current.models.append(entry["id"])
         return entry
+
+    def get_secret(self, plugin_slug: str, key_name: str, env_fallback: Optional[str] = None) -> str:
+        """Resolve a secret for this plugin. Precedence:
+          1. Per-user value from _plugin_secrets (set per-request by the
+             SaaS kernel dep from user_plugin_secrets).
+          2. Environment variable — either `env_fallback` if the caller
+             supplied an explicit name, or the conventional form
+             `<PLUGIN_SLUG>_<KEY_NAME>` uppercased.
+
+        Returns '' when neither source has a value so plugins can do a
+        single `if not token` falsy check without worrying about None.
+        """
+        bag = _plugin_secrets.get() or {}
+        val = (bag.get(plugin_slug) or {}).get(key_name)
+        if val:
+            return val
+        env_name = env_fallback or f"{plugin_slug.upper()}_{key_name}"
+        return os.environ.get(env_name, "")
 
 
 def load_manifests(plugins_dir: Path) -> list[dict]:

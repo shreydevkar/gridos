@@ -518,6 +518,19 @@ async def current_kernel_dep(
             # fall through with no gating (same behavior as OSS mode). Logged
             # so a sustained failure shows up in the server output.
             print(f"[marketplace] install gate lookup failed: {e}")
+
+        # Per-user plugin secrets (Shopify tokens, Stripe keys, etc). Fetched
+        # from user_plugin_secrets for the workbook OWNER so collaborators
+        # running a formula use the owner's credentials — they're working
+        # inside the owner's data boundary, not their own. Falls back to
+        # os.environ inside PluginKernel.get_secret when a key isn't set per
+        # user, so operator-scoped .env configs keep working.
+        try:
+            from cloud import user_plugin_secrets as _plugin_secret_store
+            from core.plugins import _plugin_secrets
+            _plugin_secrets.set(_plugin_secret_store.get_all_for(owner_id or user.id))
+        except Exception as e:
+            print(f"[plugin_secrets] lookup failed: {e}")
     return k
 
 
@@ -3398,6 +3411,75 @@ async def marketplace_toggle(
     from cloud import marketplace as _marketplace
     _marketplace.set_installed(user.id, req.slug, req.installed)
     return {"status": "Success", "slug": req.slug, "installed": req.installed}
+
+
+# ---------- Per-user plugin secrets ----------
+#
+# Mirrors the LLM BYOK pattern (user_api_keys) for plugin credentials —
+# Shopify tokens, Stripe secret keys, GitHub PATs, etc. Keys never come
+# back down: GET reports which slots are SET, never their values. PUT
+# upserts the declared key/value map; an empty string deletes the row.
+# OSS mode is a no-op — plugins fall back to env vars.
+
+
+class PluginSecretsRequest(BaseModel):
+    # Shape: {KEY_NAME: "value_or_empty_to_delete"}. Only the keys declared
+    # in the plugin's manifest.secrets array should appear; we don't enforce
+    # that server-side (hands-off) but the UI only surfaces declared keys.
+    secrets: Dict[str, str] = {}
+
+
+def _require_saas_user(user: AuthUser) -> None:
+    if not cloud_config.SAAS_MODE:
+        raise HTTPException(status_code=404, detail="Plugin secrets are a SaaS feature.")
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Sign in required.")
+
+
+@app.get("/settings/plugin-secrets/{plugin_slug}")
+async def get_plugin_secret_slots(plugin_slug: str, user: AuthUser = Depends(require_user)):
+    """Return which secret slots the user has filled for this plugin, plus
+    the plugin's declared secret schema from its manifest. Never returns
+    the actual secret values — server-side only."""
+    _require_saas_user(user)
+    manifests = {m["slug"]: m for m in load_plugin_manifests(PLUGINS_DIR)}
+    if plugin_slug not in manifests:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_slug}")
+    declared = manifests[plugin_slug].get("secrets") or []
+    from cloud import user_plugin_secrets as _store
+    set_keys = set(_store.list_set_keys(user.id, plugin_slug))
+    return {
+        "plugin_slug": plugin_slug,
+        "declared": declared,
+        "set_keys": sorted(set_keys),
+    }
+
+
+@app.put("/settings/plugin-secrets/{plugin_slug}")
+async def put_plugin_secrets(
+    plugin_slug: str,
+    req: PluginSecretsRequest,
+    user: AuthUser = Depends(require_user),
+):
+    """Write or clear per-user secrets for a plugin. Empty-string values
+    delete the matching key. Keys not present in the body are untouched."""
+    _require_saas_user(user)
+    manifests = {m["slug"]: m for m in load_plugin_manifests(PLUGINS_DIR)}
+    if plugin_slug not in manifests:
+        raise HTTPException(status_code=404, detail=f"Unknown plugin: {plugin_slug}")
+    from cloud import user_plugin_secrets as _store
+    _store.upsert_many(user.id, plugin_slug, req.secrets or {})
+    return {"status": "Success", "plugin_slug": plugin_slug}
+
+
+@app.delete("/settings/plugin-secrets/{plugin_slug}")
+async def delete_plugin_secrets(plugin_slug: str, user: AuthUser = Depends(require_user)):
+    """Wipe every secret the user has stored for this plugin. Useful as a
+    'Disconnect' action when the user rotates keys or leaves the service."""
+    _require_saas_user(user)
+    from cloud import user_plugin_secrets as _store
+    _store.delete_all_for(user.id, plugin_slug)
+    return {"status": "Success", "plugin_slug": plugin_slug}
 
 
 @app.get("/models/available")

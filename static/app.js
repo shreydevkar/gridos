@@ -3032,6 +3032,14 @@ function attachSettingsEvents() {
         if (e.target === e.currentTarget) closeMarketplaceModal();
     });
 
+    // Plugin-credentials modal (SaaS only; OSS plugins read from env vars).
+    document.getElementById("pluginconfig-modal-close")?.addEventListener("click", closePluginConfigureModal);
+    document.getElementById("pluginconfig-modal-backdrop")?.addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) closePluginConfigureModal();
+    });
+    document.getElementById("pluginconfig-save")?.addEventListener("click", savePluginCredentials);
+    document.getElementById("pluginconfig-disconnect")?.addEventListener("click", disconnectPlugin);
+
     document.getElementById("devportal-modal-close")?.addEventListener("click", closeDevPortalModal);
     document.getElementById("devportal-modal-backdrop")?.addEventListener("click", (e) => {
         if (e.target === e.currentTarget) closeDevPortalModal();
@@ -3058,6 +3066,137 @@ function attachSettingsEvents() {
             setShareFeedback("Clipboard blocked — use Ctrl+C.", "err");
         });
     });
+}
+
+// ======== Plugin credentials modal ========
+
+let pluginConfigState = null;  // {slug, declared:[{key,label,...}]}
+
+async function openPluginConfigureModal(plugin) {
+    if (cloudStatus?.mode !== "saas") {
+        addLog("system", "Per-user plugin keys are SaaS-only. In OSS mode set the corresponding env vars and restart.");
+        return;
+    }
+    const backdrop = document.getElementById("pluginconfig-modal-backdrop");
+    if (!backdrop) return;
+    document.getElementById("pluginconfig-modal-title").textContent = `Configure ${plugin.name}`;
+    document.getElementById("pluginconfig-hint").innerHTML = escapeHtml(plugin.description || "")
+        + (plugin.slug ? `<br><span style="color:var(--text-mutedder);">Slug: <code>${escapeHtml(plugin.slug)}</code></span>` : "");
+    backdrop.removeAttribute("hidden");
+    const form = document.getElementById("pluginconfig-form");
+    form.innerHTML = `<div class="hint" style="margin:0;">Loading…</div>`;
+    setPluginConfigFeedback("", "mute");
+
+    try {
+        const res = await fetch(`${API_BASE}/settings/plugin-secrets/${encodeURIComponent(plugin.slug)}`);
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        pluginConfigState = { slug: plugin.slug, declared: data.declared || [] };
+        const setKeys = new Set(data.set_keys || []);
+        if (!pluginConfigState.declared.length) {
+            form.innerHTML = `<div class="hint" style="margin:0;">This plugin doesn't declare any per-user secrets.</div>`;
+            return;
+        }
+        form.innerHTML = pluginConfigState.declared.map((slot) => {
+            const isSet = setKeys.has(slot.key);
+            const optional = slot.optional ? " (optional)" : "";
+            return `
+                <label style="display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;">
+                    ${escapeHtml(slot.label || slot.key)}${optional}
+                    <input type="password"
+                        name="${escapeHtml(slot.key)}"
+                        placeholder="${escapeHtml(isSet ? '•••••• (stored — paste a new value to replace)' : (slot.placeholder || ''))}"
+                        autocomplete="off"
+                        style="padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;font-family:monospace;" />
+                    ${slot.help ? `<span style="font-weight:400;color:var(--text-mutedder);font-size:11px;line-height:1.4;">${escapeHtml(slot.help)}</span>` : ""}
+                    ${isSet ? `<span style="font-weight:400;color:var(--success, #188038);font-size:11px;">✓ set — leave blank to keep, clear to delete</span>` : ""}
+                </label>
+            `;
+        }).join("");
+    } catch (e) {
+        form.innerHTML = `<div class="hint" style="color:var(--danger);margin:0;">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function closePluginConfigureModal() {
+    const backdrop = document.getElementById("pluginconfig-modal-backdrop");
+    if (backdrop) backdrop.setAttribute("hidden", "");
+    pluginConfigState = null;
+}
+
+function setPluginConfigFeedback(text, kind) {
+    const el = document.getElementById("pluginconfig-feedback");
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = kind === "err" ? "var(--danger)" : kind === "ok" ? "var(--success, #188038)" : "var(--text-mutedder)";
+}
+
+async function savePluginCredentials() {
+    if (!pluginConfigState) return;
+    const form = document.getElementById("pluginconfig-form");
+    const inputs = form.querySelectorAll("input[name]");
+    // Build the payload: only include keys the user actually touched. A
+    // blank field for a key that's already set means "delete it." A blank
+    // field for an unset key is a no-op so we skip it, not include it as
+    // empty (which would fire a delete for nothing).
+    const setKeysRes = await fetch(`${API_BASE}/settings/plugin-secrets/${encodeURIComponent(pluginConfigState.slug)}`);
+    const setKeysData = await setKeysRes.json().catch(() => ({}));
+    const currentlySet = new Set(setKeysData.set_keys || []);
+    const payload = {};
+    inputs.forEach((input) => {
+        const key = input.name;
+        const val = input.value;
+        if (val) {
+            payload[key] = val;
+        } else if (currentlySet.has(key)) {
+            // User cleared an existing value → DELETE it.
+            payload[key] = "";
+        }
+    });
+    if (Object.keys(payload).length === 0) {
+        setPluginConfigFeedback("Nothing to save.", "mute");
+        return;
+    }
+    setPluginConfigFeedback("Saving…", "mute");
+    try {
+        const res = await fetch(`${API_BASE}/settings/plugin-secrets/${encodeURIComponent(pluginConfigState.slug)}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ secrets: payload }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        setPluginConfigFeedback("Saved.", "ok");
+        inputs.forEach((input) => { input.value = ""; });
+        // Give the user a beat to see the confirmation, then re-open to show
+        // which slots are now marked as stored.
+        setTimeout(() => {
+            openPluginConfigureModal({
+                slug: pluginConfigState.slug,
+                name: document.getElementById("pluginconfig-modal-title").textContent.replace(/^Configure /, ""),
+                description: "",
+            });
+        }, 600);
+    } catch (e) {
+        setPluginConfigFeedback(`Save failed: ${e.message}`, "err");
+    }
+}
+
+async function disconnectPlugin() {
+    if (!pluginConfigState) return;
+    if (!confirm(`Remove ALL stored credentials for ${pluginConfigState.slug}?`)) return;
+    setPluginConfigFeedback("Disconnecting…", "mute");
+    try {
+        const res = await fetch(`${API_BASE}/settings/plugin-secrets/${encodeURIComponent(pluginConfigState.slug)}`, {
+            method: "DELETE",
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+        setPluginConfigFeedback("Disconnected. Formulas will return #*_AUTH until you reconnect.", "ok");
+        setTimeout(closePluginConfigureModal, 1000);
+    } catch (e) {
+        setPluginConfigFeedback(`Disconnect failed: ${e.message}`, "err");
+    }
 }
 
 // ======== Realtime (Supabase broadcast + presence) ========
@@ -3665,6 +3804,13 @@ function renderMarketplaceCard(plugin, mode) {
     const errorBlock = plugin.error
         ? `<div class="marketplace-card-error">Load error: ${escapeHtml(plugin.error)}</div>`
         : "";
+    // Plugins that need per-user credentials declare them in manifest.secrets.
+    // We only surface a Configure button when the declaration is non-empty
+    // and we're in SaaS mode — OSS uses env vars so there's nothing to paste.
+    const hasSecrets = Array.isArray(plugin.secrets) && plugin.secrets.length > 0;
+    const configureBtn = (hasSecrets && mode === "saas")
+        ? `<button type="button" class="ghost-btn" data-action="configure">Configure</button>`
+        : "";
 
     wrap.innerHTML = `
         <div class="marketplace-card-head">
@@ -3681,9 +3827,16 @@ function renderMarketplaceCard(plugin, mode) {
         ${errorBlock}
         <div class="marketplace-card-footer">
             <span style="font-size:11px;color:#5f6368;">${plugin.loaded ? "Loaded" : (plugin.error ? "Failed to load" : "Not loaded")}</span>
-            <button type="button" class="${btnClass}" data-action="toggle">${btnLabel}</button>
+            <div style="display:flex;gap:6px;">
+                ${configureBtn}
+                <button type="button" class="${btnClass}" data-action="toggle">${btnLabel}</button>
+            </div>
         </div>
     `;
+
+    wrap.querySelector('[data-action="configure"]')?.addEventListener("click", () => {
+        openPluginConfigureModal(plugin);
+    });
 
     wrap.querySelector('[data-action="toggle"]')?.addEventListener("click", async (ev) => {
         const btn = ev.currentTarget;

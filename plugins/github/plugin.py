@@ -14,7 +14,6 @@ The "30-second plugin" showcase — four public-API metrics in ~70 lines,
 meant to be the example everyone copies when writing their first plugin.
 """
 import json
-import os
 import time
 import urllib.error
 import urllib.parse
@@ -23,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 
 _CACHE: dict = {}
 _CACHE_TTL = 60.0
+
+_KERNEL = None
 
 
 def _get(path: str, params: dict | None = None):
@@ -39,7 +40,8 @@ def _get(path: str, params: dict | None = None):
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "GridOS-Plugin",
     }
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    token = (_KERNEL.get_secret("github", "TOKEN", env_fallback="GITHUB_TOKEN").strip()
+             if _KERNEL else "")
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
@@ -78,6 +80,9 @@ def _normalize_repo(repo):
 
 
 def register(kernel):
+    global _KERNEL
+    _KERNEL = kernel
+
     @kernel.formula("GITHUB_STARS")
     def github_stars(repo):
         slug = _normalize_repo(repo)

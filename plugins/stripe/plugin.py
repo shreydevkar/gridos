@@ -7,7 +7,8 @@ Exposes five scalar formulas backed by the Stripe REST API:
   =STRIPE_ACTIVE_SUBSCRIBERS()       → count of active subscriptions
   =STRIPE_CUSTOMER_COUNT()           → total customer count
 
-Authentication is one env var so the key never sits in a workbook:
+Authentication resolves per-user in SaaS (keys stored in
+public.user_plugin_secrets) with OSS-mode env fallback:
   STRIPE_SECRET_KEY    sk_live_... or sk_test_... from the Stripe dashboard
 
 Same shape as the Shopify plugin: stdlib urllib (no new deps), 60s cache on
@@ -15,7 +16,6 @@ the same key-space, #STRIPE_* sentinels on failure. All charge amounts are
 in cents from Stripe; formulas return dollars.
 """
 import json
-import os
 import time
 import urllib.error
 import urllib.parse
@@ -24,6 +24,8 @@ from datetime import datetime, timedelta, timezone
 
 _CACHE: dict = {}
 _CACHE_TTL = 60.0
+
+_KERNEL = None
 
 # Normalize non-monthly subscription intervals to monthly so MRR math stays
 # apples-to-apples. Stripe's canonical interval values are day/week/month/year.
@@ -36,7 +38,8 @@ _INTERVAL_TO_MONTHS = {
 
 
 def _get(endpoint: str, params: dict | None = None):
-    key = os.environ.get("STRIPE_SECRET_KEY", "").strip()
+    key = (_KERNEL.get_secret("stripe", "SECRET_KEY", env_fallback="STRIPE_SECRET_KEY").strip()
+           if _KERNEL else "")
     if not key:
         return {"__error__": "#STRIPE_AUTH!"}
 
@@ -110,6 +113,9 @@ def _coerce_days(v):
 
 
 def register(kernel):
+    global _KERNEL
+    _KERNEL = kernel
+
     @kernel.formula("STRIPE_REVENUE")
     def stripe_revenue(days_back=30):
         data = _paginate_all("charges", {

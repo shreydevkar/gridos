@@ -6,7 +6,9 @@ Exposes four scalar formulas backed by the Shopify Admin REST API:
   =SHOPIFY_AVG_ORDER_VALUE(days_back)   → revenue / orders, 0 if no orders
   =SHOPIFY_PRODUCT_COUNT()              → total published products
 
-Authentication comes from two env vars so the token never lives in a workbook:
+Authentication resolves per-user in SaaS mode (user sets keys in the
+marketplace Configure modal → stored in public.user_plugin_secrets),
+falling back to the operator-scoped env vars in OSS mode:
   SHOPIFY_STORE_DOMAIN   e.g. "myshop.myshopify.com" (no scheme)
   SHOPIFY_ADMIN_TOKEN    Admin API access token (shpat_...)
 
@@ -16,7 +18,6 @@ surface as sentinel strings matching the '#…!' convention so the failure is
 visible in-cell rather than crashing the whole recalc.
 """
 import json
-import os
 import time
 import urllib.error
 import urllib.parse
@@ -26,10 +27,16 @@ from datetime import datetime, timedelta, timezone
 _CACHE: dict = {}
 _CACHE_TTL = 60.0
 
+# Populated in register() — captures the PluginKernel so formulas can call
+# kernel.get_secret at evaluation time (which reads the per-request
+# ContextVar). The kernel instance is a singleton-per-plugin-load so this
+# module-level stash is safe.
+_KERNEL = None
+
 
 def _get(endpoint: str, params: dict | None = None):
-    domain = os.environ.get("SHOPIFY_STORE_DOMAIN", "").strip()
-    token = os.environ.get("SHOPIFY_ADMIN_TOKEN", "").strip()
+    domain = _KERNEL.get_secret("shopify", "STORE_DOMAIN", env_fallback="SHOPIFY_STORE_DOMAIN").strip() if _KERNEL else ""
+    token = _KERNEL.get_secret("shopify", "ADMIN_TOKEN", env_fallback="SHOPIFY_ADMIN_TOKEN").strip() if _KERNEL else ""
     if not domain or not token:
         return {"__error__": "#SHOPIFY_AUTH!"}
 
@@ -80,6 +87,9 @@ def _coerce_days(v):
 
 
 def register(kernel):
+    global _KERNEL
+    _KERNEL = kernel
+
     @kernel.formula("SHOPIFY_REVENUE")
     def shopify_revenue(days_back=30):
         data = _get("orders.json", {

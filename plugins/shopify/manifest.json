@@ -1,7 +1,21 @@
 {
   "name": "Shopify",
-  "description": "Import live Shopify store metrics into cells: =SHOPIFY_REVENUE, =SHOPIFY_ORDER_COUNT, =SHOPIFY_AVG_ORDER_VALUE, =SHOPIFY_PRODUCT_COUNT. Configure via SHOPIFY_STORE_DOMAIN + SHOPIFY_ADMIN_TOKEN env vars.",
+  "description": "Import live Shopify store metrics into cells: =SHOPIFY_REVENUE, =SHOPIFY_ORDER_COUNT, =SHOPIFY_AVG_ORDER_VALUE, =SHOPIFY_PRODUCT_COUNT.",
   "category": "integrations",
   "author": "GridOS",
-  "version": "0.1.0"
+  "version": "0.2.0",
+  "secrets": [
+    {
+      "key": "STORE_DOMAIN",
+      "label": "Store domain",
+      "placeholder": "myshop.myshopify.com",
+      "help": "Your Shopify admin domain (no https://, no trailing slash)."
+    },
+    {
+      "key": "ADMIN_TOKEN",
+      "label": "Admin API token",
+      "placeholder": "shpat_...",
+      "help": "Private app admin access token from Shopify Apps → Develop → Configure Admin API scopes. Needs read_orders and read_products."
+    }
+  ]
 }

@@ -1,7 +1,15 @@
 {
   "name": "Stripe",
-  "description": "Live Stripe account metrics: =STRIPE_REVENUE, =STRIPE_CHARGE_COUNT, =STRIPE_MRR, =STRIPE_ACTIVE_SUBSCRIBERS, =STRIPE_CUSTOMER_COUNT. Auth via STRIPE_SECRET_KEY env var.",
+  "description": "Live Stripe account metrics: =STRIPE_REVENUE, =STRIPE_CHARGE_COUNT, =STRIPE_MRR, =STRIPE_ACTIVE_SUBSCRIBERS, =STRIPE_CUSTOMER_COUNT.",
   "category": "integrations",
   "author": "GridOS",
-  "version": "0.1.0"
+  "version": "0.2.0",
+  "secrets": [
+    {
+      "key": "SECRET_KEY",
+      "label": "Stripe secret key",
+      "placeholder": "sk_live_... or sk_test_...",
+      "help": "From Stripe Dashboard → Developers → API keys. Use a restricted key with read-only access to Charges, Customers, and Subscriptions for safety."
+    }
+  ]
 }
