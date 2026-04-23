@@ -212,6 +212,104 @@ def test_mixed_add_subtract_left_to_right():
     _expect(k, "A1", 9, "left-to-right add/sub")
 
 
+# ---- Cross-sheet references ----
+#
+# NOTE: GridOSKernel.create_sheet() auto-activates the new sheet. Tests
+# must explicitly pass `sheet_name="Sheet1"` to write_user_cell / write_user_range
+# when writing the formula cell, or the formula lands on the newly-created
+# sheet instead of Sheet1 (which is what these tests intend to assert on).
+
+
+def test_crosssheet_single_cell():
+    k = _fresh()
+    k.create_sheet("Sheet2")
+    k.write_user_range("A1", [[42]], sheet_name="Sheet2")
+    k.write_user_cell("B1", "=Sheet2!A1", sheet_name="Sheet1")
+    state = k._sheet_state("Sheet1")
+    assert state["cells"][(0, 1)].value == 42.0, state["cells"][(0, 1)].value
+
+
+def test_crosssheet_sum_range():
+    k = _fresh()
+    k.create_sheet("Data")
+    k.write_user_range("A1", [[10], [20], [30]], sheet_name="Data")
+    k.write_user_cell("A1", "=SUM(Data!A1:A3)", sheet_name="Sheet1")
+    state = k._sheet_state("Sheet1")
+    assert state["cells"][(0, 0)].value == 60.0, state["cells"][(0, 0)].value
+
+
+def test_crosssheet_case_insensitive_sheet_name():
+    k = _fresh()
+    k.create_sheet("Sheet2")
+    k.write_user_range("A1", [[7]], sheet_name="Sheet2")
+    k.write_user_cell("B1", "=sheet2!A1", sheet_name="Sheet1")  # lowercase sheet name
+    state = k._sheet_state("Sheet1")
+    assert state["cells"][(0, 1)].value == 7.0, state["cells"][(0, 1)].value
+
+
+def test_crosssheet_quoted_sheet_name_with_spaces():
+    k = _fresh()
+    k.create_sheet("Monthly Budget")
+    k.write_user_range("A1", [[1234]], sheet_name="Monthly Budget")
+    k.write_user_cell("B1", "='Monthly Budget'!A1", sheet_name="Sheet1")
+    state = k._sheet_state("Sheet1")
+    assert state["cells"][(0, 1)].value == 1234.0, state["cells"][(0, 1)].value
+
+
+def test_crosssheet_missing_sheet_yields_ref_error():
+    k = _fresh()
+    k.write_user_cell("A1", "=DoesNotExist!A1", sheet_name="Sheet1")
+    state = k._sheet_state("Sheet1")
+    val = state["cells"][(0, 0)].value
+    assert val == "#REF!", f"expected #REF!, got {val!r}"
+
+
+def test_crosssheet_missing_sheet_in_range_yields_ref_error():
+    k = _fresh()
+    k.write_user_cell("A1", "=SUM(Phantom!A1:A3)", sheet_name="Sheet1")
+    state = k._sheet_state("Sheet1")
+    val = state["cells"][(0, 0)].value
+    # SUM over a single #REF! sentinel should surface #VALUE! (can't add a
+    # string), OR the sentinel propagates directly. Either way it's NOT a
+    # silently-accepted 0 — which was the pre-fix behavior.
+    assert isinstance(val, str) and val.startswith("#"), f"expected error sentinel, got {val!r}"
+
+
+def test_crosssheet_arithmetic_across_sheets():
+    k = _fresh()
+    k.create_sheet("Sheet2")
+    k.create_sheet("Sheet3")
+    k.write_user_range("A1", [[100]], sheet_name="Sheet2")
+    k.write_user_range("A1", [[25]], sheet_name="Sheet3")
+    k.write_user_cell("B1", "=Sheet2!A1-Sheet3!A1", sheet_name="Sheet1")
+    state = k._sheet_state("Sheet1")
+    assert state["cells"][(0, 1)].value == 75.0, state["cells"][(0, 1)].value
+
+
+def test_crosssheet_mismatched_range_sheets_yields_ref():
+    # =SUM(Sheet2!A1:Sheet3!A3) has two different sheets in one range —
+    # Excel rejects this and so do we.
+    k = _fresh()
+    k.create_sheet("Sheet2")
+    k.create_sheet("Sheet3")
+    k.write_user_cell("A1", "=SUM(Sheet2!A1:Sheet3!A3)", sheet_name="Sheet1")
+    state = k._sheet_state("Sheet1")
+    val = state["cells"][(0, 0)].value
+    assert isinstance(val, str) and val.startswith("#"), f"expected error sentinel, got {val!r}"
+
+
+def test_single_sheet_formula_still_works_after_crosssheet_changes():
+    # Regression guard: the QCELL parser addition shouldn't affect plain
+    # single-sheet formulas. Every pre-existing shape should keep working.
+    k = _fresh()
+    k.write_user_cell("A1", 5)
+    k.write_user_cell("B1", 10)
+    k.write_user_cell("C1", "=A1+B1")
+    _expect(k, "C1", 15, "single-sheet add")
+    k.write_user_cell("D1", "=SUM(A1:B1)")
+    _expect(k, "D1", 15, "single-sheet range sum")
+
+
 def run_all():
     tests = {name: fn for name, fn in sorted(globals().items()) if name.startswith("test_")}
     passed = 0
