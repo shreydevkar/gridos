@@ -808,9 +808,17 @@ function formatCellDisplay(state) {
 function updateCellDom(a1) {
     const td = cellEls.get(a1);
     if (!td) return;
+    // Never clobber a cell that's currently in edit mode — that would
+    // destroy the <input> element and any in-progress keystrokes with it.
+    // The commit path calls updateCellDom again once editing ends.
+    if (editingCell === a1) return;
+    // Defensive: if the first child isn't the .cell-content div (e.g. it's
+    // the inline-editor input that we somehow didn't track in editingCell),
+    // skip rather than blindly rewriting.
+    const content = td.firstElementChild;
+    if (!content || !content.classList.contains("cell-content")) return;
     const state = gridData[a1];
     td.classList.toggle("locked", Boolean(state?.locked));
-    const content = td.firstElementChild;
     content.className = `cell-content${state?.formula ? " cell-formula" : ""}`;
     content.textContent = formatCellDisplay(state);
 }
@@ -1146,6 +1154,9 @@ function startInlineEdit(cell, seed) {
             td.innerHTML = `<div class="cell-content"></div>`;
             updateCellDom(cell);
             repaintSelection();
+            // Escape also wipes any remote-cursor overlay on this cell —
+            // re-apply so the other user's cursor reappears cleanly.
+            if (realtimeChannel) updateRemoteCursors(realtimeChannel.presenceState());
         }
     });
     input.addEventListener("blur", async () => {
@@ -1166,6 +1177,11 @@ async function commitInlineEdit(cell, value) {
     } catch (error) {
         addLog("system", escapeHtml(`Inline edit failed: ${error.message}`));
         await fetchGrid();
+    } finally {
+        // The td.innerHTML = '<div class="cell-content"></div>' above wipes
+        // any remote-cursor overlay that was on this cell. Re-run presence
+        // rendering so collaborator cursors reappear after we commit.
+        if (realtimeChannel) updateRemoteCursors(realtimeChannel.presenceState());
     }
 }
 
@@ -3099,6 +3115,10 @@ function handleRemoteCellsChanged(payload) {
     // safety net that catches formula recalcs the broadcast didn't include.
     (payload.changes || []).forEach((ch) => {
         if (!ch.cell) return;
+        // Don't overwrite a cell we're currently editing — the user's
+        // typed-but-not-yet-committed value would vanish. They'll get the
+        // remote value on their next refetch or when editing ends.
+        if (editingCell === ch.cell) return;
         const prev = gridData[ch.cell] || {};
         gridData[ch.cell] = {
             ...prev,
@@ -3111,6 +3131,10 @@ function handleRemoteCellsChanged(payload) {
     });
     if ((payload.changes || []).length) {
         refreshPopulatedCells();
+        // Remote overlays are children of <td> cells; refreshPopulatedCells
+        // can rewrite cell content and (for newly-touched cells) may have
+        // stomped an overlay. Re-apply presence so the cursor survives.
+        if (realtimeChannel) updateRemoteCursors(realtimeChannel.presenceState());
     }
     // Safety-net refetch: formulas that depend on the changed cells may need
     // recalc (our broadcast only ships direct writes). 50ms coalesces rapid
