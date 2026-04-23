@@ -744,18 +744,34 @@ async function commitWorkbookName(newName) {
 }
 
 async function activateSheet(name) {
-    await fetch(`${API_BASE}/workbook/sheet/activate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-    });
-    await fetchWorkbook();
+    // The old flow was three serial round-trips:
+    //   1. POST /workbook/sheet/activate
+    //   2. GET  /api/workbook        ← useless; we already know the sheets list
+    //   3. GET  /debug/grid           ← needed the workbook.active_sheet from #2
+    // Optimistically update local state so the UI repaints immediately, then
+    // fire the activate + grid fetch in parallel (grid fetch targets the
+    // sheet name directly via ?sheet=, so it doesn't need workbook state).
+    if (workbook?.active_sheet === name) return;
+    workbook = { ...workbook, active_sheet: name };
+    // Visual feedback first — the tab pill + active-tab styling change
+    // before any network traffic lands.
+    renderTabs();
+    const activePill = document.getElementById("active-sheet-pill");
+    if (activePill) activePill.textContent = name;
     clearPreview();
     selectedRange = { start: "A1", end: "A1" };
-    await fetchGrid();
-    // Repaint cursors so peers on the old sheet disappear and peers on
-    // the new sheet (if any) appear. Also re-broadcast our own position
-    // with the new sheet name immediately so peers see us switch.
+    try {
+        await Promise.all([
+            fetch(`${API_BASE}/workbook/sheet/activate`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name }),
+            }),
+            fetchGrid(name),
+        ]);
+    } catch (e) {
+        addLog("system", escapeHtml(`Switch failed: ${e.message}`));
+    }
     if (realtimeChannel) {
         updateRemoteCursors();
         realtimeLastCellReported = null;  // force next broadcast to fire
@@ -919,8 +935,12 @@ function refreshPopulatedCells() {
     document.getElementById("metric-cells").textContent = Object.values(gridData).filter((state) => ((state.value !== null && state.value !== "") || state.formula)).length;
 }
 
-async function fetchGrid() {
-    const res = await fetch(`${API_BASE}/debug/grid?sheet=${encodeURIComponent(workbook.active_sheet)}`);
+async function fetchGrid(sheetOverride) {
+    // sheetOverride lets activateSheet skip the fetchWorkbook round-trip —
+    // it already knows the target sheet name and can ask the server
+    // directly, instead of waiting for workbook.active_sheet to update.
+    const targetSheet = sheetOverride || workbook.active_sheet;
+    const res = await fetch(`${API_BASE}/debug/grid?sheet=${encodeURIComponent(targetSheet)}`);
     const payload = await res.json();
     gridData = payload.cells || {};
     sheetCharts = payload.charts || [];
