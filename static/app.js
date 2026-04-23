@@ -347,17 +347,22 @@ let realtimeMyId = null;
 // so a burst of writes (e.g. a 20-intent agent apply from another user)
 // collapses into a single refetch instead of 20 round-trips.
 let realtimeRefetchTimer = null;
-// Last cell we reported to presence — skip redundant .track() calls that
-// re-ship the same state on every mouse-move over the same cell.
+// Last cell we broadcast — skip redundant sends for the same cell.
 let realtimeLastCellReported = null;
-// Leading-edge throttle state. Supabase Realtime throttles fast track()
-// calls server-side, so if the user arrow-keys through 10 cells in 500ms we
-// have to slow ourselves down and make sure the FINAL position lands.
-// Pattern: fire the first call immediately, drop the next N within the
-// cooldown, schedule a trailing-edge send to ship the final cell value.
+// Leading-edge + trailing-edge throttle so rapid clicks / arrow-key holds
+// collapse into at most one send per cooldown while still landing the
+// final position.
 let realtimeTrackCooldownMs = 80;
 let realtimeLastTrackSentAt = 0;
 let realtimeTrailingTimer = null;
+// Remote cursors: { userId: { cell, email, color, ts } }. Populated from
+// incoming cursor_at broadcasts. Stale entries (> CURSOR_TTL_MS) are swept
+// by a periodic cleanup so a user who closed their tab doesn't leave a
+// ghost cursor on the grid.
+const remoteCursors = new Map();
+const CURSOR_TTL_MS = 8000;
+let cursorSweepTimer = null;
+let cursorHeartbeatTimer = null;
 let dragFillState = null;
 let resizeState = null;
 let formulaPickState = null;
@@ -1153,7 +1158,7 @@ function startInlineEdit(cell, seed) {
             repaintSelection();
             // Escape also wipes any remote-cursor overlay on this cell —
             // re-apply so the other user's cursor reappears cleanly.
-            if (realtimeChannel) updateRemoteCursors(realtimeChannel.presenceState());
+            if (realtimeChannel) updateRemoteCursors();
         }
     });
     input.addEventListener("blur", async () => {
@@ -1178,7 +1183,7 @@ async function commitInlineEdit(cell, value) {
         // The td.innerHTML = '<div class="cell-content"></div>' above wipes
         // any remote-cursor overlay that was on this cell. Re-run presence
         // rendering so collaborator cursors reappear after we commit.
-        if (realtimeChannel) updateRemoteCursors(realtimeChannel.presenceState());
+        if (realtimeChannel) updateRemoteCursors();
     }
 }
 
@@ -3066,8 +3071,6 @@ function colorForEmail(seed) {
 }
 
 async function subscribeToWorkbookRealtime() {
-    // Quit silently in any scenario where realtime can't work so we don't
-    // throw on the happy path and break workbook loading.
     if (!supabaseClient || !activeWorkbookId) return;
     if (cloudStatus?.mode !== "saas") return;
     try {
@@ -3078,39 +3081,57 @@ async function subscribeToWorkbookRealtime() {
 
         const topic = `workbook:${activeWorkbookId}`;
         const channel = supabaseClient.channel(topic, {
-            config: {
-                broadcast: { self: false },   // don't echo our own writes back to us
-                presence: { key: user.id },
-            },
+            config: { broadcast: { self: false } },
         });
 
+        // Cell writes from peers.
         channel.on("broadcast", { event: "cells_changed" }, (msg) => {
             handleRemoteCellsChanged(msg.payload || {});
         });
-        channel.on("presence", { event: "sync" }, () => {
-            const state = channel.presenceState();
-            const otherCells = Object.entries(state)
-                .filter(([k]) => k !== realtimeMyId)
-                .map(([, metas]) => metas?.[metas.length - 1]?.cell);
-            console.log(`[rt] presence sync: others at [${otherCells.join(", ")}]`);
-            updateRemoteCursors(state);
-        });
-        channel.on("presence", { event: "join" }, ({ key }) => {
-            console.log(`[rt] presence join: ${key}`);
-        });
-        channel.on("presence", { event: "leave" }, ({ key }) => {
-            console.log(`[rt] presence leave: ${key}`);
+        // Cursor moves from peers. Direct broadcast (not presence) because
+        // presence had opaque batching that made cursors feel stuck. Each
+        // message carries {userId, email, color, cell, ts}; we stash it in a
+        // Map and re-render.
+        channel.on("broadcast", { event: "cursor_at" }, (msg) => {
+            const p = msg.payload || {};
+            if (!p.userId || p.userId === realtimeMyId) return;  // ignore self
+            remoteCursors.set(p.userId, {
+                cell: p.cell || null,
+                email: p.email || "anon",
+                color: p.color || colorForEmail(p.email || p.userId),
+                ts: Date.now(),
+            });
+            renderRemoteCursors();
         });
 
-        await channel.subscribe(async (status, err) => {
+        await channel.subscribe((status, err) => {
             console.log(`[rt] subscribe status: ${status}`, err || "");
-            if (status !== "SUBSCRIBED") return;
-            await channel.track({
-                email: realtimeMyEmail,
-                color: colorForEmail(realtimeMyEmail),
-                cell: selectedRange?.start || null,
-            });
-            console.log(`[rt] subscribed + tracked initial cell: ${selectedRange?.start || null}`);
+            if (status === "SUBSCRIBED") {
+                // Ship our initial position + start the heartbeat. Heartbeat
+                // keeps peers' TTLs fresh AND auto-recovers if the WS dropped
+                // and silently reconnected (Supabase auto-resubscribes but
+                // our last broadcast may have been lost in the gap).
+                realtimeLastCellReported = null;
+                realtimeLastTrackSentAt = 0;
+                broadcastMySelection();
+                if (cursorHeartbeatTimer) clearInterval(cursorHeartbeatTimer);
+                cursorHeartbeatTimer = setInterval(() => {
+                    // Force-send current position ignoring the "same cell" skip.
+                    realtimeLastCellReported = null;
+                    broadcastMySelection();
+                }, 4000);
+                // Stale-cursor sweep: if we haven't heard from a user in
+                // CURSOR_TTL_MS, their cursor vanishes.
+                if (cursorSweepTimer) clearInterval(cursorSweepTimer);
+                cursorSweepTimer = setInterval(() => {
+                    const cutoff = Date.now() - CURSOR_TTL_MS;
+                    let changed = false;
+                    for (const [id, state] of remoteCursors) {
+                        if (state.ts < cutoff) { remoteCursors.delete(id); changed = true; }
+                    }
+                    if (changed) renderRemoteCursors();
+                }, 1500);
+            }
         });
         realtimeChannel = channel;
     } catch (e) {
@@ -3140,7 +3161,7 @@ function handleRemoteCellsChanged(payload) {
     });
     if (changes.length) {
         refreshPopulatedCells();
-        if (realtimeChannel) updateRemoteCursors(realtimeChannel.presenceState());
+        if (realtimeChannel) updateRemoteCursors();
     }
     // Safety-net refetch for formula recalcs that the broadcast didn't ship.
     // Coalesced across rapid bursts. We DON'T defer-retry with an empty
@@ -3152,7 +3173,7 @@ function handleRemoteCellsChanged(payload) {
         if (editingCell) return;  // editing path will fetchGrid on commit
         try {
             await fetchGrid();
-            if (realtimeChannel) updateRemoteCursors(realtimeChannel.presenceState());
+            if (realtimeChannel) updateRemoteCursors();
         } catch (e) {
             console.warn("[rt] fetchGrid after remote change failed:", e);
         }
@@ -3170,25 +3191,21 @@ function flashCellRemote(a1) {
     setTimeout(() => td.classList.remove("remote-flash"), 900);
 }
 
-function updateRemoteCursors(presenceState) {
-    // Wipe the previous overlay set — cheap because collaborators count is
-    // tiny and the DOM churn is invisible.
+// Back-compat alias: old call sites (commitInlineEdit, handleRemoteCellsChanged)
+// used updateRemoteCursors. After the presence-to-broadcast switch the render
+// pulls from the local remoteCursors Map, so the single entry point is
+// renderRemoteCursors — updateRemoteCursors keeps the name for call sites that
+// just need "refresh overlays after a DOM shake-up".
+function updateRemoteCursors() { renderRemoteCursors(); }
+
+function renderRemoteCursors() {
     document.querySelectorAll(".remote-cursor-overlay").forEach((el) => el.remove());
-    if (!presenceState) return;
-    for (const key of Object.keys(presenceState)) {
-        const metas = presenceState[key];
-        if (!Array.isArray(metas)) continue;
-        // Each connected tab registers its own meta entry; only the most
-        // recent one matters for cursor placement.
-        const meta = metas[metas.length - 1];
-        if (!meta || !meta.cell) continue;
-        // Skip ourselves — our own selection is already rendered via the
-        // local selectedRange highlight.
-        if (realtimeMyEmail && meta.email === realtimeMyEmail) continue;
-        if (realtimeMyId && key === realtimeMyId) continue;
-        const td = document.querySelector(`td[data-cell="${meta.cell}"]`);
+    for (const [userId, state] of remoteCursors) {
+        if (!state || !state.cell) continue;
+        if (userId === realtimeMyId) continue;
+        const td = document.querySelector(`td[data-cell="${state.cell}"]`);
         if (!td) continue;
-        const color = meta.color || colorForEmail(meta.email || key);
+        const color = state.color || colorForEmail(state.email || userId);
         const overlay = document.createElement("div");
         overlay.className = "remote-cursor-overlay";
         overlay.style.cssText = `
@@ -3213,25 +3230,18 @@ function updateRemoteCursors(presenceState) {
             font-family: var(--font-ui);
             pointer-events: none;
         `;
-        label.textContent = meta.email || "anon";
+        label.textContent = state.email || "anon";
         overlay.appendChild(label);
-        // Cell <td> defaults to static positioning — make sure the overlay's
-        // absolute inset:0 lands relative to the cell, not the page.
         if (getComputedStyle(td).position === "static") td.style.position = "relative";
         td.appendChild(overlay);
     }
 }
 
 function broadcastMySelection() {
-    // Leading-edge + trailing-edge throttle. Pattern:
-    //   - First call fires immediately, records the send time.
-    //   - Subsequent calls inside the cooldown window are coalesced — a
-    //     trailing timer is scheduled to ship the LATEST cell value once the
-    //     cooldown expires.
-    // Tracks `selectedRange.end` (the cell the user's cursor is actually on
-    // after a range selection) rather than .start (the anchor, which stays
-    // pinned to where the drag started). That way clicking around ships the
-    // new cell position, not the old anchor.
+    // Send a cursor_at broadcast on every selection change. Leading-edge +
+    // trailing-edge throttle keeps us under any per-channel rate limits
+    // while still delivering the final position after a burst of moves.
+    // We ship selectedRange.end (the focus cell) not .start (the anchor).
     if (!realtimeChannel) return;
     const cell = selectedRange?.end || selectedRange?.start || null;
     if (cell === realtimeLastCellReported) return;
@@ -3242,14 +3252,18 @@ function broadcastMySelection() {
         realtimeLastCellReported = liveCell;
         realtimeLastTrackSentAt = performance.now();
         try {
-            realtimeChannel.track({
-                email: realtimeMyEmail,
-                color: colorForEmail(realtimeMyEmail),
-                cell: liveCell,
+            realtimeChannel.send({
+                type: "broadcast",
+                event: "cursor_at",
+                payload: {
+                    userId: realtimeMyId,
+                    email: realtimeMyEmail,
+                    color: colorForEmail(realtimeMyEmail),
+                    cell: liveCell,
+                },
             });
-            console.log(`[rt] track cell=${liveCell}`);
         } catch (e) {
-            console.warn("[rt] track() threw:", e);
+            console.warn("[rt] cursor send threw:", e);
         }
     };
     if (sinceLast >= realtimeTrackCooldownMs) {
