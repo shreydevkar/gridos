@@ -7,9 +7,9 @@
   "secrets": [
     {
       "key": "TOKEN",
-      "label": "Personal access token (optional)",
+      "label": "Personal access token",
       "placeholder": "ghp_...",
-      "help": "Optional. Without a token you get 60 requests/hour on public repos; with one you get 5000/hour and can read private repos you have access to.",
+      "help": "Without a token you get 60 requests/hour on public repos; with one you get 5000/hour and can read private repos you have access to.",
       "optional": true
     }
   ]

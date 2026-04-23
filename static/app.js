@@ -3032,6 +3032,14 @@ function attachSettingsEvents() {
         if (e.target === e.currentTarget) closeMarketplaceModal();
     });
 
+    // Search + filter wiring for the marketplace. Debounce the search input
+    // by keystroke — filtering is pure-client over a small list so even a
+    // 0ms debounce would work, but `input` events still fire per-key so we
+    // just run the filter synchronously on each one.
+    document.getElementById("marketplace-search")?.addEventListener("input", applyMarketplaceFilters);
+    document.getElementById("marketplace-filter-category")?.addEventListener("change", applyMarketplaceFilters);
+    document.getElementById("marketplace-filter-status")?.addEventListener("change", applyMarketplaceFilters);
+
     // Plugin-credentials modal (SaaS only; OSS plugins read from env vars).
     document.getElementById("pluginconfig-modal-close")?.addEventListener("click", closePluginConfigureModal);
     document.getElementById("pluginconfig-modal-backdrop")?.addEventListener("click", (e) => {
@@ -3769,14 +3777,109 @@ async function renderMarketplace() {
         }
     }
 
-    const plugins = data.plugins || [];
-    if (plugins.length === 0) {
+    _marketplaceCache = data;
+
+    // Populate the category dropdown from the distinct categories present.
+    // Rebuilt on every refresh so a new plugin shows up in the filter without
+    // a code change, while preserving whatever the user had selected.
+    const catSel = document.getElementById("marketplace-filter-category");
+    if (catSel) {
+        const current = catSel.value;
+        const cats = Array.from(new Set((data.plugins || []).map((p) => p.category || "utility"))).sort();
+        catSel.innerHTML = `<option value="">All categories</option>`
+            + cats.map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+        catSel.value = current;
+    }
+
+    applyMarketplaceFilters();
+}
+
+// Cached /marketplace/list response so search/filter can re-render without a
+// round trip. Populated by renderMarketplace.
+let _marketplaceCache = null;
+
+function applyMarketplaceFilters() {
+    const container = document.getElementById("marketplace-list");
+    const countEl = document.getElementById("marketplace-count");
+    if (!container || !_marketplaceCache) return;
+    const all = _marketplaceCache.plugins || [];
+    const total = all.length;
+
+    const q = (document.getElementById("marketplace-search")?.value || "").trim().toLowerCase();
+    const cat = document.getElementById("marketplace-filter-category")?.value || "";
+    const status = document.getElementById("marketplace-filter-status")?.value || "";
+
+    const filtered = all.filter((p) => {
+        if (cat && (p.category || "utility") !== cat) return false;
+        if (status === "installed" && !p.installed) return false;
+        if (status === "available" && p.installed) return false;
+        if (q) {
+            const hay = [
+                p.name, p.slug, p.description, p.author,
+                ...(p.formulas || []), ...(p.agents || []),
+            ].filter(Boolean).join(" ").toLowerCase();
+            if (!hay.includes(q)) return false;
+        }
+        return true;
+    });
+
+    if (countEl) {
+        countEl.textContent = filtered.length === total ? `${total} plugins` : `${filtered.length} of ${total}`;
+    }
+
+    if (total === 0) {
         container.innerHTML = `<div class="marketplace-empty">No plugins found. Drop a package into <code>plugins/</code> and restart the server.</div>`;
+        return;
+    }
+    if (filtered.length === 0) {
+        container.innerHTML = `<div class="marketplace-empty">No plugins match the current filters. <a href="#" id="marketplace-clear-filters" style="color:var(--accent);">Clear filters</a></div>`;
+        document.getElementById("marketplace-clear-filters")?.addEventListener("click", (e) => {
+            e.preventDefault();
+            const s = document.getElementById("marketplace-search");
+            const c = document.getElementById("marketplace-filter-category");
+            const st = document.getElementById("marketplace-filter-status");
+            if (s) s.value = "";
+            if (c) c.value = "";
+            if (st) st.value = "";
+            applyMarketplaceFilters();
+        });
         return;
     }
 
     container.innerHTML = "";
-    plugins.forEach((p) => container.appendChild(renderMarketplaceCard(p, data.mode)));
+    filtered.forEach((p) => container.appendChild(renderMarketplaceCard(p, _marketplaceCache.mode)));
+}
+
+// Per-slug brand marks for the plugin cards. Inline SVG so we don't fetch
+// remote assets and get CORS/privacy issues on the hosted instance. For
+// plugins without a bespoke mark we fall back to a colored monogram.
+const PLUGIN_LOGOS = {
+    shopify: {
+        bg: "#95BF46",
+        svg: `<svg viewBox="0 0 109.5 124.5" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M74.7 14.8s-1.4.4-3.7 1.1c-.4-1.2-1-2.7-1.8-4.2-2.6-5-6.5-7.7-11.1-7.7h-.9c-.1-.2-.3-.3-.4-.5C54.7 1.3 52.1.3 49 .4c-6 .2-12 4.5-16.9 12.2-3.4 5.4-6 12.2-6.7 17.5-6.9 2.1-11.7 3.6-11.8 3.7-3.5 1.1-3.6 1.2-4.1 4.5C9.1 40.8 0 111.2 0 111.2l76.3 13.2 33.1-8.2S74.8 14.9 74.7 14.8zM58.8 18.5c-2.6.8-5.6 1.7-8.8 2.7.1-4.3-.4-10.4-2.5-15.6 6.5 1.2 9.6 8.6 11.3 12.9zm-14.2 4.4c-5.9 1.8-12.3 3.8-18.8 5.8 1.8-7 5.3-14 9.5-18.5 1.6-1.7 3.8-3.6 6.4-4.7 2.5 5.1 3 12.4 2.9 17.4zm-10.3-25c2.1 0 3.9.5 5.4 1.4-2.4 1.2-4.8 3.1-7 5.5-5.7 6.1-10 15.6-11.7 24.7-5.4 1.7-10.6 3.3-15.5 4.8C8.4 24.5 20 1.3 34.3 1.3z"/><path d="M74.7 14.8c-.1 0-35.2 2.6-35.2 2.6s-23.4 21.7-26.1 24.4L45 47.4l29.7-32.6z" fill="#5E8E3E"/><path d="M74.7 14.8L45 47.4l-28.6-5.6S8.8 55 5.5 62.2c-3.1 7-3.6 12.7-3.6 12.7s18.6 4 28.4 5.5c1.7.2 3.5.5 5.3.8 8.3 1.1 18.2 1.9 28.8 1.9 14.4 0 26.6-1.5 35.5-3.4L74.7 14.8z" fill="#fff"/></svg>`
+    },
+    stripe: {
+        bg: "#635BFF",
+        svg: `<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M14.3 12.9c0-1 .8-1.4 2.2-1.4 2 0 4.4.6 6.4 1.7V7.1C20.7 6.2 18.5 5.8 16.5 5.8c-5 0-8.4 2.6-8.4 7 0 6.8 9.4 5.7 9.4 8.7 0 1.2-1 1.6-2.5 1.6-2.1 0-4.8-.9-7-2v6.3c2.5 1.1 5 1.5 7 1.5 5.2 0 8.7-2.5 8.7-7 0-7.3-9.4-6-9.4-9z"/></svg>`
+    },
+    github: {
+        bg: "#24292F",
+        svg: `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path fill="#fff" d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6 0-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 0 1 6 0C17.3 4.7 18.3 5 18.3 5c.6 1.6.2 2.8 0 3.2.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.2.9 2.4v3.5c0 .3.2.7.8.6A12 12 0 0 0 12 .3"/></svg>`
+    },
+    black_scholes: { bg: "#1a73e8", svg: null },
+    hello_world:   { bg: "#188038", svg: null },
+    real_estate:   { bg: "#e8710a", svg: null },
+};
+
+function renderPluginLogo(plugin) {
+    const logo = PLUGIN_LOGOS[plugin.slug];
+    const name = plugin.name || plugin.slug || "?";
+    const letter = name[0].toUpperCase();
+    const bg = logo?.bg || colorForEmail(plugin.slug || name);
+    const inner = logo?.svg
+        ? logo.svg
+        : `<div style="color:#fff;font-weight:700;font-size:18px;">${escapeHtml(letter)}</div>`;
+    return `<div class="marketplace-card-logo" style="background:${bg};">${inner}</div>`;
 }
 
 function renderMarketplaceCard(plugin, mode) {
@@ -3814,8 +3917,11 @@ function renderMarketplaceCard(plugin, mode) {
 
     wrap.innerHTML = `
         <div class="marketplace-card-head">
-            <h4>${escapeHtml(plugin.name)}</h4>
-            <span class="marketplace-card-category">${escapeHtml(plugin.category || "utility")}</span>
+            ${renderPluginLogo(plugin)}
+            <div style="flex:1;display:flex;flex-direction:column;gap:2px;min-width:0;">
+                <h4 style="margin:0;">${escapeHtml(plugin.name)}</h4>
+                <span class="marketplace-card-category" style="font-size:11px;color:var(--text-mutedder);">${escapeHtml(plugin.category || "utility")}</span>
+            </div>
         </div>
         ${typeBadges.length ? `<div class="marketplace-tags">${typeBadges.join("")}</div>` : ""}
         <div class="marketplace-card-desc">${escapeHtml(plugin.description || "")}</div>

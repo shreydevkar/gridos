@@ -975,11 +975,22 @@
         }
         .marketplace-card-head {
             display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            gap: 8px;
+            justify-content: flex-start;
+            align-items: center;
+            gap: 10px;
         }
         .marketplace-card-head h4 { margin: 0; font-size: 13px; flex: 1; }
+        .marketplace-card-logo {
+            width: 36px;
+            height: 36px;
+            flex: 0 0 36px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .marketplace-card-logo svg { width: 22px; height: 22px; display: block; }
         .marketplace-card-category {
             font-size: 10px;
             text-transform: uppercase;
@@ -2620,6 +2631,18 @@
                     the formulas show up as first-class primitives (e.g. <code>=BLACK_SCHOLES(...)</code>)
                     and the agents become available to the router.
                 </p>
+                <div id="marketplace-controls" style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
+                    <input type="search" id="marketplace-search" placeholder="Search plugins…" autocomplete="off" style="flex:1;min-width:180px;padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;" />
+                    <select id="marketplace-filter-category" style="padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;background:#fff;">
+                        <option value="">All categories</option>
+                    </select>
+                    <select id="marketplace-filter-status" style="padding:8px 10px;border:1px solid var(--border);border-radius:4px;font-size:13px;background:#fff;">
+                        <option value="">Any status</option>
+                        <option value="installed">Installed</option>
+                        <option value="available">Available</option>
+                    </select>
+                    <span id="marketplace-count" style="font-size:11px;color:var(--text-mutedder);margin-left:auto;"></span>
+                </div>
                 <div id="marketplace-list" class="marketplace-list"></div>
             </section>
         </div>
