@@ -497,6 +497,27 @@ async def current_kernel_dep(
     _current_user.set(user)
     _current_role.set(role)
     _current_scope.set(scope)
+
+    # Gate plugin-sourced formulas per the workbook owner's installed set.
+    # Collaborators inherit the owner's selection — "owner controls the
+    # workspace." New users who have never touched the marketplace are
+    # treated as "no preferences yet" and given access to every loaded
+    # plugin, so the first-run experience isn't a wall of #NOT_INSTALLED.
+    # Once the user toggles anything in the marketplace, the gate activates
+    # and honors their explicit set.
+    if cloud_config.SAAS_MODE:
+        try:
+            from cloud import marketplace as _marketplace
+            from core.functions import _installed_plugins
+            gate_user = owner_id or user.id
+            if _marketplace.has_explicit_preferences(gate_user):
+                _installed_plugins.set(_marketplace.list_installed(gate_user))
+            # else: leave ContextVar unset → no gating, mirrors OSS mode.
+        except Exception as e:
+            # Don't break the request if the marketplace table is unreachable;
+            # fall through with no gating (same behavior as OSS mode). Logged
+            # so a sustained failure shows up in the server output.
+            print(f"[marketplace] install gate lookup failed: {e}")
     return k
 
 

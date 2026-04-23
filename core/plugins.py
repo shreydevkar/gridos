@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
-from core.functions import _REGISTRY as FORMULA_REGISTRY
+from core.functions import _FORMULA_PLUGIN_SOURCE, _REGISTRY as FORMULA_REGISTRY
 
 
 @dataclass
@@ -74,8 +74,13 @@ class PluginKernel:
         def decorator(func: Callable) -> Callable:
             key = (name or func.__name__).upper()
             FORMULA_REGISTRY[key] = func
+            # Track which plugin owns this formula so FormulaEvaluator can
+            # gate access per the caller's installed-plugins set. Built-ins
+            # register via @register_tool (no plugin context) and stay out
+            # of this map, so they remain globally callable.
             if self._current is not None:
                 self._current.formulas.append(key)
+                _FORMULA_PLUGIN_SOURCE[key] = self._current.slug
             return func
         return decorator
 

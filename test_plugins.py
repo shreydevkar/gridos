@@ -128,16 +128,17 @@ def test_string_literal_in_formula():
         return
     discover_and_load(PLUGINS_DIR)
     k = GridOSKernel()
+    state = k._sheet_state(None)
     k.write_user_cell("A1", '=GREET("Shrey")')
-    cell = k.state["cells"][(0, 0)]
+    cell = state["cells"][(0, 0)]
     assert cell.value == "Hello, Shrey!", f"expected greeting, got {cell.value!r}"
 
     k.write_user_cell("B1", '=BLACK_SCHOLES(100, 100, 1, 0.05, 0.2, "call")')
-    bs_cell = k.state["cells"][(0, 1)]
+    bs_cell = state["cells"][(0, 1)]
     assert isinstance(bs_cell.value, (int, float)) and 10.4 < bs_cell.value < 10.5, bs_cell.value
 
     k.write_user_cell("C1", "=GREET()")
-    default_cell = k.state["cells"][(0, 2)]
+    default_cell = state["cells"][(0, 2)]
     assert default_cell.value == "Hello, world!", default_cell.value
 
 

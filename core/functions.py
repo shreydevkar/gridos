@@ -1,7 +1,22 @@
 import math
-from typing import Callable
+from contextvars import ContextVar
+from typing import Callable, Optional
 
 _REGISTRY: dict[str, Callable] = {}
+
+# Map of formula name → owning plugin slug. Built-ins (registered via
+# @register_tool inside this file) don't get an entry — only plugin-registered
+# formulas do, so FormulaEvaluator.evaluate knows which calls to gate. Kept
+# here instead of in core/plugins.py so the evaluator has a single import.
+_FORMULA_PLUGIN_SOURCE: dict[str, str] = {}
+
+# Per-request set of plugin slugs the current user has installed, or None to
+# mean "no gating" (OSS default, or any request that didn't set it). When set,
+# FormulaEvaluator rejects calls to plugin-sourced formulas whose slug isn't
+# in the set. The kernel + built-ins are always callable.
+_installed_plugins: ContextVar[Optional[set]] = ContextVar(
+    "gridos_installed_plugins", default=None
+)
 
 
 def register_tool(name: str | None = None):
@@ -155,9 +170,20 @@ class FormulaEvaluator:
         self.registry[name.upper()] = func
 
     def evaluate(self, func_name: str, args: list):
-        fn = self.registry.get(func_name.upper())
+        key = func_name.upper()
+        fn = self.registry.get(key)
         if not fn:
             return f"#NAME? (Unknown function: {func_name})"
+        # Per-user plugin gate. If the request set _installed_plugins and
+        # this formula belongs to a plugin that isn't in the set, refuse.
+        # Built-ins have no entry in _FORMULA_PLUGIN_SOURCE so they're
+        # always callable. OSS requests never set the ContextVar so OSS
+        # behavior is unchanged.
+        plugin = _FORMULA_PLUGIN_SOURCE.get(key)
+        if plugin is not None:
+            installed = _installed_plugins.get()
+            if installed is not None and plugin not in installed:
+                return f"#NOT_INSTALLED: enable the '{plugin}' plugin in File > Marketplace"
         try:
             return fn(*args)
         except TypeError:

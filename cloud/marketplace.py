@@ -53,6 +53,31 @@ def list_installed(user_id: str) -> set[str]:
     return {r["plugin_slug"] for r in (res.data or []) if r.get("enabled")}
 
 
+def has_explicit_preferences(user_id: str) -> bool:
+    """Has the user ever toggled anything in the marketplace? Used by the
+    per-request formula gate to distinguish 'new user, no preferences yet
+    — allow everything' from 'user has chosen to disable some plugins —
+    enforce the toggle.'
+
+    Returns False in OSS mode or on any failure so callers default to
+    the permissive branch."""
+    if not _saas_configured() or not user_id:
+        return False
+    try:
+        res = (
+            _client()
+            .table("user_plugins")
+            .select("plugin_slug", count="exact")
+            .eq("user_id", user_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        print(f"[marketplace] preferences check failed for {user_id}: {e}")
+        return False
+    return int(getattr(res, "count", 0) or 0) > 0
+
+
 def set_installed(user_id: str, plugin_slug: str, installed: bool) -> None:
     """Install (upsert enabled=true) or uninstall (delete row) a plugin for
     the given user."""
