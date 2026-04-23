@@ -2110,6 +2110,34 @@
            headers (z-index 2) without competing with the selection outline. */
         .remote-cursor-overlay { animation: gridosRemoteCursorFade 160ms ease-out; }
         @keyframes gridosRemoteCursorFade { from { opacity: 0; } to { opacity: 1; } }
+        /* Remote range highlight — the cells a collaborator currently has
+           selected. Faint color-mix tint inside, full-color border only on
+           the OUTER edges of the range so a 5×5 selection looks like one
+           rectangle, not 25 separate boxes. The CSS variable is set per-td
+           by renderRemoteCursors so each user gets their own color. */
+        td.remote-range-cell {
+            background-color: color-mix(in srgb, var(--remote-range-color) 12%, transparent);
+        }
+        td.remote-range-edge-top    { box-shadow: inset 0  2px 0 0 var(--remote-range-color); }
+        td.remote-range-edge-bottom { box-shadow: inset 0 -2px 0 0 var(--remote-range-color); }
+        td.remote-range-edge-left   { box-shadow: inset  2px 0 0 0 var(--remote-range-color); }
+        td.remote-range-edge-right  { box-shadow: inset -2px 0 0 0 var(--remote-range-color); }
+        /* When a cell sits on multiple edges (corners + 1-cell selections),
+           we need to compose the box-shadows. The fallback below covers all
+           combinations by stacking up to four shadows. */
+        td.remote-range-edge-top.remote-range-edge-bottom    { box-shadow: inset 0  2px 0 0 var(--remote-range-color), inset 0 -2px 0 0 var(--remote-range-color); }
+        td.remote-range-edge-left.remote-range-edge-right    { box-shadow: inset  2px 0 0 0 var(--remote-range-color), inset -2px 0 0 0 var(--remote-range-color); }
+        td.remote-range-edge-top.remote-range-edge-left      { box-shadow: inset 0  2px 0 0 var(--remote-range-color), inset  2px 0 0 0 var(--remote-range-color); }
+        td.remote-range-edge-top.remote-range-edge-right     { box-shadow: inset 0  2px 0 0 var(--remote-range-color), inset -2px 0 0 0 var(--remote-range-color); }
+        td.remote-range-edge-bottom.remote-range-edge-left   { box-shadow: inset 0 -2px 0 0 var(--remote-range-color), inset  2px 0 0 0 var(--remote-range-color); }
+        td.remote-range-edge-bottom.remote-range-edge-right  { box-shadow: inset 0 -2px 0 0 var(--remote-range-color), inset -2px 0 0 0 var(--remote-range-color); }
+        td.remote-range-edge-top.remote-range-edge-bottom.remote-range-edge-left.remote-range-edge-right {
+            box-shadow:
+                inset 0  2px 0 0 var(--remote-range-color),
+                inset 0 -2px 0 0 var(--remote-range-color),
+                inset  2px 0 0 0 var(--remote-range-color),
+                inset -2px 0 0 0 var(--remote-range-color);
+        }
 
         /* Progressive sidebar shrink so the grid never gets squeezed to zero
            when chat + charts are both open. Horizontal flex is preserved at

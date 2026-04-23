@@ -3095,8 +3095,13 @@ async function subscribeToWorkbookRealtime() {
         channel.on("broadcast", { event: "cursor_at" }, (msg) => {
             const p = msg.payload || {};
             if (!p.userId || p.userId === realtimeMyId) return;  // ignore self
+            // start/end describe a range; old peers only sent `cell`, treat
+            // that as a 1×1 selection so this stays back-compat.
+            const start = p.start || p.cell || null;
+            const end = p.end || p.cell || start;
             remoteCursors.set(p.userId, {
-                cell: p.cell || null,
+                start,
+                end,
                 email: p.email || "anon",
                 color: p.color || colorForEmail(p.email || p.userId),
                 ts: Date.now(),
@@ -3198,24 +3203,66 @@ function flashCellRemote(a1) {
 // just need "refresh overlays after a DOM shake-up".
 function updateRemoteCursors() { renderRemoteCursors(); }
 
+// Cap on cells we'll style for a single remote selection. A user
+// drag-selecting an entire sheet would otherwise cause a massive DOM churn
+// per render. 600 cells comfortably covers a 30×20 region.
+const REMOTE_RANGE_CELL_CAP = 600;
+
 function renderRemoteCursors() {
+    // Tear down previous styling: drop the class + CSS-var from every cell
+    // we tagged before, and remove the floating labels.
+    document.querySelectorAll("td.remote-range-cell").forEach((td) => {
+        td.classList.remove("remote-range-cell", "remote-range-edge-top", "remote-range-edge-bottom", "remote-range-edge-left", "remote-range-edge-right");
+        td.style.removeProperty("--remote-range-color");
+    });
     document.querySelectorAll(".remote-cursor-overlay").forEach((el) => el.remove());
+
     for (const [userId, state] of remoteCursors) {
-        if (!state || !state.cell) continue;
+        if (!state || !state.start) continue;
         if (userId === realtimeMyId) continue;
-        const td = document.querySelector(`td[data-cell="${state.cell}"]`);
-        if (!td) continue;
         const color = state.color || colorForEmail(state.email || userId);
-        const overlay = document.createElement("div");
-        overlay.className = "remote-cursor-overlay";
-        overlay.style.cssText = `
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            box-shadow: inset 0 0 0 2px ${color};
-            z-index: 3;
-        `;
+        const start = state.start;
+        const end = state.end || start;
+
+        // Compute the rectangle covered by start..end. A1 helpers are
+        // already on the page (a1ToCoords, coordsToA1) so we can just
+        // walk the bounding box.
+        let topLeftCell = start;
+        try {
+            const [sr, sc] = a1ToCoords(start);
+            const [er, ec] = a1ToCoords(end);
+            const top = Math.min(sr, er), bottom = Math.max(sr, er);
+            const left = Math.min(sc, ec), right = Math.max(sc, ec);
+            topLeftCell = coordsToA1(top, left);
+            let painted = 0;
+            outer: for (let r = top; r <= bottom; r++) {
+                for (let c = left; c <= right; c++) {
+                    if (painted >= REMOTE_RANGE_CELL_CAP) break outer;
+                    const a1 = coordsToA1(r, c);
+                    const td = cellEls.get(a1) || document.querySelector(`td[data-cell="${a1}"]`);
+                    if (!td) continue;
+                    td.classList.add("remote-range-cell");
+                    if (r === top) td.classList.add("remote-range-edge-top");
+                    if (r === bottom) td.classList.add("remote-range-edge-bottom");
+                    if (c === left) td.classList.add("remote-range-edge-left");
+                    if (c === right) td.classList.add("remote-range-edge-right");
+                    td.style.setProperty("--remote-range-color", color);
+                    painted++;
+                }
+            }
+        } catch (_) {
+            // Malformed A1 — fall back to single-cell highlight on start.
+            const td = cellEls.get(start) || document.querySelector(`td[data-cell="${start}"]`);
+            if (!td) continue;
+            td.classList.add("remote-range-cell", "remote-range-edge-top", "remote-range-edge-bottom", "remote-range-edge-left", "remote-range-edge-right");
+            td.style.setProperty("--remote-range-color", color);
+        }
+
+        // Single floating label anchored at the top-left cell of the range.
+        const labelTd = cellEls.get(topLeftCell) || document.querySelector(`td[data-cell="${topLeftCell}"]`);
+        if (!labelTd) continue;
         const label = document.createElement("div");
+        label.className = "remote-cursor-overlay";
         label.style.cssText = `
             position: absolute;
             top: -16px;
@@ -3229,27 +3276,29 @@ function renderRemoteCursors() {
             white-space: nowrap;
             font-family: var(--font-ui);
             pointer-events: none;
+            z-index: 4;
         `;
         label.textContent = state.email || "anon";
-        overlay.appendChild(label);
-        if (getComputedStyle(td).position === "static") td.style.position = "relative";
-        td.appendChild(overlay);
+        if (getComputedStyle(labelTd).position === "static") labelTd.style.position = "relative";
+        labelTd.appendChild(label);
     }
 }
 
 function broadcastMySelection() {
-    // Send a cursor_at broadcast on every selection change. Leading-edge +
-    // trailing-edge throttle keeps us under any per-channel rate limits
-    // while still delivering the final position after a burst of moves.
-    // We ship selectedRange.end (the focus cell) not .start (the anchor).
+    // Ships the full selection rectangle (start + end) so peers can highlight
+    // ranges, not just a single cursor. Leading + trailing throttle keeps us
+    // under per-channel rate limits while landing the final selection.
     if (!realtimeChannel) return;
-    const cell = selectedRange?.end || selectedRange?.start || null;
-    if (cell === realtimeLastCellReported) return;
+    const start = selectedRange?.start || null;
+    const end = selectedRange?.end || start;
+    const sig = `${start}:${end}`;
+    if (sig === realtimeLastCellReported) return;
     const now = performance.now();
     const sinceLast = now - realtimeLastTrackSentAt;
     const fire = () => {
-        const liveCell = selectedRange?.end || selectedRange?.start || null;
-        realtimeLastCellReported = liveCell;
+        const liveStart = selectedRange?.start || null;
+        const liveEnd = selectedRange?.end || liveStart;
+        realtimeLastCellReported = `${liveStart}:${liveEnd}`;
         realtimeLastTrackSentAt = performance.now();
         try {
             realtimeChannel.send({
@@ -3259,7 +3308,10 @@ function broadcastMySelection() {
                     userId: realtimeMyId,
                     email: realtimeMyEmail,
                     color: colorForEmail(realtimeMyEmail),
-                    cell: liveCell,
+                    // `cell` retained for back-compat with peers on older code.
+                    cell: liveEnd,
+                    start: liveStart,
+                    end: liveEnd,
                 },
             });
         } catch (e) {
