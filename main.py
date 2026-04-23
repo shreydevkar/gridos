@@ -2051,6 +2051,26 @@ async def apply_agent_preview(
 
 
 _CELL_REF_RE = re.compile(r"[A-Z]+\d+")
+# Cross-sheet refs like `Data!A1` or `'Monthly Data'!A1`. We strip these out
+# of formulas before the same-sheet empty/text-ref scans — those scans check
+# the CURRENT sheet's state, which is the wrong sheet for cross-sheet refs.
+# Skipping them means the guard is silent on cross-sheet references (the v1
+# trade-off: fewer false positives, at the cost of missing an empty cell on
+# another sheet — the agent can still commit; runtime will show #REF! or 0).
+_CROSS_SHEET_REF_RE = re.compile(
+    # Matches Sheet!A1 and also the full range form Sheet!A1:A3 — without
+    # the optional `(?::[A-Za-z]+\d+)?` tail we'd strip `Data!A1` but leave
+    # `A3` in the scan string, triggering a false "A3 is empty" on the
+    # current sheet when the formula actually references the other sheet.
+    r"(?:'(?:[^'\\]|\\.)*'|[A-Za-z_][A-Za-z0-9_]*)!"
+    r"[A-Za-z]+\d+(?::[A-Za-z]+\d+)?"
+)
+
+
+def _strip_cross_sheet_refs(formula: str) -> str:
+    """Blank out `Sheet!A1` / `'Sheet Name'!A1` tokens so the bare-ref scans
+    don't mistake the trailing A1 for a same-sheet reference."""
+    return _CROSS_SHEET_REF_RE.sub(" ", formula)
 
 
 def _find_empty_formula_deps(preview_cells: list[dict], sheet_state: dict) -> list[dict]:
@@ -2070,7 +2090,8 @@ def _find_empty_formula_deps(preview_cells: list[dict], sheet_state: dict) -> li
         if not isinstance(v, str) or not v.startswith("="):
             continue
         empty_refs: list[str] = []
-        for ref in _CELL_REF_RE.findall(v.upper()):
+        scan_src = _strip_cross_sheet_refs(v.upper())
+        for ref in _CELL_REF_RE.findall(scan_src):
             if ref in self_written_nonempty:
                 continue
             try:
@@ -2096,7 +2117,8 @@ def _formula_references_text_cell(formula: str, sheet_state: dict) -> list[str]:
     resolve to a non-numeric value (typical off-by-one symptom: formula pointing
     at a row-label column). Empty list means all refs look numeric."""
     bad_refs: list[str] = []
-    for ref in _CELL_REF_RE.findall(formula.upper()):
+    scan_src = _strip_cross_sheet_refs(formula.upper())
+    for ref in _CELL_REF_RE.findall(scan_src):
         try:
             r, c = a1_to_coords(ref)
         except ValueError:
