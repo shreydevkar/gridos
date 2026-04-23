@@ -3088,7 +3088,18 @@ async function subscribeToWorkbookRealtime() {
             handleRemoteCellsChanged(msg.payload || {});
         });
         channel.on("presence", { event: "sync" }, () => {
-            updateRemoteCursors(channel.presenceState());
+            const state = channel.presenceState();
+            const otherCells = Object.entries(state)
+                .filter(([k]) => k !== realtimeMyId)
+                .map(([, metas]) => metas?.[metas.length - 1]?.cell);
+            console.log(`[rt] presence sync: others at [${otherCells.join(", ")}]`);
+            updateRemoteCursors(state);
+        });
+        channel.on("presence", { event: "join" }, ({ key }) => {
+            console.log(`[rt] presence join: ${key}`);
+        });
+        channel.on("presence", { event: "leave" }, ({ key }) => {
+            console.log(`[rt] presence leave: ${key}`);
         });
 
         await channel.subscribe(async (status, err) => {
@@ -3217,32 +3228,34 @@ function broadcastMySelection() {
     //   - Subsequent calls inside the cooldown window are coalesced — a
     //     trailing timer is scheduled to ship the LATEST cell value once the
     //     cooldown expires.
-    // This makes cursor updates feel instant on isolated clicks while still
-    // staying under Supabase Realtime's ~10 events/sec soft ceiling when the
-    // user holds down an arrow key.
+    // Tracks `selectedRange.end` (the cell the user's cursor is actually on
+    // after a range selection) rather than .start (the anchor, which stays
+    // pinned to where the drag started). That way clicking around ships the
+    // new cell position, not the old anchor.
     if (!realtimeChannel) return;
-    const cell = selectedRange?.start || null;
+    const cell = selectedRange?.end || selectedRange?.start || null;
     if (cell === realtimeLastCellReported) return;
     const now = performance.now();
     const sinceLast = now - realtimeLastTrackSentAt;
     const fire = () => {
-        realtimeLastCellReported = selectedRange?.start || null;
+        const liveCell = selectedRange?.end || selectedRange?.start || null;
+        realtimeLastCellReported = liveCell;
         realtimeLastTrackSentAt = performance.now();
         try {
             realtimeChannel.track({
                 email: realtimeMyEmail,
                 color: colorForEmail(realtimeMyEmail),
-                cell: realtimeLastCellReported,
+                cell: liveCell,
             });
-        } catch (_) { /* track() on a closed channel is a no-op */ }
+            console.log(`[rt] track cell=${liveCell}`);
+        } catch (e) {
+            console.warn("[rt] track() threw:", e);
+        }
     };
     if (sinceLast >= realtimeTrackCooldownMs) {
-        // Leading edge — ship immediately so single clicks land with no lag.
         if (realtimeTrailingTimer) { clearTimeout(realtimeTrailingTimer); realtimeTrailingTimer = null; }
         fire();
     } else {
-        // Inside cooldown — schedule (or reschedule) a trailing send so the
-        // final cell value after a rapid burst always reaches peers.
         if (realtimeTrailingTimer) clearTimeout(realtimeTrailingTimer);
         realtimeTrailingTimer = setTimeout(() => {
             realtimeTrailingTimer = null;
