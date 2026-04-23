@@ -482,10 +482,42 @@ class GridOSKernel:
                 state["cells"][(r, c)] = CellState(locked=True, agent_owner=owner)
 
     def clear_unlocked(self, sheet_name: str | None = None):
-        state = self._sheet_state(sheet_name)
-        state["cells"] = {coords: cell for coords, cell in state["cells"].items() if cell.locked}
-        state["dependencies"] = {}
-        self._rebuild_dependencies(sheet_name)
+        # Same hook pattern as clear_cells — capture what got wiped so realtime
+        # peers see the change. Without this, "Clear unlocked cells" from the
+        # File menu silently wiped the other collaborator's grid.
+        hook_data = None
+        with self._write_lock:
+            state = self._sheet_state(sheet_name)
+            cleared_a1 = [
+                coords_to_a1(r, c)
+                for (r, c), cell in state["cells"].items()
+                if not cell.locked
+            ]
+            state["cells"] = {coords: cell for coords, cell in state["cells"].items() if cell.locked}
+            state["dependencies"] = {}
+            self._rebuild_dependencies(sheet_name)
+            if cleared_a1 and self._post_commit_hooks:
+                hook_data = {
+                    "sheet": sheet_name or self.active_sheet,
+                    "changes": [
+                        {
+                            "cell": a1,
+                            "value": "",
+                            "formula": None,
+                            "datatype": "string",
+                            "version": 0,
+                            "cleared": True,
+                        }
+                        for a1 in cleared_a1
+                    ],
+                    "agent_id": "User",
+                }
+        if hook_data:
+            for hook in self._post_commit_hooks:
+                try:
+                    hook(hook_data)
+                except Exception as e:
+                    print(f"[post_commit_hook] {type(e).__name__}: {e}")
 
     def _is_space_free(self, state: dict, start_r: int, start_c: int, rows: int, cols: int) -> bool:
         for r in range(start_r, start_r + rows):
@@ -558,22 +590,54 @@ class GridOSKernel:
 
         One `_rebuild_dependencies` at the end instead of N — what made the
         per-cell HTTP loop slow on the frontend was also slow on the backend.
+
+        Fires post-commit hooks with the cleared cells so realtime peers
+        see the delete without a refresh. Before this was added, Delete-key
+        clears weren't broadcasting (only writes through `_commit_write`
+        did) and the other user's tab stayed on the stale value until they
+        reloaded.
         """
-        state = self._sheet_state(sheet_name)
-        cells = state["cells"]
-        cleared, skipped_locked = 0, 0
-        for a1 in cell_a1_list:
-            coords = a1_to_coords(a1.upper())
-            existing = cells.get(coords)
-            if existing is None:
-                continue
-            if existing.locked:
-                skipped_locked += 1
-                continue
-            del cells[coords]
-            cleared += 1
-        if cleared:
-            self._rebuild_dependencies(sheet_name)
+        hook_data = None
+        with self._write_lock:
+            state = self._sheet_state(sheet_name)
+            cells = state["cells"]
+            cleared, skipped_locked = 0, 0
+            cleared_a1: list[str] = []
+            for a1 in cell_a1_list:
+                coords = a1_to_coords(a1.upper())
+                existing = cells.get(coords)
+                if existing is None:
+                    continue
+                if existing.locked:
+                    skipped_locked += 1
+                    continue
+                del cells[coords]
+                cleared += 1
+                cleared_a1.append(a1.upper())
+            if cleared:
+                self._rebuild_dependencies(sheet_name)
+                if self._post_commit_hooks:
+                    hook_data = {
+                        "sheet": sheet_name or self.active_sheet,
+                        "changes": [
+                            {
+                                "cell": a1,
+                                "value": "",
+                                "formula": None,
+                                "datatype": "string",
+                                "version": 0,
+                                "cleared": True,
+                            }
+                            for a1 in cleared_a1
+                        ],
+                        "agent_id": "User",
+                    }
+        if hook_data:
+            for hook in self._post_commit_hooks:
+                try:
+                    hook(hook_data)
+                except Exception as e:
+                    print(f"[post_commit_hook] {type(e).__name__}: {e}")
         return {"cleared": cleared, "skipped_locked": skipped_locked}
 
     def set_cell_format(self, target_a1: str, decimals: Optional[int], sheet_name: str | None = None) -> dict:
