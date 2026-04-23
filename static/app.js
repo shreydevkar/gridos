@@ -612,16 +612,78 @@ function getCellDisplay(state) {
 
 function renderTabs() {
     const strip = document.getElementById("tab-strip");
-    const tabs = workbook.sheets.map((sheet) => `
-        <button class="tab-btn ${sheet.active ? "active" : ""}" data-sheet="${escapeHtml(sheet.name)}">${escapeHtml(sheet.name)}</button>
-    `).join("");
+    // Each tab is a wrapper <span> with the tab button + a close × that
+    // only surfaces on the ACTIVE tab (to keep inactive tabs compact and
+    // prevent accidental clicks while navigating between sheets).
+    // Clicking × on the sole remaining sheet is blocked in deleteSheet
+    // because the kernel refuses that case too — we catch the 400 and
+    // show the reason in the chat log rather than silently failing.
+    const tabCount = workbook.sheets.length;
+    const tabs = workbook.sheets.map((sheet) => {
+        const canClose = sheet.active && tabCount > 1;
+        const closeBtn = canClose
+            ? `<button class="tab-close" data-close="${escapeHtml(sheet.name)}" title="Delete this sheet">✕</button>`
+            : "";
+        return `
+            <span class="tab-wrap ${sheet.active ? "active" : ""}">
+                <button class="tab-btn ${sheet.active ? "active" : ""}" data-sheet="${escapeHtml(sheet.name)}">${escapeHtml(sheet.name)}</button>
+                ${closeBtn}
+            </span>
+        `;
+    }).join("");
     strip.innerHTML = `${tabs}<button class="icon-btn" id="add-tab-btn">+</button><button class="icon-btn" id="rename-tab-btn">R</button>`;
 
     strip.querySelectorAll("[data-sheet]").forEach((button) => {
         button.addEventListener("click", async () => activateSheet(button.dataset.sheet));
     });
+    strip.querySelectorAll("[data-close]").forEach((button) => {
+        button.addEventListener("click", async (event) => {
+            event.stopPropagation();  // don't also fire the tab's activate handler
+            await deleteSheet(button.dataset.close);
+        });
+    });
     document.getElementById("add-tab-btn").addEventListener("click", createSheet);
     document.getElementById("rename-tab-btn").addEventListener("click", renameActiveSheet);
+}
+
+async function deleteSheet(name) {
+    // Smart-safety prompt: empty sheets close silently (the confirm would
+    // be friction without value); sheets with data get a sharp phrasing
+    // because soft "Are you sure?" trains users to click through. The
+    // snapshot goes onto the undo stack so Ctrl+Z restores the whole tab.
+    const sheetCells = name === workbook.active_sheet
+        ? Object.keys(gridData || {}).length
+        : null;  // non-active sheet's cell count isn't in local state
+    let confirmed = true;
+    if (sheetCells === null || sheetCells > 0) {
+        // Non-active sheets: we don't know the populated count locally, so
+        // we always prompt. Active sheets: prompt only if cells exist.
+        const message = sheetCells === null
+            ? `Delete sheet "${name}"? Any cells or charts it contains will be lost. Undo (Ctrl+Z) will restore it, but only until you close the tab.`
+            : `Delete sheet "${name}"? It has ${sheetCells} populated cell${sheetCells === 1 ? "" : "s"} that will be gone. Undo (Ctrl+Z) will restore it, but only until you close the tab.`;
+        confirmed = confirm(message);
+    }
+    if (!confirmed) return;
+    const before = snapshotGrid();
+    try {
+        const res = await fetch(`${API_BASE}/workbook/sheet/delete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || `Delete failed (${res.status})`);
+        workbook = { ...workbook, sheets: data.sheets, active_sheet: data.active_sheet };
+        renderTabs();
+        const activePill = document.getElementById("active-sheet-pill");
+        if (activePill) activePill.textContent = workbook.active_sheet;
+        selectedRange = { start: "A1", end: "A1" };
+        await fetchGrid();
+        recordAction(before);
+        addLog("system", `Sheet "${escapeHtml(name)}" deleted. Undo with Ctrl+Z to restore.`);
+    } catch (error) {
+        addLog("system", escapeHtml(`Delete sheet failed: ${error.message}`));
+    }
 }
 
 async function fetchWorkbook({ rehydrateChat: shouldRehydrate = false } = {}) {

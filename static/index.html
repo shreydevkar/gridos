@@ -1488,6 +1488,33 @@
             background: var(--accent);
         }
 
+        /* Close (×) button on the active sheet tab. Only renders on the
+           active tab so inactive tabs stay compact and a stray click on
+           a non-active tab's × can't delete a sheet the user isn't
+           looking at. Red-tinted hover so the destructive action is
+           visually signaled. */
+        .tab-wrap { display: inline-flex; align-items: center; position: relative; }
+        .tab-close {
+            margin-left: -4px;
+            margin-right: 4px;
+            padding: 0;
+            width: 16px; height: 16px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 11px;
+            line-height: 1;
+            border-radius: 50%;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .tab-close:hover {
+            background: #fce7e7;
+            color: #b3271e;
+        }
+
         .tabs .icon-btn {
             width: 24px;
             height: 24px;

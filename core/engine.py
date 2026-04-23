@@ -574,6 +574,29 @@ class GridOSKernel:
         self.active_sheet = name
         return name
 
+    def delete_sheet(self, name: str) -> str:
+        """Remove a sheet from the workbook. Refuses to delete the last
+        remaining sheet (a workbook must always have at least one), and
+        re-activates a neighbor if the deleted sheet was the active one.
+        Returns the name of the now-active sheet so the caller can update
+        its UI without re-fetching."""
+        if name not in self.sheets:
+            raise ValueError(f"Sheet '{name}' does not exist.")
+        if len(self.sheet_order) <= 1:
+            raise ValueError("Can't delete the last remaining sheet — a workbook needs at least one.")
+        # Pick the neighbor to activate next BEFORE we pop, so index math is
+        # straightforward. Prefer the sheet to the right; fall back to the
+        # sheet on the left when the deleted sheet was the last one.
+        was_active = self.active_sheet == name
+        idx = self.sheet_order.index(name)
+        neighbor = self.sheet_order[idx + 1] if idx + 1 < len(self.sheet_order) else self.sheet_order[idx - 1]
+
+        self.sheets.pop(name, None)
+        self.sheet_order.remove(name)
+        if was_active:
+            self.active_sheet = neighbor
+        return self.active_sheet
+
     def lock_range(self, start_a1: str, end_a1: str, owner: str = "User", sheet_name: str | None = None):
         state = self._sheet_state(sheet_name)
         r1, c1 = a1_to_coords(start_a1)

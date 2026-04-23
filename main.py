@@ -2490,6 +2490,26 @@ async def activate_sheet(
     return {"sheet": name, "sheets": kernel.list_sheets(), "active_sheet": kernel.active_sheet}
 
 
+@app.post("/workbook/sheet/delete")
+async def delete_sheet(
+    req: SheetActivateRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
+    """Remove a sheet from the workbook. The kernel refuses to delete the
+    last remaining sheet (400) and auto-activates a neighbor when the
+    deleted sheet was the active one so the UI never lands on a dangling
+    selection."""
+    try:
+        new_active = kernel.delete_sheet(req.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "sheet": new_active,
+        "sheets": kernel.list_sheets(),
+        "active_sheet": new_active,
+    }
+
+
 @app.post("/grid/cell")
 async def update_cell(
     req: CellUpdateRequest,
