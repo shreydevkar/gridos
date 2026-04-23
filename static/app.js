@@ -3386,17 +3386,31 @@ async function renderCollaboratorList() {
             host.innerHTML = `<div class="hint" style="margin:0;">No collaborators yet. Invite someone above.</div>`;
             return;
         }
-        host.innerHTML = list.map((c) => `
-            <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border-soft);">
-                <div style="flex:1;font-size:12px;">
-                    <div><strong>${escapeHtml(c.email || c.user_id)}</strong></div>
-                    <div style="color:var(--text-mutedder);font-size:11px;">${escapeHtml(c.role)}${c.accepted_at ? " · accepted" : " · invited"}</div>
+        host.innerHTML = list.map((c) => {
+            // Active rows key by user_id; pending rows key by invite id
+            // (the invitee doesn't have a user_id yet). Revoke endpoints
+            // differ accordingly — flag each row with data-share-kind so
+            // the click handler picks the right path.
+            const isPending = c.kind === "pending";
+            const revokeKey = isPending ? (c.id || "") : (c.user_id || "");
+            const statusLabel = isPending
+                ? "pending · waiting for signup"
+                : (c.accepted_at ? "editor · accepted" : "editor · invited");
+            const pendingBadge = isPending
+                ? `<span style="display:inline-block;padding:1px 6px;margin-left:6px;background:#fff4d6;color:#8a5b00;border-radius:3px;font-size:10px;font-weight:600;">PENDING</span>`
+                : "";
+            return `
+                <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border-soft);">
+                    <div style="flex:1;font-size:12px;">
+                        <div><strong>${escapeHtml(c.email || revokeKey)}</strong>${pendingBadge}</div>
+                        <div style="color:var(--text-mutedder);font-size:11px;">${escapeHtml(statusLabel)}</div>
+                    </div>
+                    <button class="icon-btn" data-share-revoke="${escapeHtml(revokeKey)}" data-share-kind="${isPending ? "pending" : "active"}" data-share-email="${escapeHtml(c.email || "")}" title="Revoke access">✕</button>
                 </div>
-                <button class="icon-btn" data-share-revoke="${escapeHtml(c.user_id)}" data-share-email="${escapeHtml(c.email || "")}" title="Revoke access">✕</button>
-            </div>
-        `).join("");
+            `;
+        }).join("");
         host.querySelectorAll("[data-share-revoke]").forEach((btn) => {
-            btn.addEventListener("click", () => revokeCollaborator(btn.dataset.shareRevoke, btn.dataset.shareEmail));
+            btn.addEventListener("click", () => revokeCollaborator(btn.dataset.shareRevoke, btn.dataset.shareEmail, btn.dataset.shareKind));
         });
     } catch (e) {
         host.innerHTML = `<div class="hint" style="color:var(--danger);margin:0;">${escapeHtml(e.message)}</div>`;
@@ -3419,7 +3433,17 @@ async function submitShareInvite() {
             setShareFeedback(data.detail || `Invite failed (${res.status})`, "err");
             return;
         }
-        setShareFeedback(`Invited ${data.collaborator?.email || email} as ${data.collaborator?.role || "editor"}.`, "ok");
+        const coll = data.collaborator || {};
+        const who = coll.email || email;
+        if (coll.kind === "pending") {
+            // The invitee doesn't have a GridOS account yet — the signup
+            // trigger will promote this invite to an active collaborator
+            // when they register. Copy the shareable link with the email
+            // so the inviter can send both in one message.
+            setShareFeedback(`Invite waiting for ${who} to sign up. Send them your share link so they know where to go.`, "ok");
+        } else {
+            setShareFeedback(`Invited ${who} as ${coll.role || "editor"}.`, "ok");
+        }
         emailEl.value = "";
         await renderCollaboratorList();
     } catch (e) {
@@ -3427,17 +3451,21 @@ async function submitShareInvite() {
     }
 }
 
-async function revokeCollaborator(userId, email) {
-    if (!userId) return;
-    if (!confirm(`Revoke access for ${email || userId}?`)) return;
+async function revokeCollaborator(revokeKey, email, kind) {
+    // revokeKey is user_id for active collaborators, pending-invite id for
+    // pending. Route to the right endpoint based on kind so we don't try to
+    // DELETE a user_id that doesn't exist yet (pending invitee).
+    if (!revokeKey) return;
+    if (!confirm(`Revoke access for ${email || revokeKey}?`)) return;
     setShareFeedback("Revoking…", "mute");
     try {
-        const res = await fetch(`${API_BASE}/workbook/${encodeURIComponent(activeWorkbookId)}/collaborators/${encodeURIComponent(userId)}`, {
-            method: "DELETE",
-        });
+        const path = kind === "pending"
+            ? `/workbook/${encodeURIComponent(activeWorkbookId)}/pending-invites/${encodeURIComponent(revokeKey)}`
+            : `/workbook/${encodeURIComponent(activeWorkbookId)}/collaborators/${encodeURIComponent(revokeKey)}`;
+        const res = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
-        setShareFeedback(`Revoked access for ${email || userId}.`, "ok");
+        setShareFeedback(`Revoked access for ${email || revokeKey}.`, "ok");
         await renderCollaboratorList();
     } catch (e) {
         setShareFeedback(`Revoke failed: ${e.message}`, "err");

@@ -1736,12 +1736,14 @@ async def invite_collaborator(
             email=email,
             role=req.role,
         )
-    except LookupError as e:
-        raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Invite failed: {e}")
+    # Active invites land as workbook_collaborators rows immediately; pending
+    # invites sit in pending_invites until the invitee signs up (a Postgres
+    # trigger from migration 0008 promotes them atomically on user creation).
+    # The frontend uses `kind` to render the right confirmation.
     return {"ok": True, "collaborator": grant}
 
 
@@ -1767,12 +1769,25 @@ async def revoke_collaborator(
     if target_user_id == user.id:
         raise HTTPException(status_code=400, detail="You can't revoke your own owner access.")
     workbook_store.remove_collaborator(workbook_id, target_user_id)
-    # Evict any kernel that was keyed against this user, so their next request
-    # has to re-resolve access (which will now 404). Without this they could
-    # keep writing against a cached kernel for up to the LRU window.
     # Kernel pool is keyed by (owner_id, workbook_id) — collaborators resolve
     # to the owner's key, so there's nothing to evict for the revoked user
     # specifically. Their next request re-runs the ACL check and gets 404.
+    return {"ok": True}
+
+
+@app.delete("/workbook/{workbook_id}/pending-invites/{invite_id}")
+async def revoke_pending_invite(
+    workbook_id: str,
+    invite_id: str,
+    user: AuthUser = Depends(require_user),
+):
+    """Revoke an invite that hasn't been accepted yet (invitee hasn't
+    signed up). Active collaborators go through the other DELETE
+    endpoint above. Split because the id spaces are different — active
+    rows key off user_id (uuid of the invitee), pending rows key off
+    the pending_invites.id uuid."""
+    _require_workbook_owner(user, workbook_id)
+    workbook_store.remove_pending_invite(workbook_id, invite_id)
     return {"ok": True}
 
 

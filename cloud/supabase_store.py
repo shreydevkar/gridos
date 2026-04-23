@@ -211,16 +211,16 @@ class SupabaseWorkbookStore:
         return {"owner_id": owner_id, "role": collab_rows[0]["role"]}
 
     def list_collaborators(self, workbook_id: str) -> list[dict]:
-        """Return every collaborator on this workbook with their email. Used
-        by the owner-facing Share… modal to show who has access.
+        """Return every collaborator (active + pending) on this workbook.
 
-        Shape: [{user_id, email, role, invited_at, accepted_at}].
+        Shape per row:
+          {kind:'active', user_id, email, role, invited_at, accepted_at}
+          {kind:'pending', id, email, role, invited_at}   ← no user_id yet
 
-        Two queries instead of a PostgREST embedded select — the
-        workbook_collaborators table has two FKs to public.users (user_id
-        and invited_by), which makes `users(email)` ambiguous and errors
-        out with a 500. Two queries keeps it unambiguous and is cheap —
-        collaborator counts are tiny."""
+        Two flat queries for each table + a single IN lookup against
+        public.users for emails, rather than PostgREST embedded selects —
+        workbook_collaborators has two FKs to users (user_id, invited_by)
+        which makes `users(email)` ambiguous and 500s on prod."""
         if not workbook_id:
             return []
         rows_res = (
@@ -231,8 +231,6 @@ class SupabaseWorkbookStore:
             .execute()
         )
         rows = rows_res.data or []
-        if not rows:
-            return []
         user_ids = list({r["user_id"] for r in rows if r.get("user_id")})
         email_by_id: dict[str, str] = {}
         if user_ids:
@@ -245,8 +243,9 @@ class SupabaseWorkbookStore:
             for u in emails_res.data or []:
                 if u.get("id"):
                     email_by_id[u["id"]] = u.get("email") or ""
-        return [
+        active = [
             {
+                "kind": "active",
                 "user_id": r.get("user_id"),
                 "email": email_by_id.get(r.get("user_id", ""), ""),
                 "role": r.get("role"),
@@ -255,6 +254,41 @@ class SupabaseWorkbookStore:
             }
             for r in rows
         ]
+        # Pending invites — the invitee hasn't signed up yet. The Share…
+        # modal shows these alongside active collaborators so the owner
+        # can see all outstanding grants in one place.
+        pending_res = (
+            self._client.table("pending_invites")
+            .select("id, email, role, invited_at")
+            .eq("workbook_id", workbook_id)
+            .is_("accepted_at", "null")
+            .order("invited_at", desc=False)
+            .execute()
+        )
+        pending = [
+            {
+                "kind": "pending",
+                "id": r.get("id"),
+                "email": r.get("email"),
+                "role": r.get("role"),
+                "invited_at": r.get("invited_at"),
+            }
+            for r in (pending_res.data or [])
+        ]
+        return active + pending
+
+    def remove_pending_invite(self, workbook_id: str, invite_id: str) -> None:
+        """Revoke a pending invite by its id. No-op if missing (already
+        promoted on signup, or never existed)."""
+        if not workbook_id or not invite_id:
+            return
+        (
+            self._client.table("pending_invites")
+            .delete()
+            .eq("workbook_id", workbook_id)
+            .eq("id", invite_id)
+            .execute()
+        )
 
     def add_collaborator_by_email(
         self,
@@ -263,45 +297,75 @@ class SupabaseWorkbookStore:
         email: str,
         role: str,
     ) -> dict:
-        """Invite a user by email. Requires the invitee to already have a
-        GridOS account (public.users row). Returns the grant row.
+        """Invite a user by email.
 
-        Raises LookupError if the email isn't registered, ValueError on bad
-        inputs. Upserts so re-inviting the same email just updates the role
-        instead of erroring."""
+        Returns one of two shapes:
+          {kind:'active', user_id, email, role}   — invitee already had an
+                                                    account; workbook_collaborators
+                                                    row created immediately.
+          {kind:'pending', email, role}           — invitee isn't registered yet;
+                                                    a pending_invites row was
+                                                    created and will auto-promote
+                                                    when they sign up (the Postgres
+                                                    trigger shipped in migration
+                                                    0008 handles this atomically).
+
+        Raises ValueError on bad inputs or self-invite."""
         if not workbook_id or not inviter_id or not email:
             raise ValueError("workbook_id, inviter_id, and email are required.")
         if role not in ("editor", "viewer"):
             raise ValueError(f"role must be 'editor' or 'viewer', got {role!r}")
+        normalized = email.strip().lower()
         target = (
             self._client.table("users")
             .select("id, email")
-            .eq("email", email.strip().lower())
+            .eq("email", normalized)
             .limit(1)
             .execute()
         )
         target_rows = target.data or []
-        if not target_rows:
-            raise LookupError(f"No GridOS account found for {email}")
-        target_id = target_rows[0]["id"]
-        if target_id == inviter_id:
-            raise ValueError("Cannot invite yourself.")
-        payload = {
-            "workbook_id": workbook_id,
-            "user_id": target_id,
-            "role": role,
-            "invited_by": inviter_id,
-        }
+        if target_rows:
+            target_id = target_rows[0]["id"]
+            if target_id == inviter_id:
+                raise ValueError("Cannot invite yourself.")
+            (
+                self._client.table("workbook_collaborators")
+                .upsert(
+                    {
+                        "workbook_id": workbook_id,
+                        "user_id": target_id,
+                        "role": role,
+                        "invited_by": inviter_id,
+                    },
+                    on_conflict="workbook_id,user_id",
+                )
+                .execute()
+            )
+            return {
+                "kind": "active",
+                "user_id": target_id,
+                "email": target_rows[0]["email"],
+                "role": role,
+            }
+
+        # No account yet — stash a pending invite. The promote_pending_invites
+        # trigger will convert this to a collaborator row the moment the
+        # invitee signs up.
         (
-            self._client.table("workbook_collaborators")
-            .upsert(payload, on_conflict="workbook_id,user_id")
+            self._client.table("pending_invites")
+            .upsert(
+                {
+                    "workbook_id": workbook_id,
+                    "email": normalized,
+                    "role": role,
+                    "invited_by": inviter_id,
+                    "accepted_at": None,
+                },
+                on_conflict="workbook_id,email",
+            )
             .execute()
         )
-        return {
-            "user_id": target_id,
-            "email": target_rows[0]["email"],
-            "role": role,
-        }
+        return {"kind": "pending", "email": normalized, "role": role}
 
     def remove_collaborator(self, workbook_id: str, user_id: str) -> None:
         """Revoke access. No-op if the grant doesn't exist."""
