@@ -105,6 +105,7 @@ In SaaS mode an in-app **Marketplace** (gear icon → grid icon in the menubar) 
 - **String literals in formulas** — formulas accept quoted strings (`=GREET("Shrey")`, `=BLACK_SCHOLES(100, 100, 1, 0.05, 0.2, "call")`), enabling plugins that take labels or enum-style switches without needing cell references.
 - **Per-cell decimal precision** — two toolbar buttons (`.0←` / `.00→`) round the displayed number without touching the stored value, so downstream formulas still see full precision.
 - **Excel-compatible formula parser** — `=A1=B1`, `=IF(A1<>0, x, y)`, `=A1<=B1`, `=A1&" world"`, `=A1<B1+C1` all work. Comparison operators return 1/0 (Excel-style), `&` coerces both sides to display strings (booleans → `TRUE`/`FALSE`, integer-valued floats drop the `.0`), text-cell references stay as strings so numeric ops raise `#VALUE!` honestly instead of silently coercing to 0.
+- **Cross-sheet formula references** — `=Data!A1`, `=SUM(Data!A1:A10)`, `='Monthly Budget'!B5` (quoted names for sheets with spaces). Sheet-name match is case-insensitive; missing sheet yields `#REF!`. The agent knows the grammar: ask "pull A1 from Sheet 2 into B2" and it emits `=Sheet2!A1` without prompting. The preview guardrail correctly skips cross-sheet refs instead of false-positive blocking them as "empty cells on the current sheet."
 - **Shared workbooks (SaaS)** — File → Share… invites a collaborator by email; both users edit the same live kernel with sub-second sync. **Realtime cell updates** paint with a yellow flash on the peer tab; **range cursors** show the other user's selection rectangle Google-Sheets-style with a colored border + faint inner tint + email label. Concurrent writes are serialized by a per-kernel `RLock` and per-cell version counter so two users can't corrupt each other's state.
 - **Optimistic-locking API** — `/grid/cell` and `/grid/range` accept an `expected_versions: {cell: int}` map and return **409 Conflict** when the stored version drifted. Lets future "merge or refresh" UX detect concurrent writes precisely instead of falling back to last-writer-wins.
 - **Composer kill-switch** — the send button morphs into a red stop button while an `/agent/chat` or `/agent/chat/chain` request is in-flight. Click (or press Enter again) to abort. Status pill flips to "Cancelled"; chain cancels refetch the grid so server-committed steps stay honest.
@@ -335,6 +336,7 @@ Render's free instances sleep after ~15 min of inactivity (~30–60s cold start 
 - [x] Per-cell decimal display precision — toolbar buttons adjust rounding without touching stored values
 - [x] Multi-rectangle agent responses (`intents` array) — whole multi-section models build in one LLM call instead of N chain turns
 - [x] Excel-compatible parser ops — comparison (`=`, `<>`, `<`, `>`, `<=`, `>=`), string concat (`&`), and text-cell preservation in references
+- [x] Cross-sheet formula references — `=SheetName!A1` / `='Quoted Name'!A1:A10`, wired into the agent's base system prompt so the AI emits them unprompted; preview guardrail is cross-sheet-aware
 - [x] Hardened guardrail — server-minted single-use preview tokens stop client-side payload substitution between preview and apply
 - [x] Composer kill-switch — `AbortController` cancels any in-flight `/agent/chat[/chain]` mid-call
 - [x] Debounced cloud auto-save — silent `/system/save` 4s after the last edit, SaaS only
@@ -355,7 +357,8 @@ Render's free instances sleep after ~15 min of inactivity (~30–60s cold start 
 - [ ] Per-user connector credential UI for viewers — share the owner's keys but let viewers override with their own account when that makes sense
 - [ ] Stripe checkout + webhook for tier upgrades (Phase 4c)
 - [ ] `.edu` / GitHub Student Pack verification for the Student tier unlock
-- [ ] Range-based vector operations and cross-sheet referencing
+- [ ] Cross-sheet dirty tracking — v1 reads the other sheet correctly on first compute; upstream writes don't auto-propagate yet
+- [ ] Range-based vector operations
 - [ ] External connectors (stock / weather / etc.)
 - [ ] Provider-native structured output (Claude tool-use / OpenAI JSON mode) for stricter JSON reliability
 - [ ] Prompt caching on Gemini + Anthropic to cut long-chain latency
@@ -371,7 +374,7 @@ Working on the kernel itself — new primitives, provider adapters, collision-en
 
 - Fork the repo and follow [Running locally](#running-locally) to get the server up.
 - Read the [Architecture](#architecture) section above for a map of `core/`, `main.py`, `cloud/`, and the static frontend.
-- Run `python test_platform.py && python test_ast_edge_cases.py && python test_plugins.py` before sending a PR. All three are offline — no network, no LLM calls. `test_ast_edge_cases.py` covers 21 parser cases (operator precedence, comparison ops, string concat, range refs, IF branches, circular-ref termination, deterministic failure on unknown functions).
+- Run `python test_platform.py && python test_ast_edge_cases.py && python test_plugins.py` before sending a PR. All three are offline — no network, no LLM calls. `test_ast_edge_cases.py` covers 30 parser cases (operator precedence, comparison ops, string concat, range refs, IF branches, cross-sheet references + quoted sheet names, circular-ref termination, deterministic failure on unknown functions).
 - PRs welcome for anything on the [Roadmap](#roadmap) or anything you think the project is missing. Open an issue first for larger architectural changes.
 
 ### 2. Plugin and extension developers
