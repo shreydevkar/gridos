@@ -5,3 +5,4 @@ telemetry_log.json
 .claude/
 data/
 .mcp.json
+bench/
