@@ -14,6 +14,14 @@ class _FormulaParseError(Exception):
     pass
 
 
+class _RangeValues(list):
+    """Marker subclass — flags a function arg that came from a range literal
+    (A1:A5) so the call-site keeps it as ONE argument instead of flattening it
+    into N scalars. Required for criteria-based aggregations (COUNTIF/SUMIF/
+    AVERAGEIF...) that need to see the range/criterion boundary."""
+    pass
+
+
 class VersionConflict(Exception):
     """Raised by write_user_range when an optimistic-concurrency check fails.
     Carries the cell id, the expected version, and the actual version so the
@@ -128,7 +136,10 @@ _STRING_ESCAPES = {"\\n": "\n", "\\t": "\t", "\\\"": "\"", "\\'": "'", "\\\\": "
 
 def _as_concat_str(v) -> str:
     """Excel-compatible string coercion for the & operator.
-    Booleans render as TRUE/FALSE; integer-valued floats drop the .0."""
+    Booleans render as TRUE/FALSE; integer-valued floats drop the .0; None and
+    empty render as the empty string (Excel treats blanks as nothing in concat)."""
+    if v is None:
+        return ""
     if isinstance(v, bool):
         return "TRUE" if v else "FALSE"
     if isinstance(v, float) and v.is_integer():
@@ -140,6 +151,12 @@ def _formula_compare(left, right, op: str) -> bool:
     """Comparison for =, <>, <, >, <=, >=. Numbers compare numerically; strings
     case-insensitive (matches Excel). Cross-type (num vs str) is never equal
     rather than raising — users type heterogeneous cells all the time."""
+    # Blank (None) compares equal to "" and to 0 — Excel treats empty cells
+    # as both. Surfaces correct behavior for =A1="" and =A1=0 on blank cells.
+    if left is None:
+        left = "" if isinstance(right, str) else 0
+    if right is None:
+        right = "" if isinstance(left, str) else 0
     if isinstance(left, bool) or isinstance(right, bool):
         left = int(left) if isinstance(left, bool) else left
         right = int(right) if isinstance(right, bool) else right
@@ -267,6 +284,16 @@ class _ExpressionEvaluator:
         while self._peek()[0] == "OP" and self._peek()[1] in ("+", "-"):
             op = self._advance()[1]
             right = self._parse_term()
+            # Blanks are 0 in arithmetic (Excel); error sentinels propagate.
+            if result is None:
+                result = 0
+            if right is None:
+                right = 0
+            if isinstance(result, str) and result.startswith("#"):
+                continue
+            if isinstance(right, str) and right.startswith("#"):
+                result = right
+                continue
             result = result + right if op == "+" else result - right
         return result
 
@@ -275,16 +302,34 @@ class _ExpressionEvaluator:
         while self._peek()[0] == "OP" and self._peek()[1] in ("*", "/"):
             op = self._advance()[1]
             right = self._parse_unary()
+            # Blanks are 0 in arithmetic; error sentinels short-circuit so
+            # IFERROR(...) can catch the result instead of crashing the formula.
+            if result is None:
+                result = 0
+            if right is None:
+                right = 0
+            if isinstance(result, str) and result.startswith("#"):
+                continue
+            if isinstance(right, str) and right.startswith("#"):
+                result = right
+                continue
             if op == "*":
                 result = result * right
             else:
-                result = result / right  # ZeroDivisionError propagates
+                try:
+                    result = result / right
+                except ZeroDivisionError:
+                    result = "#DIV/0!"
         return result
 
     def _parse_unary(self):
         if self._peek()[0] == "OP" and self._peek()[1] in ("+", "-"):
             op = self._advance()[1]
             value = self._parse_unary()
+            if value is None:
+                value = 0
+            if isinstance(value, str) and value.startswith("#"):
+                return value
             return -value if op == "-" else +value
         return self._parse_power()
 
@@ -293,6 +338,14 @@ class _ExpressionEvaluator:
         if self._peek()[0] == "POW":
             self._advance()
             exponent = self._parse_unary()  # right-associative
+            if base is None:
+                base = 0
+            if exponent is None:
+                exponent = 0
+            if isinstance(base, str) and base.startswith("#"):
+                return base
+            if isinstance(exponent, str) and exponent.startswith("#"):
+                return exponent
             return base ** exponent
         return base
 
@@ -321,13 +374,33 @@ class _ExpressionEvaluator:
 
         if kind == "NAME":
             self._advance()
+            # Bare TRUE / FALSE without parens — Excel allows these as boolean
+            # literals (e.g. =VLOOKUP(x, range, 2, FALSE)). Without this we'd
+            # demand TRUE() / FALSE() and parse-error on common formulas.
+            if self._peek()[0] != "LPAREN":
+                upper = text.upper() if isinstance(text, str) else text
+                if upper == "TRUE":
+                    return True
+                if upper == "FALSE":
+                    return False
+                raise _FormulaParseError(f"Expected '(' after function name {text!r}")
             self._expect("LPAREN")
             args: list = []
+
+            def _consume_one():
+                # Range args (_RangeValues) become ONE element; scalar args
+                # are single-element lists that get unpacked.
+                parsed = self._parse_arg()
+                if isinstance(parsed, _RangeValues):
+                    args.append(parsed)
+                else:
+                    args.extend(parsed)
+
             if self._peek()[0] != "RPAREN":
-                args.extend(self._parse_arg())
+                _consume_one()
                 while self._peek()[0] == "COMMA":
                     self._advance()
-                    args.extend(self._parse_arg())
+                    _consume_one()
             self._expect("RPAREN")
             return self.func_registry.evaluate(text, args)
 
@@ -408,17 +481,17 @@ class _ExpressionEvaluator:
             return None, None
         return self.kernel._sheet_state(canonical), canonical
 
-    def _resolve_range_values(self, start_ref: str, end_ref: str, sheet_name: Optional[str] = None) -> list:
+    def _resolve_range_values(self, start_ref: str, end_ref: str, sheet_name: Optional[str] = None) -> _RangeValues:
         state, _ = self._state_for_sheet(sheet_name)
         if state is None:
             # Missing sheet — surface as a single #REF! so SUM/AVERAGE/etc.
             # propagate the error rather than silently summing zeros.
-            return ["#REF!"]
+            return _RangeValues(["#REF!"])
         r1, c1 = a1_to_coords(start_ref)
         r2, c2 = a1_to_coords(end_ref)
         top, bottom = min(r1, r2), max(r1, r2)
         left, right = min(c1, c2), max(c1, c2)
-        values: list = []
+        values: _RangeValues = _RangeValues()
         for r in range(top, bottom + 1):
             for c in range(left, right + 1):
                 # Dependency tracking for cross-sheet refs is single-sheet-only
@@ -430,15 +503,24 @@ class _ExpressionEvaluator:
                 state["dependencies"].setdefault((r, c), set()).add(self.target_coords)
                 ref_cell = state["cells"].get((r, c))
                 if ref_cell is None:
-                    values.append(0.0)
+                    values.append(None)
                     continue
                 v = ref_cell.value
                 if isinstance(v, bool):
                     values.append(1.0 if v else 0.0)
                 elif isinstance(v, (int, float)):
                     values.append(float(v))
+                elif v is None or v == "":
+                    values.append(None)
                 else:
-                    values.append(0.0)
+                    # Preserve raw string. Aggregations like SUM filter to
+                    # numerics; criteria functions (COUNTIF/SUMIF) need the
+                    # text to compare against.
+                    values.append(v)
+        # Stash shape metadata as attributes — inert to list operations,
+        # but lookup/INDEX-style functions can recover the rectangle.
+        values.rows = bottom - top + 1
+        values.cols = right - left + 1
         return values
 
     def _resolve_cell_ref(self, ref: str, sheet_name: Optional[str] = None):
@@ -449,8 +531,13 @@ class _ExpressionEvaluator:
         state["dependencies"].setdefault((ref_r, ref_c), set()).add(self.target_coords)
         ref_cell = state["cells"].get((ref_r, ref_c))
         if ref_cell is None:
-            return 0.0
+            # Missing cell → None so ISBLANK can detect it. Arithmetic ops
+            # coerce None to 0 (Excel semantics), and string ops handle None
+            # explicitly via _as_concat_str.
+            return None
         value = ref_cell.value
+        if value is None or value == "":
+            return None
         if isinstance(value, bool):
             return 1.0 if value else 0.0
         if isinstance(value, (int, float)):
@@ -464,7 +551,7 @@ class _ExpressionEvaluator:
                 # Treating text as 0.0 here silently corrupted =A1&B1 with
                 # real strings — that regression is what this fix addresses.
                 return value
-        return 0.0
+        return None
 
 
 class GridOSKernel:
@@ -670,25 +757,50 @@ class GridOSKernel:
 
         return current_r, current_c, coords_to_a1(current_r, current_c)
 
+    def _split_sheet_qualified_target(self, target: str, default_sheet: str | None) -> tuple[str, str]:
+        """Accept agent target_cell in either A1 or Sheet!A1 form. Sheet-qualified
+        targets create the sheet on-demand so cross-sheet writes don't error
+        when the destination doesn't exist yet (common in benchmark-style
+        'put the result on a 'Result' sheet' instructions). Quoted sheet names
+        with spaces ('Monthly Budget'!A1) are also handled."""
+        if not target or "!" not in target:
+            return default_sheet or self.active_sheet, target
+        raw_sheet, cell_a1 = target.rsplit("!", 1)
+        if raw_sheet.startswith("'") and raw_sheet.endswith("'"):
+            raw_sheet = raw_sheet[1:-1].replace("''", "'")
+        # Case-insensitive sheet lookup. If the named sheet doesn't exist yet,
+        # create it — agents asked to write a "Result" sheet shouldn't have to
+        # emit a separate sheet-create rectangle first.
+        canonical = next(
+            (n for n in self.sheets if n.lower() == raw_sheet.lower()),
+            None,
+        )
+        if canonical is None:
+            self._ensure_sheet(raw_sheet)
+            canonical = raw_sheet
+        return canonical, cell_a1
+
     def process_agent_intent(self, intent: AgentIntent, sheet_name: str | None = None) -> tuple[str, str]:
-        state = self._sheet_state(sheet_name)
+        resolved_sheet, plain_a1 = self._split_sheet_qualified_target(intent.target_start_a1, sheet_name)
+        state = self._sheet_state(resolved_sheet)
         target_r, target_c, actual_a1 = self._resolve_target(
             state,
-            intent.target_start_a1,
+            plain_a1,
             intent.data_payload,
             intent.shift_direction,
         )
         if actual_a1 == "ERROR_NO_SPACE":
             return intent.target_start_a1, actual_a1
 
-        self._commit_write(target_r, target_c, intent.data_payload, intent.agent_id, sheet_name)
+        self._commit_write(target_r, target_c, intent.data_payload, intent.agent_id, resolved_sheet)
         return intent.target_start_a1, actual_a1
 
     def preview_agent_intent(self, intent: AgentIntent, sheet_name: str | None = None) -> dict:
-        state = self._sheet_state(sheet_name)
+        resolved_sheet, plain_a1 = self._split_sheet_qualified_target(intent.target_start_a1, sheet_name)
+        state = self._sheet_state(resolved_sheet)
         target_r, target_c, actual_a1 = self._resolve_target(
             state,
-            intent.target_start_a1,
+            plain_a1,
             intent.data_payload,
             intent.shift_direction,
         )
@@ -958,6 +1070,7 @@ class GridOSKernel:
                 self._recalculate(dep_r, dep_c, visited, sheet_name)
 
     def get_context_for_ai(self, sheet_name: str | None = None, selected_cells: list[str] | None = None, scope: str = "sheet") -> dict:
+        active_name = sheet_name or self.active_sheet
         state = self._sheet_state(sheet_name)
         cells = state["cells"]
         if not cells:
@@ -968,6 +1081,9 @@ class GridOSKernel:
                 "cell_metadata_json": "{}",
                 "occupied_bounds": None,
                 "scope": scope,
+                "all_sheets": [s["name"] for s in self.list_sheets()],
+                "active_sheet": active_name,
+                "other_sheets_data": self._summarize_other_sheets(active_name),
             }
 
         if scope == "selection" and selected_cells:
@@ -1019,7 +1135,61 @@ class GridOSKernel:
             "cell_metadata_json": json.dumps(cell_metadata, default=str),
             "occupied_bounds": occupied_bounds,
             "scope": scope,
+            "all_sheets": [s["name"] for s in self.list_sheets()],
+            "active_sheet": active_name,
+            "other_sheets_data": self._summarize_other_sheets(active_name),
         }
+
+    def _summarize_other_sheets(self, active_name: str, max_cells_per_sheet: int = 400) -> list[dict]:
+        """Render every non-active sheet as a name + occupied bounds + truncated grid.
+
+        Cross-sheet benchmark questions (e.g. 'extract rows from Sheet1 to Sheet2
+        where col B = X') are unanswerable if the agent only sees the active
+        sheet. Token cost is bounded by max_cells_per_sheet so a workbook with
+        large secondary sheets doesn't blow the prompt budget."""
+        out: list[dict] = []
+        for name in self.sheet_order:
+            if name == active_name:
+                continue
+            sheet_state = self.sheets.get(name)
+            if not sheet_state:
+                continue
+            cells = sheet_state.get("cells", {})
+            if not cells:
+                out.append({
+                    "name": name,
+                    "occupied_bounds": None,
+                    "formatted_data": "(empty)",
+                    "truncated": False,
+                })
+                continue
+            entries = sorted(cells.items())
+            rows = [r for (r, _), _ in entries]
+            cols = [c for (_, c), _ in entries]
+            top, bottom = min(rows), max(rows)
+            left, right = min(cols), max(cols)
+            occupied = {
+                "top_left": coords_to_a1(top, left),
+                "bottom_right": coords_to_a1(bottom, right),
+                "rows": bottom - top + 1,
+                "cols": right - left + 1,
+            }
+            truncated = len(entries) > max_cells_per_sheet
+            kept = entries[:max_cells_per_sheet]
+            grid_lines = []
+            for (r, c), cell in kept:
+                a1 = coords_to_a1(r, c)
+                formula = f" (Formula: {cell.formula})" if cell.formula else ""
+                grid_lines.append(f"{a1}: {cell.value}{formula}")
+            if truncated:
+                grid_lines.append(f"... [{len(entries) - max_cells_per_sheet} more cells truncated]")
+            out.append({
+                "name": name,
+                "occupied_bounds": occupied,
+                "formatted_data": "\n".join(grid_lines),
+                "truncated": truncated,
+            })
+        return out
 
     def export_sheet(self, sheet_name: str | None = None) -> dict:
         target = sheet_name or self.active_sheet

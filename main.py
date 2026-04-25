@@ -11,6 +11,7 @@ import uuid
 from collections import OrderedDict
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional
@@ -804,6 +805,12 @@ class ChatRequest(BaseModel):
     selected_cells: List[str] = []
     sheet: Optional[str] = None
     model_id: Optional[str] = None
+    # Optional explicit agent override. When present and valid, bypasses the
+    # router entirely (no LLM call, fully deterministic). Used by the benchmark
+    # adapter to pin data_analyst, and by API callers who already know which
+    # agent fits. Unknown ids fall back to the router instead of erroring so
+    # malformed clients don't crash mid-flow.
+    agent_id: Optional[str] = None
 
 
 class ChainRequest(ChatRequest):
@@ -1029,31 +1036,75 @@ _ROUTER_PROMPT_CHAR_CAP = 800       # the user prompt fragment shown to the rout
 _ROUTER_HISTORY_CHAR_CAP = 400      # any history fragment, if a caller passes one
 
 
-def route_prompt(prompt: str, history_context: str, model_id: Optional[str] = None) -> str:
-    if len(AGENTS) == 1:
-        return next(iter(AGENTS))
+# High-precision trigger phrases per agent. The pre-classifier picks an agent
+# WITHOUT calling the LLM router when, and only when, exactly one agent's
+# triggers match — multiple matches or zero matches fall through to the LLM
+# so we never make ambiguous decisions on regex evidence alone. Triggers must
+# stay narrow: false positives here are silent mis-routings.
+_ROUTER_TRIGGERS: dict[str, list[str]] = {
+    "data_analyst": [
+        # Excel formula names that virtually only show up in data work
+        r"\b(vlookup|hlookup|xlookup|index/match|countifs?|sumifs?|averageifs?|maxifs?|minifs?)\b",
+        r"\b(datedif|datevalue|eomonth|edate|weekday)\b",
+        # Phrasings that read as analytical queries
+        r"\bextract\s+(rows?|records?|entries|matching)\b",
+        r"\b(filter|select)\s+(rows?|records?|where|by)\b",
+        r"\brows?\s+where\s+(column|col\.?|the)\b",
+        r"\blook\s*up\s+\w+\s+(in|from|by|on)\b",
+        r"\bcount\s+(rows?|cells?|entries|records?|how many)\b",
+    ],
+    "finance": [
+        # Finance acronyms — high-confidence only when they're whole words
+        r"\b(dcf|npv|irr|wacc|ebit|ebitda|cogs|p&l|capex|opex|ev/ebitda)\b",
+        r"\b(cap\s*rate|discount(ed)?\s+cash\s+flow|free\s+cash\s+flow)\b",
+        r"\b(income\s+statement|balance\s+sheet|cash\s+flow\s+statement|3[\s-]?statement)\b",
+        r"\b(valuation\s+model|terminal\s+value|enterprise\s+value)\b",
+        r"\b(operating\s+model|pro[\s-]?forma|forecast\s+model)\b",
+    ],
+    # general: no triggers — it's the fallback when nothing else fits.
+}
 
-    # Defense-in-depth: route_prompt MUST stay tiny so it fits inside Groq's
-    # free-tier 6K TPM cap. Cap both fragments unconditionally — this absorbs
-    # any future regression where a caller forgets to pass empty history or
-    # the user pastes a 50KB prompt.
-    safe_prompt = (prompt or "")[:_ROUTER_PROMPT_CHAR_CAP]
-    safe_history = (history_context or "")[:_ROUTER_HISTORY_CHAR_CAP]
+# Precompile patterns once. _ROUTER_TRIGGERS is a constant after import time
+# so this never needs to invalidate.
+_ROUTER_TRIGGER_REGEXES: dict[str, list] = {
+    aid: [re.compile(p, re.IGNORECASE) for p in patterns]
+    for aid, patterns in _ROUTER_TRIGGERS.items()
+}
 
-    options = "\n".join(
-        f"- {agent['id']}: {agent.get('router_description', agent.get('display_name', agent['id']))}"
-        for agent in AGENTS.values()
-    )
+
+def _quick_classify(prompt: str) -> Optional[str]:
+    """Regex pre-pass. Returns an agent id when EXACTLY ONE agent's triggers
+    match the prompt; None otherwise (so the LLM router decides). This is the
+    deterministic fast-path — if it fires, no LLM call happens at all."""
+    if not prompt:
+        return None
+    matched: list[str] = []
+    for aid, regexes in _ROUTER_TRIGGER_REGEXES.items():
+        if aid not in AGENTS:
+            continue  # an agent's triggers but the agent itself isn't loaded
+        if any(rx.search(prompt) for rx in regexes):
+            matched.append(aid)
+    if len(matched) == 1:
+        return matched[0]
+    return None
+
+
+# LRU cache wraps the LLM router call so identical prompts route the same way
+# across requests (the router LLM is mildly stochastic even at temperature=0
+# on some providers; the cache makes repeat traffic deterministic). Reset on
+# server restart, which is also when AGENTS reloads, so manual invalidation
+# isn't needed. Bounded to keep memory predictable.
+@lru_cache(maxsize=4096)
+def _llm_route_cached(safe_prompt: str, safe_history: str, options_block: str, model_id: Optional[str]) -> str:
     instruction = f"""
 Analyze this user task: "{safe_prompt}".
 Previous context: {safe_history}
 
 Available agent profiles:
-{options}
+{options_block}
 
 Return ONLY the lowercase agent id that best fits the task. No other text.
 """.strip()
-
     res = call_model(
         "router",
         system_instruction="You are a routing classifier. Respond with only a lowercase agent id.",
@@ -1066,6 +1117,29 @@ Return ONLY the lowercase agent id that best fits the task. No other text.
     )
     candidate = res.text.strip().lower().split()[0] if res.text else "general"
     return candidate if candidate in AGENTS else "general"
+
+
+def route_prompt(prompt: str, history_context: str, model_id: Optional[str] = None) -> str:
+    if len(AGENTS) == 1:
+        return next(iter(AGENTS))
+
+    # Layer 1 — keyword pre-classifier. Fires ONLY when exactly one agent's
+    # triggers match, otherwise falls through. Zero LLM cost when it hits.
+    quick = _quick_classify(prompt or "")
+    if quick is not None:
+        return quick
+
+    # Layer 2 — LLM router (cached). Defense-in-depth: route_prompt MUST stay
+    # tiny so it fits inside Groq's free-tier 6K TPM cap. Cap both fragments
+    # unconditionally so a caller forgetting to pass empty history or pasting
+    # a 50KB prompt doesn't blow the bucket.
+    safe_prompt = (prompt or "")[:_ROUTER_PROMPT_CHAR_CAP]
+    safe_history = (history_context or "")[:_ROUTER_HISTORY_CHAR_CAP]
+    options_block = "\n".join(
+        f"- {agent['id']}: {agent.get('router_description', agent.get('display_name', agent['id']))}"
+        for agent in AGENTS.values()
+    )
+    return _llm_route_cached(safe_prompt, safe_history, options_block, model_id)
 
 
 def _plugin_formulas_for_prompt() -> str:
@@ -1157,11 +1231,35 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
 
     plugin_formulas_section = _plugin_formulas_for_prompt()
 
+    all_sheets = context.get("all_sheets") or [req.sheet or kernel.active_sheet]
+    other_sheets = context.get("other_sheets_data") or []
+    sheets_overview_line = (
+        "WORKBOOK SHEETS (all): " + ", ".join(all_sheets) +
+        f". Active: {context.get('active_sheet') or req.sheet or kernel.active_sheet}."
+    )
+    if other_sheets:
+        other_sheet_blocks = []
+        for s in other_sheets:
+            bounds = s.get("occupied_bounds")
+            header = f"=== {s['name']} ===" + (
+                f"  ({bounds['top_left']}→{bounds['bottom_right']}, {bounds['rows']}×{bounds['cols']})"
+                if bounds else "  (empty)"
+            )
+            other_sheet_blocks.append(header + "\n" + (s.get("formatted_data") or "(empty)"))
+        other_sheets_section = (
+            "OTHER SHEETS' CONTENTS (use these for cross-sheet refs like =Sheet2!A1; "
+            "values may be truncated for bandwidth):\n" + "\n\n".join(other_sheet_blocks)
+        )
+    else:
+        other_sheets_section = ""
+
     sections = [
         BASE_SYSTEM_RULES,
         f"ACTIVE SHEET: {req.sheet or kernel.active_sheet}\nVIEW SCOPE: {scope_line}\nSELECTED CELLS: {selected_summary}\n{bounds_line}",
+        sheets_overview_line,
         f"CELL METADATA (a1 -> {{val, locked, type}}):\n{context['cell_metadata_json']}",
         f"READABLE GRID STATE:\n{context['formatted_data']}",
+        other_sheets_section,
         charts_section,
         primitives_section,
         plugin_formulas_section,
@@ -1410,7 +1508,13 @@ def generate_agent_preview(req: ChatRequest) -> dict:
     # Router classifies on the CURRENT user prompt only — history adds noise
     # and (more importantly) blew past Groq's free-tier 6K TPM ceiling once
     # a session accumulated a few big multi-intent JSON outputs.
-    agent_id = route_prompt(req.prompt, "", model_id=req.model_id)
+    # Explicit agent_id override (benchmark adapter, scripted API callers)
+    # bypasses routing entirely. Unknown ids quietly fall through to the
+    # router so a typo doesn't crash mid-request.
+    if req.agent_id and req.agent_id in AGENTS:
+        agent_id = req.agent_id
+    else:
+        agent_id = route_prompt(req.prompt, "", model_id=req.model_id)
     agent = AGENTS[agent_id]
     system_instruction = build_system_instruction(agent, context, req)
 
@@ -2051,6 +2155,18 @@ async def apply_agent_preview(
 
 
 _CELL_REF_RE = re.compile(r"[A-Z]+\d+")
+# Same-sheet range refs like A1:A100. Stripped from the empty-deps scan so a
+# range like SUM(A1:A100) is not flagged just because A100 happens to be
+# empty — that's normal Excel behavior. The original guard's intent was to
+# catch =DIVIDE(C5, B5) where B5 is a STANDALONE empty ref, and that class
+# of bugs still triggers correctly because standalone refs aren't covered
+# by this stripper.
+_RANGE_REF_RE = re.compile(r"[A-Z]+\d+:[A-Z]+\d+")
+# String literals inside formulas. Without this, the cell-ref regex pulls
+# tokens out of "T9A", "B5C", etc. and the guardrail treats them as empty
+# refs to non-existent cells. Match double-quoted (Excel) and single-quoted
+# (legacy) literals; backslash-escapes preserved.
+_STRING_LITERAL_RE = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'')
 # Cross-sheet refs like `Data!A1` or `'Monthly Data'!A1`. We strip these out
 # of formulas before the same-sheet empty/text-ref scans — those scans check
 # the CURRENT sheet's state, which is the wrong sheet for cross-sheet refs.
@@ -2073,6 +2189,21 @@ def _strip_cross_sheet_refs(formula: str) -> str:
     return _CROSS_SHEET_REF_RE.sub(" ", formula)
 
 
+def _strip_range_refs(formula: str) -> str:
+    """Blank out same-sheet range refs (A1:A100) so the empty-deps scan
+    doesn't flag the bookend cells as 'empty individual refs'. Range
+    aggregations like SUM(A1:A100) can legitimately include empty cells."""
+    return _RANGE_REF_RE.sub(" ", formula)
+
+
+def _strip_string_literals(formula: str) -> str:
+    """Blank out quoted string contents (e.g. \"T9A\" inside =IF(A1=\"T9A\",...))
+    so the cell-ref regex doesn't pull T9 out of a string literal and flag it
+    as an empty reference. Real bug found in the V2 pilot — formulas with
+    literal text containing letter+digit patterns triggered false positives."""
+    return _STRING_LITERAL_RE.sub(" ", formula)
+
+
 def _find_empty_formula_deps(preview_cells: list[dict], sheet_state: dict) -> list[dict]:
     """For each formula-bearing preview cell, flag any cell reference that points
     at an empty cell in the current sheet AND isn't being populated by this same
@@ -2090,7 +2221,16 @@ def _find_empty_formula_deps(preview_cells: list[dict], sheet_state: dict) -> li
         if not isinstance(v, str) or not v.startswith("="):
             continue
         empty_refs: list[str] = []
-        scan_src = _strip_cross_sheet_refs(v.upper())
+        # Strip out everything that LOOKS like a cell ref but isn't one:
+        #   1. cross-sheet refs (Sheet!A1) — wrong sheet, out of scope here
+        #   2. same-sheet range refs (A1:A100) — empty cells inside ranges
+        #      are Excel-legal for aggregations
+        #   3. string literals ("T9A", "B5C") — letter+digit patterns inside
+        #      quoted text are not cell references
+        # What's left after these three strips: bare standalone same-sheet
+        # refs, the only kind the guard should police.
+        scan_src = _strip_string_literals(v)
+        scan_src = _strip_range_refs(_strip_cross_sheet_refs(scan_src.upper()))
         for ref in _CELL_REF_RE.findall(scan_src):
             if ref in self_written_nonempty:
                 continue
@@ -2117,7 +2257,11 @@ def _formula_references_text_cell(formula: str, sheet_state: dict) -> list[str]:
     resolve to a non-numeric value (typical off-by-one symptom: formula pointing
     at a row-label column). Empty list means all refs look numeric."""
     bad_refs: list[str] = []
-    scan_src = _strip_cross_sheet_refs(formula.upper())
+    # Same defenses as _find_empty_formula_deps: strip strings first (so
+    # "T9A" inside a literal doesn't get parsed as ref T9), then cross-sheet
+    # and range refs (out of scope for this same-sheet, single-cell scan).
+    scan_src = _strip_string_literals(formula)
+    scan_src = _strip_range_refs(_strip_cross_sheet_refs(scan_src.upper()))
     for ref in _CELL_REF_RE.findall(scan_src):
         try:
             r, c = a1_to_coords(ref)
@@ -2928,13 +3072,25 @@ async def export_workbook(k: GridOSKernel = Depends(current_kernel_dep)):
 
 
 @app.get("/system/export.xlsx")
-async def export_workbook_xlsx(k: GridOSKernel = Depends(current_kernel_dep)):
+async def export_workbook_xlsx(
+    values_only: bool = False,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
     """Serialize the current workbook to .xlsx. One Excel sheet per GridOS
     sheet (respecting sheet_order). Cells with a `formula` get the formula
     string (Excel recomputes on open for compatible functions); cells without
     get their rendered value. Charts, macros, locked metadata, and the chat
     log are dropped — they have no clean Excel analogue. For a full-fidelity
-    export users should use the .gridos format instead."""
+    export users should use the .gridos format instead.
+
+    `?values_only=true` writes the COMPUTED value of every cell (skipping the
+    formula string entirely) so consumers like SpreadsheetBench's evaluator,
+    which reads with `data_only=True`, get a populated cached-value column
+    without first round-tripping the file through Excel/LibreOffice. In that
+    mode, string values that look like ISO datetimes ('2024-01-15' or
+    '2024-01-15 00:00:00') are coerced to real Python datetime objects so
+    openpyxl writes them as Excel-native dates — matches the type that
+    benchmark answer files store and the type comparison the evaluator does."""
     try:
         from openpyxl import Workbook  # type: ignore
         from openpyxl.utils import get_column_letter  # type: ignore
@@ -2943,6 +3099,28 @@ async def export_workbook_xlsx(k: GridOSKernel = Depends(current_kernel_dep)):
             status_code=503,
             detail="openpyxl is not installed. Run `pip install openpyxl`.",
         )
+
+    import re as _re_export
+    import datetime as _dt_export
+
+    _ISO_DATE_RX = _re_export.compile(r"^\s*(\d{4})-(\d{1,2})-(\d{1,2})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?\s*$")
+
+    def _maybe_coerce_iso_date(s: str):
+        """Return a datetime if `s` is YYYY-MM-DD with optional HH:MM[:SS],
+        else None. Only used when values_only=true — string export keeps
+        strings unchanged for everyone else."""
+        m = _ISO_DATE_RX.match(s)
+        if not m:
+            return None
+        try:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if m.group(4) is not None:
+                h, mi = int(m.group(4)), int(m.group(5))
+                se = int(m.group(6)) if m.group(6) else 0
+                return _dt_export.datetime(y, mo, d, h, mi, se)
+            return _dt_export.datetime(y, mo, d)
+        except (ValueError, TypeError):
+            return None
 
     state = kernel.export_state_dict()
     wb = Workbook()
@@ -2969,13 +3147,18 @@ async def export_workbook_xlsx(k: GridOSKernel = Depends(current_kernel_dep)):
             formula = cell.get("formula")
             value = cell.get("value")
             datatype = cell.get("datatype")
-            if formula:
+            if formula and not values_only:
                 ws[a1] = formula  # openpyxl writes leading "=" strings as formulas
             elif datatype == "num" and value not in (None, ""):
                 try:
                     ws[a1] = float(value)
                 except (TypeError, ValueError):
                     ws[a1] = value
+            elif values_only and isinstance(value, str):
+                # values-only path: coerce ISO datetime strings into real
+                # datetimes so the evaluator (and Excel) treat them as dates.
+                coerced = _maybe_coerce_iso_date(value)
+                ws[a1] = coerced if coerced is not None else value
             else:
                 ws[a1] = value
 

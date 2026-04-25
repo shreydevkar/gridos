@@ -1,0 +1,178 @@
+"""Coverage for the empty-formula-deps guardrail in main.py.
+
+The guardrail catches a real bug class — agents writing =DIVIDE(C5, B5) where
+B5 is empty, producing #DIV/0!. But it has historically over-fired on benign
+range aggregations like =SUM(A1:A100) when bookend cells happen to be empty.
+These tests pin down both halves of that contract.
+"""
+import sys
+from core.engine import GridOSKernel
+import main
+
+
+def _fresh():
+    return GridOSKernel()
+
+
+def _preview(cell: str, value):
+    return {"cell": cell, "value": value}
+
+
+# ---------- The guardrail SHOULD fire (real bugs) ----------
+
+def test_guardrail_catches_divide_by_empty_standalone_ref():
+    k = _fresh()
+    k.write_user_cell("A1", 100)
+    # B1 is empty — agent writes =A1/B1 expecting B1 to already be populated.
+    preview = [_preview("C1", "=A1/B1")]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert len(issues) == 1, f"DIVIDE by empty standalone ref must trigger, got {issues}"
+    assert "B1" in issues[0]["empty_refs"]
+
+
+def test_guardrail_catches_minus_with_empty_baseline():
+    k = _fresh()
+    k.write_user_cell("C4", 200)
+    # =MINUS(C4, C3) — C3 empty would yield 200, misleading. Original bug
+    # class: %-growth formulas that quietly read 0 from empty cells.
+    preview = [_preview("D4", "=MINUS(C4, C3)")]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert len(issues) == 1, "standalone empty ref should still trigger"
+    assert "C3" in issues[0]["empty_refs"]
+
+
+def test_guardrail_catches_multiple_empty_refs():
+    k = _fresh()
+    preview = [_preview("D1", "=A1+B1+C1")]  # all three refs empty
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert len(issues) == 1
+    assert set(issues[0]["empty_refs"]) >= {"A1", "B1", "C1"}
+
+
+# ---------- The guardrail should NOT fire (false-positive cases) ----------
+
+def test_guardrail_allows_sum_over_range_with_empty_bookend():
+    """=SUM(A1:A100) where A100 is empty should NOT trigger. This was the
+    pilot's #1 failure mode — 4 of 25 questions hit this false positive."""
+    k = _fresh()
+    for i in range(1, 11):
+        k.write_user_cell(f"A{i}", i)
+    # A11..A100 are empty; SUM is still legal in Excel.
+    preview = [_preview("B1", "=SUM(A1:A100)")]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], f"SUM over range with empty cells should NOT trigger, got {issues}"
+
+
+def test_guardrail_allows_countif_over_range_with_empties():
+    k = _fresh()
+    k.write_user_cell("A1", "x")
+    k.write_user_cell("A2", "y")
+    # A3..A50 empty; benchmark patterns use full-column ranges constantly.
+    preview = [_preview("C1", '=COUNTIF(A1:A50, "x")')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], "COUNTIF over partially-empty range should NOT trigger"
+
+
+def test_guardrail_allows_sumifs_with_multiple_partial_ranges():
+    k = _fresh()
+    for i, (cat, val) in enumerate([("a", 10), ("b", 20), ("a", 30)], start=1):
+        k.write_user_cell(f"A{i}", cat)
+        k.write_user_cell(f"B{i}", val)
+    # Range goes to row 100 but only first 3 are populated — typical bench
+    # pattern when answer_position is large but actual data is sparse.
+    preview = [_preview("D1", '=SUMIFS(B1:B100, A1:A100, "a")')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], "SUMIFS over a partially-populated range should NOT trigger"
+
+
+def test_guardrail_allows_average_over_range_with_text_cells_in_middle():
+    """Mixed-type range (numbers + headers) — AVERAGE skips text. Empty cells
+    in the range should also be ignored. Pilot's id=290-1 hit this pattern."""
+    k = _fresh()
+    k.write_user_cell("A1", "Header")  # text — AVERAGE skips
+    k.write_user_cell("A2", 50)
+    k.write_user_cell("A3", 100)
+    # A4..A20 empty
+    preview = [_preview("B1", "=AVERAGE(A1:A20)")]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], "AVERAGE with empties + headers should NOT trigger"
+
+
+def test_guardrail_skips_cross_sheet_refs():
+    """The same-sheet guard ignores cross-sheet refs (verified in earlier
+    fix). Belt-and-suspenders test."""
+    k = _fresh()
+    k.create_sheet("Source")
+    preview = [_preview("A1", '=SUM(Source!A1:A100)')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], "cross-sheet refs must be invisible to the same-sheet guard"
+
+
+def test_guardrail_ignores_cell_refs_inside_string_literals():
+    """Real V2 pilot bug: =IF(A2=\"T9A\", ...) — the regex pulled T9 out of
+    the string literal and flagged it as an empty same-sheet ref. Stripping
+    string literals first eliminates this whole class."""
+    k = _fresh()
+    k.write_user_cell("A2", "@9T")
+    # T9 inside the string "T9A" — must not register as a cell ref.
+    preview = [_preview("E2", '=IF(OR(A2="@9T", A2="SAL", A2="T9A"), "", A2)')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], (
+        f'string literal "T9A" should not yield empty-ref T9, got {issues}'
+    )
+
+
+def test_guardrail_ignores_double_quoted_currency_codes():
+    """Same shape: currency codes / SKU patterns inside string literals."""
+    k = _fresh()
+    k.write_user_cell("A1", 100)
+    preview = [_preview("B1", '=IF(A1="USD100", "match", "miss")')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == []
+
+
+def test_guardrail_still_catches_outside_quotes():
+    """Sanity: the string-literal stripper doesn't accidentally hide a real
+    bare ref that happens to follow a string."""
+    k = _fresh()
+    # B5 is empty, and it appears OUTSIDE any string — still a real bug.
+    preview = [_preview("D1", '=IF(A1="hello", B5, 0)')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert len(issues) == 1, "B5 outside the string should still trigger"
+    assert "B5" in issues[0]["empty_refs"]
+
+
+def test_guardrail_combines_self_written_with_existing():
+    """Multi-intent: intent#1 writes A1, intent#2's formula on B1 references
+    A1. Both arrive in the same merged_preview_cells. No false positive."""
+    k = _fresh()
+    preview = [
+        _preview("A1", 100),
+        _preview("B1", "=A1*2"),
+    ]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], "self-written non-empty ref must satisfy the guard"
+
+
+# ---------- Run-all entry point ----------
+
+def run_all():
+    tests = {name: fn for name, fn in sorted(globals().items()) if name.startswith("test_")}
+    passed = failed = 0
+    for name, fn in tests.items():
+        try:
+            fn()
+            print(f"  PASS  {name}")
+            passed += 1
+        except AssertionError as e:
+            print(f"  FAIL  {name}: {e}")
+            failed += 1
+        except Exception as e:
+            print(f"  ERROR {name}: {type(e).__name__}: {e}")
+            failed += 1
+    print(f"\n{passed}/{len(tests)} passed ({failed} failed)")
+    return failed == 0
+
+
+if __name__ == "__main__":
+    sys.exit(0 if run_all() else 1)
