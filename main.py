@@ -1523,6 +1523,14 @@ def generate_agent_preview(req: ChatRequest) -> dict:
         system_instruction=system_instruction,
         user_message=req.prompt,
         model_id=req.model_id,
+        # Multi-intent answers with hundreds of rows in `values` arrays blow
+        # the default 8K-output cap on Gemini Flash; the response gets
+        # truncated mid-array and parses as fewer rows than the agent meant
+        # to write. Bump to 32K so a 1000-row × 5-col rectangle (~60K chars
+        # raw, but mostly compressible JSON) can land in one shot. Gemini
+        # daily quota counts INPUT tokens, not OUTPUT, so this doesn't move
+        # the free-tier needle materially.
+        max_output_tokens=32768,
     )
     ai_data = _parse_ai_response(final_response)
 
@@ -2126,8 +2134,33 @@ async def apply_agent_preview(
             out["chart_error"] = chart_error
         return out
 
+    # Chart-only / plugin-only / macro-only chat turns produce a preview_token
+    # that ratifies "no cell write this turn". Apply against such a token is a
+    # no-op; if a chart is attached it gets created. Returning a 400 here was
+    # turning legitimate plugin/macro-proposal turns into errors mid-pilot.
     if not req.target_cell or req.values is None:
-        raise HTTPException(status_code=400, detail="Provide either (target_cell + values) or an intents array.")
+        if req.chart_spec:
+            try:
+                chart = kernel.add_chart(req.chart_spec, sheet_name=req.sheet)
+            except Exception as e:
+                return {
+                    "status": "Partial",
+                    "sheet": req.sheet or kernel.active_sheet,
+                    "actual_target": None,
+                    "chart_error": f"Chart skipped: {e}",
+                }
+            return {
+                "status": "Success",
+                "sheet": req.sheet or kernel.active_sheet,
+                "actual_target": None,
+                "chart": chart,
+            }
+        return {
+            "status": "Success",
+            "sheet": req.sheet or kernel.active_sheet,
+            "actual_target": None,
+            "noop": True,
+        }
     intent = AgentIntent(
         agent_id=req.agent_id,
         target_start_a1=req.target_cell,
