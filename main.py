@@ -2204,7 +2204,19 @@ def _strip_string_literals(formula: str) -> str:
     return _STRING_LITERAL_RE.sub(" ", formula)
 
 
-_ERROR_WRAPPED_RE = re.compile(r"^\s*=\s*(IFERROR|IFNA)\s*\(", re.IGNORECASE)
+# Functions that gracefully handle empty / missing cell inputs:
+#   - IFERROR / IFNA: explicitly catch errors and substitute a fallback
+#   - CONCATENATE / CONCAT / TEXTJOIN: empty operand becomes empty string,
+#     not an error — Excel treats blank refs as "" in text concatenation
+#   - SUMPRODUCT: array math; agents often wrap range filters in this and
+#     empty cells in those filter ranges are part of the design
+# When a formula starts with one of these, the empty-refs guard doesn't
+# add value — it just blocks legitimate writes. The DIVIDE(C5, B5) bug
+# class still triggers everywhere else.
+_ERROR_WRAPPED_RE = re.compile(
+    r"^\s*=\s*(IFERROR|IFNA|CONCATENATE|CONCAT|TEXTJOIN|SUMPRODUCT)\s*\(",
+    re.IGNORECASE,
+)
 
 
 def _find_empty_formula_deps(preview_cells: list[dict], sheet_state: dict) -> list[dict]:
@@ -2232,20 +2244,26 @@ def _find_empty_formula_deps(preview_cells: list[dict], sheet_state: dict) -> li
         if _ERROR_WRAPPED_RE.match(v):
             continue
         empty_refs: list[str] = []
-        # Strip out everything that LOOKS like a cell ref but isn't one:
-        #   1. string literals ("T9A", "B5C") — letter+digit patterns inside
+        # Strip out everything that LOOKS like a cell ref but isn't one.
+        # Order matters:
+        #   1. dollar signs — Excel absolute-ref markers; $A$1 is the same
+        #      cell as A1, but the regexes for find/strip would otherwise
+        #      miss tokens with $ embedded (SH1!B$2:C$8 → leaves SH1
+        #      exposed and triggers bogus "SH1 is empty")
+        #   2. cross-sheet refs FIRST — must run before string-literal strip
+        #      because Excel's quoted-sheet-name form ('Data to Import'!C2)
+        #      would otherwise be eaten as a string literal, leaving the
+        #      naked C2 to trigger a bogus "C2 is empty" flag
+        #   3. string literals ("T9A", "B5C") — letter+digit patterns inside
         #      quoted text are not cell references
-        #   2. dollar signs — Excel absolute-ref markers; $A$1 is the same
-        #      cell as A1, but the regexes that find/strip refs would miss
-        #      tokens with $ embedded (e.g. SH1!B$2:C$8 leaves SH1 exposed
-        #      and triggers a bogus "SH1 is empty" flag)
-        #   3. cross-sheet refs (Sheet!A1) — wrong sheet, out of scope here
         #   4. same-sheet range refs (A1:A100) — empty cells inside ranges
         #      are Excel-legal for aggregations
-        # What's left after these four strips: bare standalone same-sheet
-        # refs, the only kind the guard should police.
-        scan_src = _strip_string_literals(v).replace("$", "")
-        scan_src = _strip_range_refs(_strip_cross_sheet_refs(scan_src.upper()))
+        # What's left: bare standalone same-sheet refs, the only kind the
+        # guard should police.
+        scan_src = v.replace("$", "")
+        scan_src = _strip_cross_sheet_refs(scan_src)
+        scan_src = _strip_string_literals(scan_src)
+        scan_src = _strip_range_refs(scan_src.upper())
         for ref in _CELL_REF_RE.findall(scan_src):
             if ref in self_written_nonempty:
                 continue
@@ -2272,13 +2290,14 @@ def _formula_references_text_cell(formula: str, sheet_state: dict) -> list[str]:
     resolve to a non-numeric value (typical off-by-one symptom: formula pointing
     at a row-label column). Empty list means all refs look numeric."""
     bad_refs: list[str] = []
-    # Same defenses as _find_empty_formula_deps: strip strings first (so
-    # "T9A" inside a literal doesn't get parsed as ref T9), drop $ absolute-
-    # ref markers (so SH1!B$2 still strips cleanly to its cross-sheet form),
-    # then cross-sheet and range refs (out of scope for this same-sheet,
-    # single-cell scan).
-    scan_src = _strip_string_literals(formula).replace("$", "")
-    scan_src = _strip_range_refs(_strip_cross_sheet_refs(scan_src.upper()))
+    # Same defenses as _find_empty_formula_deps. Order: drop $ markers, then
+    # cross-sheet refs (must run BEFORE string-literal strip so quoted sheet
+    # names like 'Data to Import' don't get eaten as strings), then string
+    # literals, then range refs.
+    scan_src = formula.replace("$", "")
+    scan_src = _strip_cross_sheet_refs(scan_src)
+    scan_src = _strip_string_literals(scan_src)
+    scan_src = _strip_range_refs(scan_src.upper())
     for ref in _CELL_REF_RE.findall(scan_src):
         try:
             r, c = a1_to_coords(ref)

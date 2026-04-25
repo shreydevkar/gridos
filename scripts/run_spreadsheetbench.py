@@ -71,11 +71,11 @@ def parse_args():
                    help="Max questions to run; 0 = the entire dataset.")
     p.add_argument("--start", type=int, default=0,
                    help="Skip the first N questions (resume after a crash).")
-    p.add_argument("--per-call-timeout", type=float, default=180.0,
+    p.add_argument("--per-call-timeout", type=float, default=240.0,
                    help="HTTP timeout in seconds for the agent chat call. "
-                        "Bumped from 120 -> 180 because cross-sheet questions "
-                        "with 200+ rows of context routinely take 90-150s on "
-                        "free-tier Gemini.")
+                        "Bumped 180 -> 240 because the largest Sheet-Level "
+                        "questions (700+ rows × 17 cols) consume the full "
+                        "180s on free-tier Gemini and time out late.")
     p.add_argument("--rate-limit-delay", type=float, default=0.0,
                    help="Sleep N seconds between questions to ride free-tier RPM caps.")
     p.add_argument("--retry", type=int, default=2,
@@ -244,7 +244,9 @@ def main() -> int:
 
     try:
         for q_idx, item in enumerate(dataset, start=1):
-            qid = item["id"]
+            # IDs in dataset.json are sometimes pure-numeric ('12307') and load
+            # as int from JSON. Coerce to str so Path / qid works.
+            qid = str(item["id"])
             instruction = item["instruction"]
             ans_pos = item.get("answer_position", "")
             print(f"[{q_idx}/{len(dataset)}] id={qid}  pos={ans_pos[:40]}")

@@ -228,6 +228,65 @@ def test_guardrail_does_not_skip_inner_iferror_with_outer_arithmetic():
     assert "A1" in issues[0]["empty_refs"]
 
 
+def test_guardrail_skips_concatenate_with_empty_args():
+    """V2 pilot 267-18: agent wrote CONCATENATE("//[", E1, "]"). E1 was
+    empty in the destination sheet — Excel returns the literal text with
+    an empty in the middle, which is the correct semantic. Don't fire."""
+    k = _fresh()
+    preview = [_preview("G1", '=CONCATENATE("//[", E1, "]")')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], "CONCATENATE with empty arg is benign, not a bug"
+
+
+def test_guardrail_skips_textjoin_with_empty_args():
+    k = _fresh()
+    preview = [_preview("D1", '=TEXTJOIN(", ", TRUE, A1, B1, C1)')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == []
+
+
+def test_guardrail_skips_sumproduct_with_empty_filter_ranges():
+    """SUMPRODUCT is the typical home of array filter math like
+    SUMPRODUCT((A2:A100=\"x\")*B2:B100). Empty cells inside those filter
+    ranges are part of the pattern, not a bug."""
+    k = _fresh()
+    preview = [_preview("D1", '=SUMPRODUCT((A2:A100="x")*(B2:B100))')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == []
+
+
+def test_guardrail_handles_quoted_sheet_name_with_spaces():
+    """Real V2 pilot bug (209-30): formula was
+        =LEFT('Data to Import'!C2, LEN('Data to Import'!C2) - 3)
+    where the destination 'Data to Import'!C2 was populated, but the active
+    sheet's C2 was empty. The string-literal stripper ate 'Data to Import'
+    as a string, leaving naked !C2 — and the standalone cell-ref regex then
+    flagged C2 as empty on the wrong sheet. Fix: strip cross-sheet refs
+    BEFORE strings."""
+    k = _fresh()
+    k.create_sheet("Data to Import")
+    # Source sheet has C2 populated; active sheet's C2 is empty
+    k.write_user_cell("C2", "abcdef", sheet_name="Data to Import")
+    preview = [_preview("A1", "=LEFT('Data to Import'!C2, LEN('Data to Import'!C2) - 3)")]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], (
+        f"quoted-sheet-name with spaces should fully strip as cross-sheet, "
+        f"not be misread as a string literal that exposes the trailing C2; "
+        f"got {issues}"
+    )
+
+
+def test_guardrail_handles_quoted_sheet_name_with_absolute_refs():
+    """Combined case: 'Data to Import'!$C$2 — quotes AROUND sheet name,
+    plus $ absolute markers in the cell ref. Both fixes need to compose."""
+    k = _fresh()
+    k.create_sheet("Data to Import")
+    k.write_user_cell("C2", 100, sheet_name="Data to Import")
+    preview = [_preview("A1", "='Data to Import'!$C$2 + 5")]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], f"quoted sheet name with $ should strip cleanly, got {issues}"
+
+
 def test_guardrail_combines_self_written_with_existing():
     """Multi-intent: intent#1 writes A1, intent#2's formula on B1 references
     A1. Both arrive in the same merged_preview_cells. No false positive."""

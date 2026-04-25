@@ -302,6 +302,59 @@ def _product(*args):
     return out
 
 
+@register_tool("SUMPRODUCT")
+def _sumproduct(*args):
+    """Element-wise multiply across N ranges of equal length, then sum.
+
+    Real Excel SUMPRODUCT also supports array-condition math like
+    SUMPRODUCT((A1:A10=\"x\")*B1:B10), but that requires the parser to do
+    range-vs-scalar element-wise comparisons — we don't (the parser flattens
+    each range into a scalar list at function-arg time). For the simple
+    multiplicative case, this still works and matches Excel."""
+    err = _first_error(args)
+    if err:
+        return err
+    if not args:
+        return 0
+    # Single arg → just sum it (range or scalar)
+    if len(args) == 1:
+        a = args[0]
+        if _is_range(a):
+            return sum(n for n in (_to_num(v) for v in a) if n is not None)
+        n = _to_num(a)
+        return n if n is not None else 0
+    # Multi-arg: every arg should be a range of the same length
+    seqs = []
+    for a in args:
+        if not _is_range(a):
+            # Allow scalar args by broadcasting — Excel treats scalar like
+            # a single-element range that auto-extends.
+            seqs.append(None)  # marker
+        else:
+            seqs.append(a)
+    ranges = [s for s in seqs if s is not None]
+    if not ranges:
+        return 0
+    n = len(ranges[0])
+    if any(len(r) != n for r in ranges):
+        return "#VALUE!"
+    total = 0.0
+    for i in range(n):
+        prod = 1.0
+        for j, a in enumerate(args):
+            if seqs[j] is None:
+                v = _to_num(a)
+            else:
+                v = _to_num(seqs[j][i])
+            if v is None:
+                prod = None
+                break
+            prod *= v
+        if prod is not None:
+            total += prod
+    return total
+
+
 @register_tool("CEIL")
 def _ceil(value):
     return math.ceil(value)
@@ -778,6 +831,70 @@ def _minifs(*args):
             if num is not None and (out is None or num < out):
                 out = num
     return out if out is not None else 0
+
+
+@register_tool("MEDIANIFS")
+def _medianifs(*args):
+    """MEDIANIFS(median_range, range1, crit1, range2, crit2, ...). Not a true
+    Excel function (it's a Microsoft 365 newcomer borrowed from the IFS
+    family) but Gemini reaches for it on percentile-bucketed-median tasks.
+    Same shape as SUMIFS/MAXIFS — first arg is the values to take the median
+    over, remaining pairs are filter range + criteria."""
+    if len(args) < 3 or len(args) % 2 != 1:
+        return "#VALUE!"
+    target = args[0]
+    if not _is_range(target):
+        target = [target]
+    pairs = list(zip(args[1::2], args[2::2]))
+    ranges, preds = [], []
+    for r, c in pairs:
+        if not _is_range(r):
+            return "#VALUE!"
+        ranges.append(r)
+        preds.append(_make_criteria(c))
+    n = len(target)
+    if any(len(r) != n for r in ranges):
+        return "#VALUE!"
+    nums = []
+    for i in range(n):
+        if all(preds[j](ranges[j][i]) for j in range(len(ranges))):
+            num = _to_num(target[i])
+            if num is not None:
+                nums.append(num)
+    if not nums:
+        return "#N/A"
+    nums.sort()
+    m = len(nums)
+    return nums[m // 2] if m % 2 == 1 else (nums[m // 2 - 1] + nums[m // 2]) / 2
+
+
+@register_tool("PERCENTILE")
+def _percentile(rng, k):
+    """Linear-interpolation percentile (Excel's PERCENTILE.INC behavior)."""
+    if not _is_range(rng):
+        rng = [rng]
+    nums = sorted(n for n in (_to_num(v) for v in rng) if n is not None)
+    if not nums:
+        return "#NUM!"
+    kn = _to_num(k)
+    if kn is None or kn < 0 or kn > 1:
+        return "#NUM!"
+    if len(nums) == 1:
+        return nums[0]
+    pos = kn * (len(nums) - 1)
+    lo = math.floor(pos)
+    hi = math.ceil(pos)
+    if lo == hi:
+        return nums[int(lo)]
+    return nums[int(lo)] + (pos - lo) * (nums[int(hi)] - nums[int(lo)])
+
+
+@register_tool("QUARTILE")
+def _quartile(rng, q):
+    qn = int(_to_num(q) or 0)
+    if qn not in (0, 1, 2, 3, 4):
+        return "#NUM!"
+    return _percentile(rng, qn / 4)
 
 
 # ---------- Statistical: rank / large / small ----------

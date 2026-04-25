@@ -45,6 +45,8 @@ def parse_args():
     p.add_argument("--dataset", default=str(DEFAULT_DATASET))
     p.add_argument("--setting", default="single")
     p.add_argument("--model", default="gridos")
+    p.add_argument("--start", type=int, default=0,
+                   help="Skip the first N questions in dataset.json before scoring.")
     p.add_argument("--limit", type=int, default=0,
                    help="Score only the first N questions (0 = all).")
     p.add_argument("--out", default=None,
@@ -174,6 +176,8 @@ def main() -> int:
 
     with open(dataset_dir / "dataset.json", "r", encoding="utf-8") as fp:
         dataset = json.load(fp)
+    if args.start:
+        dataset = dataset[args.start:]
     if args.limit > 0:
         dataset = dataset[: args.limit]
 
@@ -188,7 +192,7 @@ def main() -> int:
     sum_hard = sum_soft = 0.0
 
     for item in dataset:
-        qid = item["id"]
+        qid = str(item["id"])
         out_xlsx = out_dir / f"1_{qid}_output.xlsx"
         gold_xlsx = dataset_dir / "spreadsheet" / qid / f"1_{qid}_golden.xlsx"
         result = score_one(out_xlsx, gold_xlsx, item["answer_position"])

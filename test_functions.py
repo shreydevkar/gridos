@@ -350,6 +350,43 @@ def test_nested_countif_inside_if():
     _expect(k, "B1", "OK", "IF wrapping COUNTIF result")
 
 
+def test_sumproduct_basic():
+    k = _fresh()
+    for i, (a, b) in enumerate([(2, 5), (3, 4), (4, 3)], start=1):
+        k.write_user_cell(f"A{i}", a)
+        k.write_user_cell(f"B{i}", b)
+    # 2*5 + 3*4 + 4*3 = 10 + 12 + 12 = 34
+    k.write_user_cell("D1", "=SUMPRODUCT(A1:A3, B1:B3)")
+    _expect(k, "D1", 34, "SUMPRODUCT element-wise multiply + sum")
+
+
+def test_medianifs():
+    k = _fresh()
+    for i, (cat, val) in enumerate([("a", 10), ("b", 50), ("a", 30), ("a", 20), ("b", 100)], start=1):
+        k.write_user_cell(f"A{i}", cat)
+        k.write_user_cell(f"B{i}", val)
+    # MEDIANIFS values where cat=a → 10, 30, 20 → sorted 10,20,30 → median 20
+    k.write_user_cell("D1", '=MEDIANIFS(B1:B5, A1:A5, "a")')
+    _expect(k, "D1", 20, "MEDIANIFS within category")
+
+
+def test_percentile():
+    k = _fresh()
+    for i, v in enumerate([10, 20, 30, 40, 50], start=1):
+        k.write_user_cell(f"A{i}", v)
+    # 50th percentile = median = 30
+    k.write_user_cell("B1", "=PERCENTILE(A1:A5, 0.5)")
+    _expect(k, "B1", 30, "PERCENTILE 50th")
+
+
+def test_quartile():
+    k = _fresh()
+    for i, v in enumerate([1, 2, 3, 4, 5, 6, 7, 8], start=1):
+        k.write_user_cell(f"A{i}", v)
+    k.write_user_cell("B1", "=QUARTILE(A1:A8, 2)")  # Q2 = median
+    _expect(k, "B1", 4.5, "QUARTILE 2 = median")
+
+
 def test_large_small_rank():
     k = _fresh()
     for i, v in enumerate([10, 50, 30, 20, 40], start=1):
