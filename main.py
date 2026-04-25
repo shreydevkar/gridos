@@ -2204,11 +2204,19 @@ def _strip_string_literals(formula: str) -> str:
     return _STRING_LITERAL_RE.sub(" ", formula)
 
 
+_ERROR_WRAPPED_RE = re.compile(r"^\s*=\s*(IFERROR|IFNA)\s*\(", re.IGNORECASE)
+
+
 def _find_empty_formula_deps(preview_cells: list[dict], sheet_state: dict) -> list[dict]:
     """For each formula-bearing preview cell, flag any cell reference that points
     at an empty cell in the current sheet AND isn't being populated by this same
     preview. Catches the '#DIV/0! from an empty baseline' bug class — e.g. the
-    agent writes =GROWTH(C4, C3) but forgets to seed C3."""
+    agent writes =GROWTH(C4, C3) but forgets to seed C3.
+
+    Skips formulas wrapped in IFERROR(...) / IFNA(...): those explicitly state
+    'on any error, return the fallback'. An empty ref inside such a formula is
+    a feature (e.g. =IFERROR(VLOOKUP(B9, T, 2, FALSE), \"-\") returning \"-\"
+    for empty source rows is the correct semantic, not a bug to catch)."""
     self_written_nonempty: set[str] = set()
     for p in preview_cells:
         v = p.get("value")
@@ -2220,16 +2228,23 @@ def _find_empty_formula_deps(preview_cells: list[dict], sheet_state: dict) -> li
         v = p.get("value")
         if not isinstance(v, str) or not v.startswith("="):
             continue
+        # Don't second-guess formulas that explicitly handle errors.
+        if _ERROR_WRAPPED_RE.match(v):
+            continue
         empty_refs: list[str] = []
         # Strip out everything that LOOKS like a cell ref but isn't one:
-        #   1. cross-sheet refs (Sheet!A1) — wrong sheet, out of scope here
-        #   2. same-sheet range refs (A1:A100) — empty cells inside ranges
-        #      are Excel-legal for aggregations
-        #   3. string literals ("T9A", "B5C") — letter+digit patterns inside
+        #   1. string literals ("T9A", "B5C") — letter+digit patterns inside
         #      quoted text are not cell references
-        # What's left after these three strips: bare standalone same-sheet
+        #   2. dollar signs — Excel absolute-ref markers; $A$1 is the same
+        #      cell as A1, but the regexes that find/strip refs would miss
+        #      tokens with $ embedded (e.g. SH1!B$2:C$8 leaves SH1 exposed
+        #      and triggers a bogus "SH1 is empty" flag)
+        #   3. cross-sheet refs (Sheet!A1) — wrong sheet, out of scope here
+        #   4. same-sheet range refs (A1:A100) — empty cells inside ranges
+        #      are Excel-legal for aggregations
+        # What's left after these four strips: bare standalone same-sheet
         # refs, the only kind the guard should police.
-        scan_src = _strip_string_literals(v)
+        scan_src = _strip_string_literals(v).replace("$", "")
         scan_src = _strip_range_refs(_strip_cross_sheet_refs(scan_src.upper()))
         for ref in _CELL_REF_RE.findall(scan_src):
             if ref in self_written_nonempty:
@@ -2258,9 +2273,11 @@ def _formula_references_text_cell(formula: str, sheet_state: dict) -> list[str]:
     at a row-label column). Empty list means all refs look numeric."""
     bad_refs: list[str] = []
     # Same defenses as _find_empty_formula_deps: strip strings first (so
-    # "T9A" inside a literal doesn't get parsed as ref T9), then cross-sheet
-    # and range refs (out of scope for this same-sheet, single-cell scan).
-    scan_src = _strip_string_literals(formula)
+    # "T9A" inside a literal doesn't get parsed as ref T9), drop $ absolute-
+    # ref markers (so SH1!B$2 still strips cleanly to its cross-sheet form),
+    # then cross-sheet and range refs (out of scope for this same-sheet,
+    # single-cell scan).
+    scan_src = _strip_string_literals(formula).replace("$", "")
     scan_src = _strip_range_refs(_strip_cross_sheet_refs(scan_src.upper()))
     for ref in _CELL_REF_RE.findall(scan_src):
         try:

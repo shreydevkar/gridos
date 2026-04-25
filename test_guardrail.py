@@ -142,6 +142,92 @@ def test_guardrail_still_catches_outside_quotes():
     assert "B5" in issues[0]["empty_refs"]
 
 
+def test_guardrail_handles_cross_sheet_with_absolute_refs():
+    """Real V2 pilot bug (267-21): VLOOKUP(B2, SH1!B$2:C$8, 2, FALSE) had $
+    in the cell ref so the cross-sheet stripper bailed and left SH1 exposed.
+    The standalone cell-ref regex then matched SH1 (sheet name!) and flagged
+    it as 'empty'. Stripping $ before the cross-sheet pass closes this."""
+    k = _fresh()
+    k.create_sheet("SH1")
+    k.write_user_cell("B2", "key", sheet_name="SH1")
+    k.write_user_cell("C2", 100, sheet_name="SH1")
+    preview = [_preview(
+        "C2",
+        '=IFERROR(VLOOKUP(B2, SH1!B$2:C$8, 2, FALSE), "-")'
+    )]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], (
+        f"cross-sheet ref with absolute markers should not flag the sheet "
+        f"name as an empty cell, got {issues}"
+    )
+
+
+def test_guardrail_handles_same_sheet_absolute_refs():
+    """=$A$1+$B$1 with both populated should not trigger. The $ stripping
+    only kicks in for the cell-ref scan; the engine still understands
+    absolutes via _normalize_excel_formula."""
+    k = _fresh()
+    k.write_user_cell("A1", 10)
+    k.write_user_cell("B1", 20)
+    preview = [_preview("C1", "=$A$1+$B$1")]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], "absolute refs to populated cells should not trigger"
+
+
+def test_guardrail_catches_absolute_ref_to_empty_cell():
+    """Belt-and-suspenders: $-stripping doesn't accidentally hide a real
+    empty-ref bug just because the agent used absolute notation."""
+    k = _fresh()
+    k.write_user_cell("A1", 100)
+    # $B$1 is empty — bug class is preserved
+    preview = [_preview("C1", "=$A$1/$B$1")]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert len(issues) == 1
+    assert "B1" in issues[0]["empty_refs"]
+
+
+def test_guardrail_skips_iferror_wrapped_formulas():
+    """Real V2 pilot bug (267-21): the agent wrote
+        =IFERROR(VLOOKUP(B9, SH1!$B$2:$C$8, 2, FALSE), "-")
+    where B9 was empty in the destination sheet. Guardrail flagged B9, but
+    the WHOLE POINT of IFERROR is to handle that case — the formula returns
+    \"-\" for empty source rows, which is the agent's intent. Don't fire on
+    formulas explicitly wrapped in IFERROR/IFNA."""
+    k = _fresh()
+    # B9 deliberately empty
+    preview = [_preview("C9", '=IFERROR(VLOOKUP(B9, SH1!$B$2:$C$8, 2, FALSE), "-")')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], f"IFERROR-wrapped formula should be skipped, got {issues}"
+
+
+def test_guardrail_skips_ifna_wrapped_formulas():
+    k = _fresh()
+    preview = [_preview("C9", '=IFNA(VLOOKUP(B9, A1:Z100, 2, FALSE), "missing")')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == []
+
+
+def test_guardrail_iferror_skip_is_case_insensitive():
+    k = _fresh()
+    preview = [_preview("D1", '=iferror(B5/C5, 0)')]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert issues == [], "lowercase iferror should also be respected"
+
+
+def test_guardrail_does_not_skip_inner_iferror_with_outer_arithmetic():
+    """Subtle case: =A1+IFERROR(B1, 0) where A1 is empty. The IFERROR only
+    wraps B1, not the whole formula — A1 being empty is still a bug.
+    Our regex matches `^\\s*=\\s*(IFERROR|IFNA)\\s*\\(` which only fires on
+    formulas that are FULLY wrapped, so this case still triggers the guard."""
+    k = _fresh()
+    # A1 empty, B1 empty; IFERROR is inner — outer arithmetic ref to A1
+    # should still flag.
+    preview = [_preview("C1", "=A1+IFERROR(B1, 0)")]
+    issues = main._find_empty_formula_deps(preview, k._sheet_state(None))
+    assert len(issues) == 1, "inner IFERROR shouldn't shield outer empty refs"
+    assert "A1" in issues[0]["empty_refs"]
+
+
 def test_guardrail_combines_self_written_with_existing():
     """Multi-intent: intent#1 writes A1, intent#2's formula on B1 references
     A1. Both arrive in the same merged_preview_cells. No false positive."""
