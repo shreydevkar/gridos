@@ -1094,9 +1094,27 @@ class GridOSKernel:
                 if a1_to_coords(a1) in cells
             ]
             occupied_info = ", ".join(sorted(selected_set)) or "No selected cells."
+            # Selection scope is bounded by the user's UI selection — cap is
+            # implicit. No further truncation here.
+            full_entries = entries
+            truncated_count = 0
         else:
-            entries = sorted(cells.items())
-            occupied_info = ", ".join(coords_to_a1(r, c) for (r, c), _ in entries)
+            full_entries = sorted(cells.items())
+            occupied_info = ", ".join(coords_to_a1(r, c) for (r, c), _ in full_entries)
+            # "Whole sheet" scope — used to dump every populated cell with
+            # zero cap. On a workbook with 1000+ filled cells this builds
+            # 50K+ characters of grid_lines + an equally large metadata JSON,
+            # which 413'd Groq's free-tier 8K TPM ceiling on a one-word user
+            # prompt. Cap at MAX_SHEET_CELLS_IN_PROMPT — the prompt builder
+            # already includes a sheet map so the agent knows the full
+            # bounds; this cap just trims the verbose value dump.
+            MAX_SHEET_CELLS_IN_PROMPT = 400
+            if len(full_entries) > MAX_SHEET_CELLS_IN_PROMPT:
+                truncated_count = len(full_entries) - MAX_SHEET_CELLS_IN_PROMPT
+                entries = full_entries[:MAX_SHEET_CELLS_IN_PROMPT]
+            else:
+                truncated_count = 0
+                entries = full_entries
 
         grid_lines = []
         cell_metadata: dict[str, dict] = {}
@@ -1114,13 +1132,20 @@ class GridOSKernel:
             }
             rows_coords.append(r)
             cols_coords.append(c)
+        if truncated_count:
+            grid_lines.append(f"... [{truncated_count} more cells truncated for prompt budget]")
 
+        # Compute occupied bounds from the FULL entry set (not the truncated
+        # one) so the agent knows the real sheet extent even when the value
+        # dump is capped — critical for "what's the last row?" type queries.
         occupied_bounds = None
-        if rows_coords:
-            top = min(rows_coords)
-            bottom = max(rows_coords)
-            left = min(cols_coords)
-            right = max(cols_coords)
+        full_rows = [r for (r, _), _ in full_entries]
+        full_cols = [c for (_, c), _ in full_entries]
+        if full_rows:
+            top = min(full_rows)
+            bottom = max(full_rows)
+            left = min(full_cols)
+            right = max(full_cols)
             occupied_bounds = {
                 "top_left": coords_to_a1(top, left),
                 "bottom_right": coords_to_a1(bottom, right),
@@ -1141,12 +1166,16 @@ class GridOSKernel:
         }
 
     def _summarize_other_sheets(self, active_name: str, max_cells_per_sheet: int = 400) -> list[dict]:
-        """Render every non-active sheet as a name + occupied bounds + truncated grid.
+        """Render every non-active sheet as a name + occupied bounds + header
+        preview (top row + a couple of sample rows) + truncated full grid.
 
-        Cross-sheet benchmark questions (e.g. 'extract rows from Sheet1 to Sheet2
-        where col B = X') are unanswerable if the agent only sees the active
-        sheet. Token cost is bounded by max_cells_per_sheet so a workbook with
-        large secondary sheets doesn't blow the prompt budget."""
+        Cross-sheet refs need the agent to know: (1) which sheets exist, (2)
+        their column headers, (3) their bounds. The header_preview always
+        carries that. The full formatted_data is bigger and gets included by
+        the prompt builder only when the sheet is actually referenced — see
+        build_system_instruction's sheet-name filter. Including header rows
+        always means cross-sheet formula generation works (e.g. agent can
+        write =Sheet2!B2 because it saw Sheet2's column-B header)."""
         out: list[dict] = []
         for name in self.sheet_order:
             if name == active_name:
@@ -1159,6 +1188,7 @@ class GridOSKernel:
                 out.append({
                     "name": name,
                     "occupied_bounds": None,
+                    "header_preview": "",
                     "formatted_data": "(empty)",
                     "truncated": False,
                 })
@@ -1174,6 +1204,19 @@ class GridOSKernel:
                 "rows": bottom - top + 1,
                 "cols": right - left + 1,
             }
+            # Header preview: first 3 rows of occupied region. Almost always
+            # contains the column headers + a couple of sample rows — enough
+            # for the agent to understand the sheet's shape without the full
+            # data. Capped at 30 cells so even wide sheets stay compact.
+            header_preview_lines = []
+            for (r, c), cell in entries:
+                if r > top + 2:
+                    break
+                if len(header_preview_lines) >= 30:
+                    break
+                a1 = coords_to_a1(r, c)
+                formula = f" (Formula: {cell.formula})" if cell.formula else ""
+                header_preview_lines.append(f"{a1}: {cell.value}{formula}")
             truncated = len(entries) > max_cells_per_sheet
             kept = entries[:max_cells_per_sheet]
             grid_lines = []
@@ -1186,6 +1229,7 @@ class GridOSKernel:
             out.append({
                 "name": name,
                 "occupied_bounds": occupied,
+                "header_preview": "\n".join(header_preview_lines),
                 "formatted_data": "\n".join(grid_lines),
                 "truncated": truncated,
             })

@@ -1238,49 +1238,69 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
         f". Active: {context.get('active_sheet') or req.sheet or kernel.active_sheet}."
     )
 
-    # Other-sheet contents are ~20K chars per sheet (400 cells × ~50 chars).
-    # Including them for every request blew Groq's free-tier 8K TPM cap on
-    # trivial prompts ("hey", "what's in B5?") that have nothing to do with
-    # cross-sheet refs. Filter to only the sheets the prompt actually
-    # references — by name, or by cross-sheet syntax markers, or by an
-    # explicit "all sheets" / "every sheet" / "across sheets" request.
-    # Active sheet content is always included separately via formatted_data.
-    if other_sheets:
-        haystack = (req.prompt or "")
-        if req.history:
-            haystack += " " + " ".join(h.get("content", "") for h in req.history[-3:])
-        haystack_lower = haystack.lower()
-        wants_all = any(
-            phrase in haystack_lower
-            for phrase in ("all sheets", "every sheet", "across sheets",
-                           "all tabs", "every tab", "each sheet", "each tab")
-        )
-        if not wants_all:
-            other_sheets = [
-                s for s in other_sheets
-                if s["name"].lower() in haystack_lower
-            ]
+    # Sheet-aware context — two-layer strategy that preserves cross-sheet
+    # capability while keeping prompt size bounded:
+    #
+    #   1. SHEET MAP (always): for every non-active sheet, name + bounds +
+    #      header_preview (first ~3 rows). Cheap (~1.5K chars per sheet) and
+    #      enough for the agent to write =Sheet2!B2 against headers it has
+    #      seen, even when Sheet2's full content isn't in the prompt.
+    #
+    #   2. FULL CONTENT (conditional): a sheet's full grid (capped 400 cells)
+    #      is included only when the prompt actually references it — by name,
+    #      or via explicit phrases like "all sheets" / "every tab".
+    #
+    # Why this matters: previously every request dumped every sheet's full
+    # 400 cells unconditionally, which on a 2-3-sheet workbook meant ~30K+
+    # tokens — blowing Groq's 8K free-tier TPM cap on a one-word prompt.
+    haystack = req.prompt or ""
+    if req.history:
+        haystack += " " + " ".join(h.get("content", "") for h in req.history[-3:])
+    haystack_lower = haystack.lower()
+    wants_all = any(
+        phrase in haystack_lower
+        for phrase in ("all sheets", "every sheet", "across sheets",
+                       "all tabs", "every tab", "each sheet", "each tab")
+    )
 
-    if other_sheets:
-        other_sheet_blocks = []
-        for s in other_sheets:
-            bounds = s.get("occupied_bounds")
-            header = f"=== {s['name']} ===" + (
-                f"  ({bounds['top_left']}→{bounds['bottom_right']}, {bounds['rows']}×{bounds['cols']})"
-                if bounds else "  (empty)"
-            )
-            other_sheet_blocks.append(header + "\n" + (s.get("formatted_data") or "(empty)"))
-        other_sheets_section = (
-            "OTHER SHEETS' CONTENTS (use these for cross-sheet refs like =Sheet2!A1; "
-            "values may be truncated for bandwidth):\n" + "\n\n".join(other_sheet_blocks)
+    sheet_map_blocks = []
+    full_content_blocks = []
+    for s in other_sheets:
+        bounds = s.get("occupied_bounds")
+        bounds_str = (
+            f"{bounds['top_left']}->{bounds['bottom_right']}, {bounds['rows']}x{bounds['cols']}"
+            if bounds else "empty"
         )
-    else:
-        other_sheets_section = ""
+        is_referenced = wants_all or s["name"].lower() in haystack_lower
+        if is_referenced:
+            full_content_blocks.append(
+                f"=== {s['name']} ({bounds_str}) ===\n"
+                + (s.get("formatted_data") or "(empty)")
+            )
+        else:
+            preview = s.get("header_preview") or ""
+            entry = f"- {s['name']} ({bounds_str})"
+            if preview:
+                entry += "\n  preview:\n  " + preview.replace("\n", "\n  ")
+            sheet_map_blocks.append(entry)
+
+    sheet_map_section = (
+        "SHEET MAP (every other sheet's bounds + first-row preview — use these "
+        "headers to write cross-sheet formulas like =Sheet2!B2 even when full "
+        "data isn't in this prompt):\n" + "\n".join(sheet_map_blocks)
+    ) if sheet_map_blocks else ""
+
+    other_sheets_section = (
+        "OTHER SHEETS' CONTENTS (referenced by your prompt — full grid for "
+        "cross-sheet aggregations and value lookups):\n"
+        + "\n\n".join(full_content_blocks)
+    ) if full_content_blocks else ""
 
     sections = [
         BASE_SYSTEM_RULES,
         f"ACTIVE SHEET: {req.sheet or kernel.active_sheet}\nVIEW SCOPE: {scope_line}\nSELECTED CELLS: {selected_summary}\n{bounds_line}",
         sheets_overview_line,
+        sheet_map_section,
         f"CELL METADATA (a1 -> {{val, locked, type}}):\n{context['cell_metadata_json']}",
         f"READABLE GRID STATE:\n{context['formatted_data']}",
         other_sheets_section,
