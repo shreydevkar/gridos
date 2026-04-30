@@ -1237,6 +1237,30 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
         "WORKBOOK SHEETS (all): " + ", ".join(all_sheets) +
         f". Active: {context.get('active_sheet') or req.sheet or kernel.active_sheet}."
     )
+
+    # Other-sheet contents are ~20K chars per sheet (400 cells × ~50 chars).
+    # Including them for every request blew Groq's free-tier 8K TPM cap on
+    # trivial prompts ("hey", "what's in B5?") that have nothing to do with
+    # cross-sheet refs. Filter to only the sheets the prompt actually
+    # references — by name, or by cross-sheet syntax markers, or by an
+    # explicit "all sheets" / "every sheet" / "across sheets" request.
+    # Active sheet content is always included separately via formatted_data.
+    if other_sheets:
+        haystack = (req.prompt or "")
+        if req.history:
+            haystack += " " + " ".join(h.get("content", "") for h in req.history[-3:])
+        haystack_lower = haystack.lower()
+        wants_all = any(
+            phrase in haystack_lower
+            for phrase in ("all sheets", "every sheet", "across sheets",
+                           "all tabs", "every tab", "each sheet", "each tab")
+        )
+        if not wants_all:
+            other_sheets = [
+                s for s in other_sheets
+                if s["name"].lower() in haystack_lower
+            ]
+
     if other_sheets:
         other_sheet_blocks = []
         for s in other_sheets:
