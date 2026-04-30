@@ -17,7 +17,7 @@
             --accent: #1a73e8;
             --accent-soft: #e8f0fe;
             --accent-hover: #1765cc;
-            --selection-fill: rgba(26, 115, 232, 0.08);
+            --selection-fill: rgba(26, 115, 232, 0.15);
             --selection-border: #1a73e8;
             --preview-fill: rgba(52, 168, 83, 0.1);
             --preview-border: #1e8e3e;
@@ -1275,8 +1275,17 @@
         col.rowhdr-col { width: var(--rowhdr-w); }
 
         th, td {
-            border-right: 1px solid var(--border-soft);
-            border-bottom: 1px solid var(--border-soft);
+            /* Use --border (#dadce0) not --border-soft (#e8eaed). The softer
+               value has channels at 232/234/237 — two of which sit above the
+               235 ceiling of Limited RGB output mode (common on external
+               monitors via HDMI/USB-C docks), where the GPU clips 236+ to
+               white. The result: the border collapses into the cell bg and
+               the grid looks borderless on those displays. --border at
+               218/220/224 is well below the clip threshold and survives any
+               output range, while still reading as a quiet light-gray line
+               on properly-calibrated displays. */
+            border-right: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
             font-weight: 400;
         }
 
