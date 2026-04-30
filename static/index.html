@@ -1261,6 +1261,15 @@
             border-spacing: 0;
             font-family: var(--font-ui);
             table-layout: fixed;
+            /* Force the table onto its own GPU compositing layer. Without
+               this, Chrome on Windows intermittently fails to repaint td
+               border-* and .selected background-color when classes change
+               on sticky-header scrollable tables — symptom is "grid borders
+               and multi-cell selection tint disappear until something forces
+               a repaint" (resize, devtools toggle, OS screenshot overlay).
+               The .active box-shadow paints in a separate compositing pass
+               and is unaffected, which makes the bug confusing to spot. */
+            transform: translateZ(0);
         }
 
         col.rowhdr-col { width: var(--rowhdr-w); }
