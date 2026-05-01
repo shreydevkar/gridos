@@ -1562,6 +1562,21 @@ def generate_agent_preview(req: ChatRequest) -> dict:
     agent = AGENTS[agent_id]
     system_instruction = build_system_instruction(agent, context, req)
 
+    # Diagnostic — log prompt size so 413s are explainable from server logs.
+    # 4 chars/token is a rough English heuristic; close enough to triage TPM
+    # rate-limit failures. Only logs on prompts larger than ~3K tokens to
+    # keep the noise floor low for normal traffic.
+    _prompt_chars = len(system_instruction) + len(req.prompt or "")
+    _est_tokens = _prompt_chars // 4
+    if _est_tokens > 3000:
+        print(
+            f"[prompt-size] agent={agent_id} model={req.model_id or 'default'} "
+            f"chars={_prompt_chars} est_tokens={_est_tokens} "
+            f"sheets={len(context.get('all_sheets') or [])} "
+            f"scope={req.scope} prompt_len={len(req.prompt or '')}",
+            flush=True,
+        )
+
     final_response = call_model(
         agent_id,
         system_instruction=system_instruction,
