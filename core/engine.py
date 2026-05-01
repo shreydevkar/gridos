@@ -1108,7 +1108,12 @@ class GridOSKernel:
             # prompt. Cap at MAX_SHEET_CELLS_IN_PROMPT — the prompt builder
             # already includes a sheet map so the agent knows the full
             # bounds; this cap just trims the verbose value dump.
-            MAX_SHEET_CELLS_IN_PROMPT = 400
+            # 200 cells × ~50 chars ≈ 10K chars (~2.5K tokens). Combined with
+            # the static base prompt (~3K tokens for rules, format spec,
+            # primitives, agent system prompt) and a small sheet-map section,
+            # this leaves comfortable headroom under Groq's 8K free-tier TPM
+            # cap. Larger budget needs BYOK or a higher-tier model.
+            MAX_SHEET_CELLS_IN_PROMPT = 200
             if len(full_entries) > MAX_SHEET_CELLS_IN_PROMPT:
                 truncated_count = len(full_entries) - MAX_SHEET_CELLS_IN_PROMPT
                 entries = full_entries[:MAX_SHEET_CELLS_IN_PROMPT]

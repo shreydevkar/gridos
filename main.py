@@ -1296,12 +1296,29 @@ def build_system_instruction(agent: dict, context: dict, req: ChatRequest) -> st
         + "\n\n".join(full_content_blocks)
     ) if full_content_blocks else ""
 
+    # Locked-cells line: surface JUST the cells that have something unusual
+    # (locked, or a formula). Previously cell_metadata_json carried full
+    # {"val", "locked", "type"} for every cell — duplicating formatted_data
+    # in JSON form and roughly DOUBLING the per-cell prompt cost. The
+    # formatted_data block already carries [LOCKED] + (Formula: ...) markers
+    # inline, so the only thing we lose is a structured per-cell view; agents
+    # don't actually use the JSON for anything formatted_data doesn't already
+    # tell them. Keep a tight locked-only summary so guardrail-relevant info
+    # remains explicit without paying for every static cell twice.
+    locked_a1s = sorted([
+        a1 for a1, m in (context.get("cell_metadata") or {}).items()
+        if m.get("locked")
+    ])
+    locked_section = (
+        "LOCKED CELLS (do not write): " + ", ".join(locked_a1s)
+    ) if locked_a1s else ""
+
     sections = [
         BASE_SYSTEM_RULES,
         f"ACTIVE SHEET: {req.sheet or kernel.active_sheet}\nVIEW SCOPE: {scope_line}\nSELECTED CELLS: {selected_summary}\n{bounds_line}",
         sheets_overview_line,
         sheet_map_section,
-        f"CELL METADATA (a1 -> {{val, locked, type}}):\n{context['cell_metadata_json']}",
+        locked_section,
         f"READABLE GRID STATE:\n{context['formatted_data']}",
         other_sheets_section,
         charts_section,
