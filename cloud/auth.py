@@ -29,9 +29,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from cloud import config
+
+
+# Declared on the FastAPI dependency tree so OpenAPI emits a `bearerAuth`
+# security scheme — that's what makes Swagger UI render the green "Authorize"
+# button at the top of /docs. auto_error=False keeps the existing 401 message
+# coming from require_user (otherwise FastAPI would 403 with its own format).
+bearer_scheme = HTTPBearer(auto_error=False, description="Supabase JWT issued by Sign In on gridos.onrender.com.")
 
 
 @dataclass(frozen=True)
@@ -145,12 +153,26 @@ def _parse_bearer(authorization: Optional[str]) -> Optional[str]:
     return parts[1].strip()
 
 
-def require_user(authorization: Optional[str] = Header(None)) -> AuthUser:
-    """Dependency: 401s in SaaS mode if no valid JWT; pass-through in OSS mode."""
+def require_user(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    authorization: Optional[str] = Header(None),
+) -> AuthUser:
+    """Dependency: 401s in SaaS mode if no valid JWT; pass-through in OSS mode.
+
+    Two paths to the same place. The `creds` param is what FastAPI extracts
+    via the HTTPBearer security scheme — that's the one Swagger UI's
+    Authorize button populates, and it's also what well-behaved clients
+    using the documented scheme will hit. The `authorization` raw header is
+    a back-compat path for clients that just set the header directly without
+    knowing the scheme name. Either gets us a token; we prefer `creds` when
+    both arrive."""
     if not config.SAAS_MODE:
         return _OSS_SENTINEL
 
-    token = _parse_bearer(authorization)
+    if creds is not None and creds.credentials:
+        token = creds.credentials
+    else:
+        token = _parse_bearer(authorization)
     if not token:
         raise HTTPException(status_code=401, detail="Missing Authorization: Bearer <token> header.")
 
@@ -162,13 +184,19 @@ def require_user(authorization: Optional[str] = Header(None)) -> AuthUser:
     return AuthUser(id=user_id, email=email)
 
 
-def optional_user(authorization: Optional[str] = Header(None)) -> Optional[AuthUser]:
+def optional_user(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    authorization: Optional[str] = Header(None),
+) -> Optional[AuthUser]:
     """Dependency: returns AuthUser if a valid JWT is present, else None.
     Useful for endpoints that behave differently for authenticated vs
     anonymous requests but don't require auth."""
     if not config.SAAS_MODE:
         return _OSS_SENTINEL
-    token = _parse_bearer(authorization)
+    if creds is not None and creds.credentials:
+        token = creds.credentials
+    else:
+        token = _parse_bearer(authorization)
     if not token:
         return None
     try:
