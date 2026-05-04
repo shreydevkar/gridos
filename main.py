@@ -40,7 +40,7 @@ from core.providers import (
     default_model_id,
     get_model_entry,
 )
-from core.utils import a1_to_coords
+from core.utils import a1_to_coords, coords_to_a1
 
 
 load_dotenv()
@@ -825,6 +825,16 @@ class ApiKeySaveRequest(BaseModel):
 class FormulaRequest(BaseModel):
     function_name: str
     arguments: list[float]
+
+
+class EvalFormulaItem(BaseModel):
+    cell: str
+    formula: str
+
+
+class EvalRequest(BaseModel):
+    formulas: List[EvalFormulaItem]
+    sheet: Optional[str] = None
 
 
 class CellUpdateRequest(BaseModel):
@@ -1656,6 +1666,21 @@ def generate_agent_preview(req: ChatRequest) -> dict:
                 ),
             )
 
+        text_issues = _find_text_ref_issues(merged_preview_cells, kernel._sheet_state(sheet))
+        if text_issues:
+            bullets = "\n".join(
+                f"  - {d['cell']} ({d['formula']}) references text cell(s): {', '.join(d['bad_refs'])}"
+                for d in text_issues[:5]
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "The agent proposed formulas that dereference label/text cells — typical "
+                    "off-by-one column-alignment bug. The numeric formula must reference data "
+                    "columns, not the label column.\n" + bullets
+                ),
+            )
+
         response = {
             "category": agent_id,
             "reasoning": ai_data.get("reasoning"),
@@ -1751,6 +1776,24 @@ def generate_agent_preview(req: ChatRequest) -> dict:
                 "The agent proposed formulas whose inputs are empty — applying would produce "
                 "#DIV/0! or misleading zeros. Re-ask the agent to also populate the referenced "
                 "cells, or fill them yourself first.\n" + bullets
+            ),
+        )
+
+    text_issues = _find_text_ref_issues(
+        preview["preview_cells"],
+        kernel._sheet_state(sheet),
+    )
+    if text_issues:
+        bullets = "\n".join(
+            f"  - {d['cell']} ({d['formula']}) references text cell(s): {', '.join(d['bad_refs'])}"
+            for d in text_issues[:5]
+        )
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "The agent proposed formulas that dereference label/text cells — typical "
+                "off-by-one column-alignment bug. The numeric formula must reference data "
+                "columns, not the label column.\n" + bullets
             ),
         )
 
@@ -2424,6 +2467,38 @@ def _formula_references_text_cell(formula: str, sheet_state: dict) -> list[str]:
             continue
         bad_refs.append(ref)
     return bad_refs
+
+
+def _find_text_ref_issues(preview_cells: list[dict], sheet_state: dict) -> list[dict]:
+    """Pre-write companion to _formula_references_text_cell — for each formula
+    in the preview, flag refs that resolve to a non-numeric cell on the current
+    sheet. Catches the COLUMN ALIGNMENT bug (formula in a numeric column points
+    one column left into a label column) BEFORE commit instead of as an after-
+    the-fact warning. Mirrors _find_empty_formula_deps's guards: skips
+    IFERROR/IFNA/CONCAT/TEXTJOIN/SUMPRODUCT, and excludes refs the same preview
+    is overwriting with a number/formula (the agent is fixing that cell)."""
+    self_written: set[str] = set()
+    for p in preview_cells:
+        v = p.get("value")
+        if v not in (None, ""):
+            self_written.add(p["cell"].upper())
+
+    issues: list[dict] = []
+    for p in preview_cells:
+        v = p.get("value")
+        if not isinstance(v, str) or not v.startswith("="):
+            continue
+        if _ERROR_WRAPPED_RE.match(v):
+            continue
+        bad_refs = _formula_references_text_cell(v, sheet_state)
+        bad_refs = [ref for ref in bad_refs if ref.upper() not in self_written]
+        if bad_refs:
+            issues.append({
+                "cell": p["cell"],
+                "formula": v,
+                "bad_refs": bad_refs,
+            })
+    return issues
 
 
 def _observe_written_cells(preview_cells: list[dict], sheet: str) -> list[dict]:
@@ -3428,6 +3503,229 @@ async def import_workbook(
 async def evaluate_formula(req: FormulaRequest):
     evaluator = FormulaEvaluator()
     return {"result": evaluator.evaluate(req.function_name, req.arguments)}
+
+
+# Excel-style error sentinels returned by _evaluate_formula_string and the
+# evaluator's internal subexpressions. Any returned string starting with `#`
+# and ending with `!` (or `?`) is an error, not a value. Character class
+# covers letters, digits, slash and underscore so #DIV/0!, #PARSE_ERROR!,
+# #VALUE! all match. The trailing context after the sentinel (e.g. the
+# " (Invalid Arguments)" tail on #VALUE!) is fine — re.match doesn't require
+# a full string consume.
+_EVAL_ERROR_PREFIX_RE = re.compile(r"^#[A-Z0-9/_]+[!?]")
+
+
+def _split_eval_result(raw):
+    """Map _evaluate_formula_string output into (result, error). Excel error
+    strings are routed to error; everything else (numbers, bools, strings,
+    None) is the result."""
+    if isinstance(raw, str) and _EVAL_ERROR_PREFIX_RE.match(raw):
+        return None, raw
+    return raw, None
+
+
+_EVAL_MAX_FORMULAS = 500
+
+
+@app.post("/eval")
+async def eval_formulas(
+    req: EvalRequest,
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
+    """Deterministic dry-run. Evaluates a list of [{cell, formula}] against the
+    caller's current workbook state WITHOUT mutating any cell or persisting to
+    Supabase. Returns [{cell, result, error}] — error is null on success, an
+    Excel-style sentinel ('#DIV/0!', '#REF!', '#PARSE_ERROR!', etc.) on failure.
+
+    No LLM, no preview token, no commit. The crown-jewel endpoint for external
+    agents that want to test a formula in our AST kernel before writing it back
+    via /grid/range or /agent/apply."""
+    if len(req.formulas) > _EVAL_MAX_FORMULAS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many formulas in one /eval call. Cap is {_EVAL_MAX_FORMULAS}; split into batches.",
+        )
+    sheet = req.sheet or kernel.active_sheet
+    if sheet not in kernel.sheets:
+        raise HTTPException(status_code=404, detail=f"Sheet '{sheet}' does not exist.")
+
+    results = []
+    for item in req.formulas:
+        try:
+            r, c = a1_to_coords(item.cell)
+        except ValueError:
+            results.append({
+                "cell": item.cell,
+                "result": None,
+                "error": "#REF! (Invalid A1 notation)",
+            })
+            continue
+        formula = item.formula if item.formula.startswith("=") else f"={item.formula}"
+        raw = kernel._evaluate_formula_string(formula, r, c, sheet)
+        result, error = _split_eval_result(raw)
+        results.append({"cell": item.cell, "result": result, "error": error})
+
+    return {"sheet": sheet, "results": results}
+
+
+def _infer_column_type(values: list) -> str:
+    """Token-cheap dominant-type pick across a column's data values. Empty
+    cells are skipped — we want the agent to know what flavor of data
+    actually lives there. Formulas are inspected for their evaluated value."""
+    counts = {"number": 0, "text": 0, "bool": 0, "formula": 0}
+    has_any = False
+    for v, is_formula in values:
+        if v in (None, ""):
+            continue
+        has_any = True
+        if is_formula:
+            counts["formula"] += 1
+        elif isinstance(v, bool):
+            counts["bool"] += 1
+        elif isinstance(v, (int, float)):
+            counts["number"] += 1
+        else:
+            counts["text"] += 1
+    if not has_any:
+        return "empty"
+    # Formula columns are special-cased — if half the column is formula-driven
+    # we want the agent to see "formula" not the underlying type.
+    if counts["formula"] >= max(1, sum(counts.values()) // 2):
+        return "formula"
+    return max(counts, key=counts.get)
+
+
+@app.get("/schema")
+async def get_schema(
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
+    """Token-optimized recon endpoint. Returns sheet names, occupied bounds,
+    inferred column headers (row 1) and per-column dominant data type. Lets an
+    external agent scout a workbook in ~hundreds of tokens instead of fetching
+    the full grid JSON."""
+    out_sheets = []
+    for s in kernel.list_sheets():
+        name = s["name"]
+        state = kernel._sheet_state(name)
+        cells = state["cells"]
+        if not cells:
+            out_sheets.append({
+                "name": name,
+                "active": s["active"],
+                "rows": 0,
+                "cols": [],
+                "occupied_bounds": None,
+            })
+            continue
+
+        rows = [r for (r, _c) in cells.keys()]
+        cols = [c for (_r, c) in cells.keys()]
+        min_r, max_r = min(rows), max(rows)
+        min_c, max_c = min(cols), max(cols)
+
+        col_specs = []
+        for c in range(min_c, max_c + 1):
+            header_cell = cells.get((min_r, c))
+            header = None
+            if header_cell is not None and header_cell.value not in (None, ""):
+                header = str(header_cell.value)
+            data_values = []
+            for r in range(min_r + 1, max_r + 1):
+                cell = cells.get((r, c))
+                if cell is None:
+                    continue
+                data_values.append((cell.value, bool(cell.formula)))
+            inferred = _infer_column_type(data_values)
+            col_specs.append({
+                "col": coords_to_a1(0, c)[:-1],  # strip the row part to get column letters
+                "header": header,
+                "type": inferred,
+            })
+
+        out_sheets.append({
+            "name": name,
+            "active": s["active"],
+            "rows": max_r - min_r + 1,
+            "cols": col_specs,
+            "occupied_bounds": {
+                "first": coords_to_a1(min_r, min_c),
+                "last": coords_to_a1(max_r, max_c),
+            },
+        })
+    return {"sheets": out_sheets, "active_sheet": kernel.active_sheet}
+
+
+_PEEK_MAX_CELLS = 1000
+_RANGE_RE = re.compile(r"^([A-Z]+\d+):([A-Z]+\d+)$")
+
+
+@app.get("/peek")
+async def peek_range(
+    cell_range: str = Query(..., alias="range", description="A1-style range, e.g. 'A1:D10'"),
+    sheet: Optional[str] = Query(None),
+    fmt: str = Query("csv", alias="format", description="csv | tsv | json"),
+    k: GridOSKernel = Depends(current_kernel_dep),
+):
+    """Dense partial-grid fetch for AI agents. Returns the contents of an
+    A1:D10-style range in CSV / TSV / JSON. Designed to be 5-10x more token-
+    efficient than fetching a full /api/workbook payload when the agent only
+    needs to peek at a specific block."""
+    fmt_lc = fmt.lower()
+    if fmt_lc not in ("csv", "tsv", "json"):
+        raise HTTPException(status_code=400, detail="format must be one of csv, tsv, json.")
+    m = _RANGE_RE.match(cell_range.upper())
+    if not m:
+        raise HTTPException(status_code=400, detail="range must match A1:D10 form.")
+    try:
+        r1, c1 = a1_to_coords(m.group(1))
+        r2, c2 = a1_to_coords(m.group(2))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="range contains invalid A1 notation.")
+
+    # Normalize so callers don't need to write the corners in any specific order.
+    rmin, rmax = sorted((r1, r2))
+    cmin, cmax = sorted((c1, c2))
+    cell_count = (rmax - rmin + 1) * (cmax - cmin + 1)
+    if cell_count > _PEEK_MAX_CELLS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Range has {cell_count} cells; cap is {_PEEK_MAX_CELLS}. Narrow the range.",
+        )
+
+    target_sheet = sheet or kernel.active_sheet
+    if target_sheet not in kernel.sheets:
+        raise HTTPException(status_code=404, detail=f"Sheet '{target_sheet}' does not exist.")
+    state = kernel._sheet_state(target_sheet)
+    cells = state["cells"]
+
+    rows: list[list] = []
+    for r in range(rmin, rmax + 1):
+        row: list = []
+        for c in range(cmin, cmax + 1):
+            cell = cells.get((r, c))
+            row.append("" if cell is None or cell.value is None else cell.value)
+        rows.append(row)
+
+    if fmt_lc == "json":
+        return {
+            "sheet": target_sheet,
+            "range": f"{coords_to_a1(rmin, cmin)}:{coords_to_a1(rmax, cmax)}",
+            "rows": rows,
+        }
+
+    sep = "," if fmt_lc == "csv" else "\t"
+    lines = []
+    for row in rows:
+        out = []
+        for v in row:
+            s = str(v) if v != "" else ""
+            if fmt_lc == "csv" and (sep in s or '"' in s or "\n" in s):
+                s = '"' + s.replace('"', '""') + '"'
+            out.append(s)
+        lines.append(sep.join(out))
+    body = "\n".join(lines)
+    media = "text/csv" if fmt_lc == "csv" else "text/tab-separated-values"
+    return Response(content=body, media_type=media)
 
 
 @app.post("/system/clear")
