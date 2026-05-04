@@ -160,6 +160,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Cloud (SaaS) router is always mounted — it exposes /cloud/status which the
 # frontend reads on bootstrap to decide whether to show login/billing UI. Real
 # SaaS features are gated on config.SAAS_MODE and attached in later phases.
+from cloud import api_keys as cloud_api_keys  # noqa: E402
 from cloud import config as cloud_config  # noqa: E402
 from cloud import usage as cloud_usage  # noqa: E402
 from cloud.auth import AuthUser, require_user  # noqa: E402
@@ -4193,6 +4194,71 @@ async def delete_plugin_secrets(plugin_slug: str, user: AuthUser = Depends(requi
     from cloud import user_plugin_secrets as _store
     _store.delete_all_for(user.id, plugin_slug)
     return {"status": "Success", "plugin_slug": plugin_slug}
+
+
+# ---------- Engine API key management ----------
+
+
+class ApiKeyCreateRequest(BaseModel):
+    name: str = "Untitled key"
+
+
+def _require_saas_signed_in(user: AuthUser) -> None:
+    if not cloud_config.SAAS_MODE:
+        raise HTTPException(status_code=404, detail="API keys are a SaaS feature.")
+    if not user or not user.id or user.id == "oss":
+        raise HTTPException(status_code=401, detail="Sign in required.")
+
+
+@app.post("/settings/api-keys")
+async def create_api_key(req: ApiKeyCreateRequest, user: AuthUser = Depends(require_user)):
+    """Mint a fresh API key for this user.
+
+    The full key is returned in the response **once** — the server stores
+    only its sha256 hash and cannot return the secret again. The caller
+    should display the key to the user and instruct them to save it
+    somewhere safe.
+
+    JWT-only: a request authenticating with an existing API key cannot mint
+    new keys. This is a defense-in-depth limit so a leaked key can't be
+    used to manufacture replacement keys after the user revokes it."""
+    _require_saas_signed_in(user)
+    if user.auth_method != "jwt":
+        raise HTTPException(
+            status_code=403,
+            detail="Mint API keys from the GridOS Settings UI (browser sign-in required).",
+        )
+    try:
+        return cloud_api_keys.create_key(user.id, req.name)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+@app.get("/settings/api-keys")
+async def list_api_keys(user: AuthUser = Depends(require_user)):
+    """List the user's API keys.
+
+    Returns metadata only — the secret never leaves the server after
+    creation. Includes revoked keys so the user can see their full audit
+    trail. Each entry has `id`, `name`, `prefix` (first 16 chars,
+    human-identifiable), `created_at`, `last_used_at`, and `revoked_at`."""
+    _require_saas_signed_in(user)
+    return {"keys": cloud_api_keys.list_keys(user.id)}
+
+
+@app.delete("/settings/api-keys/{key_id}")
+async def revoke_api_key(key_id: str, user: AuthUser = Depends(require_user)):
+    """Soft-revoke an API key.
+
+    The key is no longer usable for authentication after this call. The
+    in-memory hot-path cache is invalidated immediately for the owning
+    user, so revocation propagates within milliseconds in practice (and
+    within the 30s TTL in the worst case)."""
+    _require_saas_signed_in(user)
+    ok = cloud_api_keys.revoke_key(user.id, key_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="API key not found.")
+    return {"status": "Success", "id": key_id}
 
 
 @app.get("/models/available")

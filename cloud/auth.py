@@ -46,11 +46,17 @@ bearer_scheme = HTTPBearer(auto_error=False, description="Supabase JWT issued by
 class AuthUser:
     id: str
     email: Optional[str]
+    # Tracks how the request authenticated. "jwt" for a Supabase session
+    # token (browser sign-in), "api_key" for a long-lived gridos_live_sk_
+    # credential, "oss" for the no-auth bypass. Endpoints that should be
+    # JWT-only (e.g., minting new API keys) check this instead of trying
+    # to inspect the raw header.
+    auth_method: str = "jwt"
 
 
 # Sentinel returned from OSS mode. Not a real user; callers should check
 # `config.SAAS_MODE` before doing anything that relies on `id` being a uuid.
-_OSS_SENTINEL = AuthUser(id="oss", email=None)
+_OSS_SENTINEL = AuthUser(id="oss", email=None, auth_method="oss")
 
 
 # Supported asymmetric algorithms. HS256 is handled separately via the
@@ -157,7 +163,7 @@ def require_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     authorization: Optional[str] = Header(None),
 ) -> AuthUser:
-    """Dependency: 401s in SaaS mode if no valid JWT; pass-through in OSS mode.
+    """Dependency: 401s in SaaS mode if no valid JWT or API key; pass-through in OSS mode.
 
     Two paths to the same place. The `creds` param is what FastAPI extracts
     via the HTTPBearer security scheme — that's the one Swagger UI's
@@ -165,7 +171,20 @@ def require_user(
     using the documented scheme will hit. The `authorization` raw header is
     a back-compat path for clients that just set the header directly without
     knowing the scheme name. Either gets us a token; we prefer `creds` when
-    both arrive."""
+    both arrive.
+
+    Two credential families are accepted in SaaS mode:
+
+      1. Long-lived API keys minted from /settings/api-keys. Format
+         `gridos_live_sk_<...>`. Hashed and looked up in public.api_keys via
+         cloud.api_keys.lookup_user_id_by_hash. This is the path external
+         AI agents use.
+      2. Supabase JWT access tokens. Format `eyJ...`. Decoded via
+         _decode_jwt against the project's JWKS / shared secret. This is
+         the path the GridOS browser UI uses.
+
+    The prefix `gridos_live_sk_` is the discriminator. Anything else is
+    treated as a JWT."""
     if not config.SAAS_MODE:
         return _OSS_SENTINEL
 
@@ -175,6 +194,19 @@ def require_user(
         token = _parse_bearer(authorization)
     if not token:
         raise HTTPException(status_code=401, detail="Missing Authorization: Bearer <token> header.")
+
+    # Lazy import — avoids a circular at module load (cloud.api_keys can grow
+    # to import other cloud.* modules later, and cloud.auth is imported very
+    # early). Cheap on the hot path: Python caches the import.
+    from cloud import api_keys as _api_keys
+
+    if _api_keys.looks_like_api_key(token):
+        user_id = _api_keys.lookup_user_id_by_hash(token)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="API key is invalid or has been revoked.")
+        # API keys carry no email claim. The endpoint logic that needs an
+        # email already handles None (e.g. /auth/whoami).
+        return AuthUser(id=user_id, email=None, auth_method="api_key")
 
     claims = _decode_jwt(token)
     user_id = claims.get("sub")
