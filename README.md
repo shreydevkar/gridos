@@ -85,6 +85,35 @@ In SaaS mode an in-app **Marketplace** (gear icon → grid icon in the menubar) 
 
 **Self-evolving formula loop** — when a user asks for a formula that isn't expressible as a macro (needs HTTP, a SaaS API, custom Python), the agent can emit a `plugin_spec` field with `{slug, name, description, plugin_py, example_formula}`. The preview card renders the proposed code in a syntax-highlighted block with an **Install plugin** button that POSTs to the dev portal. Code is never exec'd without explicit user approval, button disables after install to block double-upload.
 
+## Engine API — call GridOS as a deterministic compute layer
+
+External AI agents and developer tools can hit the GridOS AST kernel directly, without going through the chat-agent / LLM / preview-token path. Three endpoints cover the agent-builder workflow:
+
+| Endpoint | Use it to |
+| :--- | :--- |
+| `POST /eval` | Dry-run `[{cell, formula}]` against the current workbook state. Returns `{cell, result, error}` per entry — no commit, no LLM in the loop. Excel-style error sentinels (`#DIV/0!`, `#REF!`, `#PARSE_ERROR!`) are routed to the `error` field. |
+| `GET /schema` | Workbook recon in ~200 tokens — sheet bounds, inferred column headers, dominant data type per column. Designed to replace the 30K-token full-workbook fetch most LLMs do today. |
+| `GET /peek?range=A1:D10&format=csv` | Dense partial-grid fetch as CSV / TSV / JSON. 1000-cell cap, RFC-4180 quoting on CSV. |
+
+**Authentication:** the same `Authorization: Bearer <token>` header used everywhere else. Two credential families are accepted in SaaS mode: short-lived Supabase JWTs (browser sign-in) and long-lived **`gridos_live_sk_`** API keys minted from the Settings UI or `POST /settings/api-keys`. Keys are sha256-hashed at rest, prefix-matched on the wire (Stripe-style), and revocable from the same Settings panel. Mint requires JWT auth (an existing API key cannot manufacture replacement keys — defense-in-depth against leakage).
+
+**Pre-write guardrails:** writes through the agent pipeline (`/agent/apply`) are scanned before commit for two failure modes — formulas referencing empty cells (`#DIV/0!` baseline missing) and formulas dereferencing label/text cells (the column-alignment off-by-one bug). Both 422 with the offending refs listed; both skip `IFERROR(...)` / `IFNA(...)` / `CONCAT(...)` / `TEXTJOIN(...)` / `SUMPRODUCT(...)` wraps and refs the same write is itself overwriting.
+
+**Swagger UI** at `/docs` includes a green Authorize button (HTTPBearer security scheme) — paste your JWT or `gridos_live_sk_` key once and every endpoint becomes one-click testable.
+
+**Full reference:** [gridos.mintlify.app/api/engine-overview](https://gridos.mintlify.app/api/engine-overview) — quickstart, per-endpoint pages, authentication flow, the verify-before-commit recipe.
+
+```bash
+# Quickstart — verify before committing.
+curl -X POST https://gridos.onrender.com/eval \
+  -H "Authorization: Bearer gridos_live_sk_..." \
+  -H "Content-Type: application/json" \
+  -d '{"formulas":[{"cell":"C4","formula":"=A1/A2"}]}'
+
+# Returns either {"cell":"C4","result":<value>,"error":null}
+# or         {"cell":"C4","result":null,"error":"#DIV/0!"}
+```
+
 ## Capabilities
 
 - **Formula synthesis** — natural-language prompts become executable grid formulas (e.g. `=MINUS(C3, D3)`).
@@ -112,6 +141,9 @@ In SaaS mode an in-app **Marketplace** (gear icon → grid icon in the menubar) 
 - **Debounced cloud auto-save** — every undo-recorded mutation triggers a silent `/system/save` after 4s idle (SaaS only). No manual Ctrl+S required for cloud users; status pill flashes "Autosaved → Ready".
 - **Self-evolving formula loop** — for a formula that needs HTTP, an external API, or non-trivial Python, the agent proposes a full plugin (slug + plugin.py + example usage). The preview card shows the code; one click installs it via the developer portal and the new formula becomes immediately callable from any cell.
 - **Hardened guardrail** — every preview from `/agent/chat` mints a server-side single-use token; `/agent/apply` re-reads the stashed payload and ignores client-supplied values, so the LLM can't substitute different writes between preview and commit. The Python kernel is the only sanctioned path to mutate cells.
+- **Public Engine API for external agents** — `POST /eval` (dry-run formulas), `GET /schema` (token-cheap recon), `GET /peek` (partial-grid fetch). Same kernel as the UI uses, no LLM in the loop, ~50ms response. Designed as the deterministic compute layer agent builders call instead of running headless LibreOffice / pandas-in-sandbox to verify spreadsheet math.
+- **Long-lived API keys (`gridos_live_sk_`)** — Stripe-style prefixed keys minted from Settings → API Keys, sha256-hashed at rest, revocable. Self-serve flow: a developer signs up, mints a key, and calls `/eval` in three commands. Mint requires browser sign-in (JWT-only) so a leaked key can't manufacture replacements.
+- **Pre-write text-cell guardrail** — formulas dereferencing label/text cells (the column-alignment off-by-one bug an LLM commonly makes on labeled rows) 422 pre-commit instead of surfacing as a post-apply warning. Skips IFERROR/IFNA/CONCAT/TEXTJOIN/SUMPRODUCT wraps and self-overwritten refs to avoid false positives.
 - **Live connectors (Shopify / Stripe / GitHub)** — three shipped plugins that turn spreadsheet cells into live dashboards against third-party APIs. `=STRIPE_MRR()`, `=SHOPIFY_REVENUE(30)`, `=GITHUB_STARS("vercel/next.js")` — BYOK per-user via the marketplace Configure modal, 60s in-process cache, honest `#*_AUTH!` / `#*_OFFLINE!` / `#*_RATE_LIMIT!` sentinels on failure.
 - **Per-user plugin BYOK + install gating** — the marketplace Configure button opens a password-input form rendered from each plugin's declared secret slots (`manifest.json.secrets`). Values land in `public.user_plugin_secrets` (RLS, never shipped back down to the browser). Once a user toggles any plugin install, uninstalled plugin formulas return a clean `#NOT_INSTALLED` sentinel instead of silently working.
 - **Invite-by-email for unregistered users** — Share… modal accepts any email, not just existing GridOS users. Unregistered invites sit in `pending_invites` until the invitee signs up; a Postgres trigger atomically promotes them into `workbook_collaborators` on account creation, so the shared workbook is in their "Shared with me" strip on first visit.
