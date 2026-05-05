@@ -6,3 +6,15 @@ telemetry_log.json
 data/
 .mcp.json
 bench/
+
+# Local-only utility scripts and notes — never push.
+# These contain demo credentials, redacted secrets, or one-shot setup logic
+# that's specific to a single submission/event. Force-add individually if
+# you actually want one of them committed.
+*_LOCAL.txt
+ARCHITECTURE_REVIEW_LOCAL.txt
+create_yc_demo_user.py
+seed_yc_demo_workbook.py
+yc_competitive_tests.py
+yc_submission_transcript.md
+yc_*.py
