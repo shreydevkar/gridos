@@ -4897,10 +4897,10 @@ async function bootstrap() {
     // SaaS multi-workbook: if the URL says ?id=<uuid>, hydrate the server
     // kernel from that cloud row before we render anything. Opening /workbook
     // directly with no id in SaaS mode is treated as "pick one" — redirect
-    // to the landing list so we never leak another user's in-memory state.
+    // to the dashboard list so we never leak another user's in-memory state.
     if (cloudStatus?.mode === "saas") {
         if (!activeWorkbookId) {
-            window.location.replace("/");
+            window.location.replace("/app");
             return;
         }
         try {

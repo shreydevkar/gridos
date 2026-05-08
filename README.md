@@ -337,6 +337,19 @@ Render's free web service is a good fit — the FastAPI backend serves the stati
 
 Render's free instances sleep after ~15 min of inactivity (~30–60s cold start on first hit). Point a free UptimeRobot monitor at `/healthz` every 5 minutes to keep the dyno warm during the day.
 
+### Marketing landing page
+
+The marketing site is `static/landing.html` — a single-file light-themed page with an animated DCF mockup, SVG chart popout, workflow diagram, comparison table, testimonials, pricing, and FAQ. FastAPI serves it at `/` via the existing `serve_landing()` route in `main.py`; the SaaS app itself lives at `/workbook`.
+
+**Deploys with the rest of the app.** Push to `master`, Render rebuilds, the new landing is live at `https://gridos.onrender.com/`. No separate static-site service needed.
+
+URL layout:
+- `gridos.onrender.com/` → marketing landing (every "Open GridOS" CTA points to `/workbook`)
+- `gridos.onrender.com/workbook` → SaaS app (workbook UI, auth, the whole product)
+- `gridos.onrender.com/login` → login page (SaaS mode only)
+
+The previous landing is preserved as `static/landing.old.html` in case of revert. Once you're happy with the new one, delete it.
+
 ## GridOS OSS UI:
 <img width="1920" height="1095" alt="Screenshot 2026-04-17 171916" src="https://github.com/user-attachments/assets/2b69ef11-69b0-4fce-8415-b29166e3dbd3" />
 

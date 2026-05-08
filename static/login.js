@@ -65,7 +65,7 @@ async function bootstrap() {
 
     if (status.mode !== "saas") {
         // Running against an OSS build; no login required. Go home.
-        window.location.replace("/");
+        window.location.replace("/app");
         return;
     }
 
@@ -88,7 +88,7 @@ async function bootstrap() {
     // an in-flight OAuth callback), redirect home immediately.
     const { data: { session } } = await supabase.auth.getSession();
     if (session) {
-        window.location.replace("/");
+        window.location.replace("/app");
         return;
     }
 
@@ -116,7 +116,7 @@ emailForm.addEventListener("submit", async (e) => {
         if (mode === "signin") {
             const { error } = await supabase.auth.signInWithPassword({ email, password });
             if (error) throw error;
-            window.location.replace("/");
+            window.location.replace("/app");
         } else {
             const { data, error } = await supabase.auth.signUp({
                 email,
@@ -125,7 +125,7 @@ emailForm.addEventListener("submit", async (e) => {
             });
             if (error) throw error;
             if (data.session) {
-                window.location.replace("/");
+                window.location.replace("/app");
             } else {
                 // Email confirmation required — Supabase default.
                 setMsg("success", "Check your inbox for a confirmation link to finish signing up.");

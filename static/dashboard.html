@@ -1,0 +1,1277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GridOS</title>
+    <style>
+        :root {
+            --bg: #ffffff;
+            --bg-soft: #f8f9fa;
+            --bg-hover: #f1f3f4;
+            --border: #dadce0;
+            --border-soft: #e8eaed;
+            --text: #202124;
+            --text-muted: #5f6368;
+            --text-mutedder: #80868b;
+            --accent: #1a73e8;
+            --accent-soft: #e8f0fe;
+            --accent-hover: #1765cc;
+            --success: #1e8e3e;
+            --danger: #d93025;
+            --shadow-1: 0 1px 2px rgba(60, 64, 67, 0.1), 0 1px 3px rgba(60, 64, 67, 0.08);
+            --shadow-2: 0 2px 6px rgba(60, 64, 67, 0.15);
+            --shadow-3: 0 4px 12px rgba(60, 64, 67, 0.18);
+            --radius: 8px;
+            --radius-sm: 4px;
+            --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: var(--font-ui);
+            font-size: 14px;
+            color: var(--text);
+            background: var(--bg-soft);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        a { color: var(--accent); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* ===== Top bar ===== */
+        .topbar {
+            height: 60px;
+            background: var(--bg);
+            border-bottom: 1px solid var(--border-soft);
+            display: flex;
+            align-items: center;
+            padding: 0 32px;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .topbar-brand {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .topbar-logo {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            display: grid;
+            place-items: center;
+            color: #fff;
+            font-weight: 700;
+            font-size: 12px;
+            letter-spacing: 0.02em;
+        }
+
+        .topbar-brand h1 {
+            margin: 0;
+            font-size: 17px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+
+        .topbar-spacer { flex: 1; }
+
+        .topbar-actions { display: flex; align-items: center; gap: 14px; }
+
+        .topbar-actions a {
+            font-size: 13px;
+            color: var(--text-muted);
+            padding: 6px 10px;
+            border-radius: var(--radius-sm);
+        }
+        .topbar-actions a:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        /* Account avatar + popover (SaaS only) */
+        .account-wrap { position: relative; }
+        .account-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 1px solid var(--border);
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            padding: 0;
+            transition: box-shadow 120ms ease, transform 80ms ease;
+        }
+        .account-avatar:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
+        .account-avatar:active { transform: scale(0.96); }
+        .account-popover {
+            position: absolute;
+            top: calc(100% + 8px);
+            right: 0;
+            width: 280px;
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: 12px;
+            box-shadow: var(--shadow-3);
+            padding: 14px;
+            z-index: 120;
+            font-size: 13px;
+        }
+        .account-popover[hidden] { display: none; }
+        .account-popover-head {
+            display: flex; align-items: center; gap: 10px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .account-popover-avatar {
+            width: 36px; height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1a73e8, #34a853);
+            color: #fff; display: grid; place-items: center;
+            font-weight: 600; font-size: 13px; flex-shrink: 0;
+        }
+        .account-popover-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+        .account-popover-email {
+            font-weight: 500; color: var(--text);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .account-popover-tier {
+            font-size: 11px; color: var(--text-muted); text-transform: capitalize;
+        }
+        .account-popover-stats {
+            display: flex; gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .account-popover-stat { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+        .account-popover-stat-label {
+            font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+            color: var(--text-mutedder);
+        }
+        .account-popover-stat-value { font-size: 13px; font-weight: 500; color: var(--text); }
+        .account-popover-actions { display: flex; flex-direction: column; padding-top: 8px; }
+        .account-popover-link {
+            text-align: left; padding: 8px 6px;
+            background: transparent; border: none; border-radius: 6px;
+            color: var(--text); font-size: 13px; cursor: pointer; font-family: inherit;
+        }
+        .account-popover-link:hover { background: var(--bg-hover); }
+        .account-popover-link-danger { color: var(--danger); }
+
+        /* Workbook card — SaaS-only "Your workbooks" grid. */
+        .workbook-card {
+            position: relative;
+        }
+        .workbook-card-delete {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            border: 1px solid var(--border-soft);
+            background: var(--bg);
+            color: var(--text-mutedder);
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+        }
+        .card:hover .workbook-card-delete { opacity: 1; }
+        .workbook-card-delete:hover {
+            color: var(--danger);
+            border-color: var(--danger);
+        }
+        .workbook-card-delete svg { width: 14px; height: 14px; }
+
+        .card-thumb.workbook {
+            background: linear-gradient(135deg, #eef3fe, #d4e4fc);
+            border: 1px solid var(--accent-soft);
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .card-thumb.new-workbook {
+            background: var(--bg-soft);
+            border: 1px dashed var(--border);
+            color: var(--accent);
+            font-size: 24px;
+        }
+
+        .quota-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 10px;
+            border-radius: 999px;
+            background: var(--bg-soft);
+            border: 1px solid var(--border-soft);
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+        .quota-badge.at-limit {
+            background: #fff5f5;
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+        .account-popover-quota {
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-soft);
+        }
+        .account-popover-quota[hidden] { display: none; }
+        .account-popover-quota-bar {
+            height: 6px; background: var(--bg-soft); border-radius: 999px; overflow: hidden;
+        }
+        .account-popover-quota-fill {
+            height: 100%; background: var(--accent); width: 0%;
+            transition: width 200ms ease, background-color 200ms ease;
+        }
+        .account-popover-quota-fill.over-80  { background: #f59e0b; }
+        .account-popover-quota-fill.over-100 { background: var(--danger); }
+        .account-popover-quota-note { margin-top: 6px; font-size: 11px; color: var(--text-mutedder); }
+
+        /* ===== Page layout ===== */
+        .page {
+            max-width: 1120px;
+            margin: 0 auto;
+            padding: 48px 32px 80px;
+        }
+
+        .hero {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 32px;
+        }
+
+        .hero-eyebrow {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--accent);
+            font-weight: 500;
+        }
+
+        .hero h2 {
+            margin: 0;
+            font-size: 32px;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+        }
+
+        .hero p {
+            margin: 0;
+            font-size: 15px;
+            color: var(--text-muted);
+            max-width: 560px;
+        }
+
+        /* ===== Section ===== */
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .section-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+
+        .section-head h3 {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 500;
+            color: var(--text);
+        }
+
+        .section-head .section-hint {
+            font-size: 12px;
+            color: var(--text-mutedder);
+        }
+
+        /* ===== Template/card grid ===== */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .card {
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius);
+            padding: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            cursor: pointer;
+            transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+            min-height: 160px;
+        }
+
+        .card:hover {
+            border-color: var(--accent);
+            box-shadow: var(--shadow-2);
+        }
+
+        .card-thumb {
+            height: 84px;
+            background: var(--bg-soft);
+            border-radius: var(--radius-sm);
+            border: 1px dashed var(--border);
+            display: grid;
+            place-items: center;
+            color: var(--text-mutedder);
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        .card-thumb.template {
+            background:
+                linear-gradient(90deg, rgba(26, 115, 232, 0.08) 1px, transparent 1px) 0 0/20px 100%,
+                linear-gradient(0deg, rgba(26, 115, 232, 0.08) 1px, transparent 1px) 0 0/100% 14px,
+                var(--bg-soft);
+            border: 1px solid var(--border-soft);
+        }
+
+        .card-title {
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--text);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .card-meta {
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .card-meta .card-tag {
+            background: var(--bg-soft);
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            padding: 2px 8px;
+            color: var(--text-muted);
+            font-size: 10px;
+        }
+
+        .card-description {
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.45;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+
+        .empty-state {
+            padding: 24px;
+            border: 1px dashed var(--border);
+            border-radius: var(--radius);
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 13px;
+            background: var(--bg);
+        }
+
+        .skeleton {
+            padding: 24px;
+            border: 1px solid var(--border-soft);
+            border-radius: var(--radius);
+            color: var(--text-mutedder);
+            font-size: 12px;
+            background: var(--bg);
+        }
+
+        .skeleton .skeleton-row {
+            height: 10px;
+            background: var(--bg-soft);
+            border-radius: 4px;
+            margin-bottom: 8px;
+        }
+        .skeleton .skeleton-row:nth-child(1) { width: 60%; }
+        .skeleton .skeleton-row:nth-child(2) { width: 40%; }
+        .skeleton .skeleton-row:nth-child(3) { width: 75%; }
+
+        /* ===== Loading overlay ===== */
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.85);
+            display: grid;
+            place-items: center;
+            z-index: 1000;
+        }
+        .loading-overlay[hidden] { display: none; }
+
+        .spinner {
+            width: 28px;
+            height: 28px;
+            border: 3px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 800ms linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            margin-top: 12px;
+            color: var(--text-muted);
+            font-size: 13px;
+        }
+        .loading-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        /* ===== Error toast ===== */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: var(--bg);
+            border: 1px solid var(--danger);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-3);
+            padding: 12px 16px;
+            font-size: 13px;
+            color: var(--danger);
+            max-width: 320px;
+            z-index: 500;
+        }
+        .toast[hidden] { display: none; }
+
+        /* ===== Hero prompt ===== */
+        .hero-prompt {
+            background: var(--bg);
+            border: 1px solid var(--border-soft);
+            border-radius: 14px;
+            box-shadow: var(--shadow-1);
+            padding: 18px 18px 14px;
+            margin-bottom: 24px;
+            transition: border-color 120ms ease, box-shadow 120ms ease;
+        }
+        .hero-prompt:focus-within {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-soft);
+        }
+        .hero-prompt-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 10px;
+        }
+        .hero-prompt textarea {
+            flex: 1;
+            border: none;
+            outline: none;
+            resize: none;
+            font-family: var(--font-ui);
+            font-size: 16px;
+            color: var(--text);
+            background: transparent;
+            min-height: 48px;
+            max-height: 200px;
+            line-height: 1.45;
+            padding: 4px 2px;
+        }
+        .hero-prompt textarea::placeholder {
+            color: var(--text-mutedder);
+        }
+        .hero-prompt-submit {
+            background: var(--accent);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            padding: 10px 16px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 120ms ease;
+            white-space: nowrap;
+        }
+        .hero-prompt-submit:hover:not(:disabled) {
+            background: var(--accent-hover);
+        }
+        .hero-prompt-submit:disabled {
+            background: var(--border);
+            color: var(--text-mutedder);
+            cursor: not-allowed;
+        }
+        .hero-prompt-hint {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-top: 10px;
+            font-size: 11px;
+            color: var(--text-mutedder);
+        }
+        .hero-prompt-examples {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 14px;
+        }
+        .hero-prompt-chip {
+            background: var(--bg-soft);
+            border: 1px solid var(--border-soft);
+            border-radius: 999px;
+            padding: 6px 12px;
+            font-size: 12px;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+        }
+        .hero-prompt-chip:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+            background: var(--accent-soft);
+        }
+
+        @media (max-width: 640px) {
+            .page { padding: 32px 20px 60px; }
+            .hero h2 { font-size: 26px; }
+            .topbar { padding: 0 16px; }
+            .hero-prompt-row { flex-direction: column; align-items: stretch; }
+            .hero-prompt-submit { width: 100%; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="topbar-brand">
+            <div class="topbar-logo">GO</div>
+            <h1>GridOS</h1>
+        </div>
+        <div class="topbar-spacer"></div>
+        <div class="topbar-actions">
+            <a href="https://github.com/shreydevkar/gridos_kernel" target="_blank" rel="noopener">GitHub</a>
+            <div class="account-wrap" id="account-wrap" hidden>
+                <button class="account-avatar" id="account-avatar" type="button" title="Account" aria-haspopup="true" aria-expanded="false">
+                    <span id="account-avatar-initials">·</span>
+                </button>
+                <div class="account-popover" id="account-popover" hidden role="dialog">
+                    <div class="account-popover-head">
+                        <div class="account-popover-avatar" id="account-popover-avatar">·</div>
+                        <div class="account-popover-who">
+                            <div class="account-popover-email" id="account-popover-email">—</div>
+                            <div class="account-popover-tier" id="account-popover-tier">free plan</div>
+                        </div>
+                    </div>
+                    <div class="account-popover-stats">
+                        <div class="account-popover-stat">
+                            <span class="account-popover-stat-label" id="account-popover-month">This month</span>
+                            <span class="account-popover-stat-value" id="account-popover-tokens">—</span>
+                        </div>
+                        <div class="account-popover-stat">
+                            <span class="account-popover-stat-label">Est. cost</span>
+                            <span class="account-popover-stat-value" id="account-popover-cost">—</span>
+                        </div>
+                    </div>
+                    <div class="account-popover-quota" id="account-popover-quota" hidden>
+                        <div class="account-popover-quota-bar">
+                            <div class="account-popover-quota-fill" id="account-popover-quota-fill"></div>
+                        </div>
+                        <div class="account-popover-quota-note" id="account-popover-quota-note"></div>
+                    </div>
+                    <div class="account-popover-actions">
+                        <button type="button" class="account-popover-link" id="account-popover-open">Open workbook</button>
+                        <button type="button" class="account-popover-link account-popover-link-danger" id="account-popover-signout">Sign out</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="page">
+        <section class="hero">
+            <span class="hero-eyebrow">Agentic spreadsheet</span>
+            <h2>What do you want to build?</h2>
+            <p>Describe a model, forecast, or dataset and GridOS will scaffold a fresh workbook for you. Or scroll down to open a blank sheet, pick a saved template, or continue where you left off.</p>
+        </section>
+
+        <section class="hero-prompt" id="hero-prompt">
+            <div class="hero-prompt-row">
+                <textarea
+                    id="hero-prompt-input"
+                    placeholder="e.g. Build a 4-quarter revenue forecast with 10% QoQ growth starting at 100"
+                    rows="2"
+                    autofocus></textarea>
+                <button type="button" class="hero-prompt-submit" id="hero-prompt-submit" disabled>Build it</button>
+            </div>
+            <div class="hero-prompt-hint">
+                <span>Enter to submit · Shift + Enter for a new line</span>
+                <span>Uses the workbook assistant with your configured LLMs.</span>
+            </div>
+            <div class="hero-prompt-examples" id="hero-prompt-examples">
+                <button type="button" class="hero-prompt-chip" data-example="Build a simple 5-year DCF valuation with revenue, growth, EBITDA margin, and discount rate assumptions">Simple DCF</button>
+                <button type="button" class="hero-prompt-chip" data-example="Create a 4-quarter operating model with revenue, COGS, gross profit, OpEx, and operating income">Quarterly operating model</button>
+                <button type="button" class="hero-prompt-chip" data-example="Make a monthly personal budget tracker with income, fixed expenses, variable expenses, and savings">Personal budget</button>
+                <button type="button" class="hero-prompt-chip" data-example="Build a 3-statement model with income statement, balance sheet, and cash flow statement">3-statement model</button>
+            </div>
+        </section>
+
+        <section class="section" id="workbooks-section" hidden>
+            <div class="section-head">
+                <h3>Your workbooks</h3>
+                <span class="section-hint">
+                    <span class="quota-badge" id="quota-badge">—</span>
+                </span>
+            </div>
+            <div class="grid" id="workbooks-grid">
+                <div class="skeleton">
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="section-head">
+                <h3>Templates</h3>
+                <span class="section-hint">Saved workbook snapshots — applying one clears unlocked cells.</span>
+            </div>
+            <div id="template-grid" class="grid">
+                <div class="skeleton">
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                    <div class="skeleton-row"></div>
+                </div>
+            </div>
+            <div id="template-empty" class="empty-state" hidden>
+                No templates saved yet. Open the Library tab inside a workbook to save the current sheet as a template.
+            </div>
+        </section>
+
+        <section class="section" id="recent-activity-section">
+            <div class="section-head">
+                <h3>Recent activity</h3>
+                <span class="section-hint">Currently single-kernel — the "Continue" card opens the workspace at its current state.</span>
+            </div>
+            <div class="grid">
+                <div class="card" id="card-continue">
+                    <div class="card-thumb template">
+                        <span id="continue-thumb-label">loading</span>
+                    </div>
+                    <div class="card-title">Continue active workbook</div>
+                    <div class="card-description" id="continue-description">Picks up at the workbook's last state.</div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div id="loading-overlay" class="loading-overlay" hidden>
+        <div class="loading-group">
+            <div class="spinner"></div>
+            <div class="loading-text" id="loading-text">Opening workbook…</div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast" hidden></div>
+
+    <script type="module">
+        // SaaS auth gate — redirect to /login if the user is not signed in.
+        // OSS mode skips this entirely. Runs before the main landing script so
+        // we never render template cards or fire API calls as an anonymous
+        // user in SaaS mode. Also attaches the Bearer token to every API_BASE
+        // fetch and exposes the client + session on window for the main script
+        // (avatar popover, sign-out).
+        try {
+            const res = await fetch('/cloud/status');
+            const status = await res.json();
+            if (status.mode === 'saas') {
+                const cfg = status.client_config || {};
+                if (!cfg.supabase_url || !cfg.supabase_anon_key) {
+                    document.body.innerHTML =
+                        '<div style="padding:48px;max-width:560px;margin:0 auto;font-family:-apple-system,sans-serif;">' +
+                        '<h2>Server misconfigured</h2><p>SAAS_MODE is on but SUPABASE_URL or SUPABASE_ANON_KEY is missing. Add them and restart.</p></div>';
+                } else {
+                    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2?bundle');
+                    const client = createClient(cfg.supabase_url, cfg.supabase_anon_key, {
+                        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+                    });
+                    const { data: { session } } = await client.auth.getSession();
+                    if (!session) {
+                        window.location.replace('/login');
+                    } else {
+                        window.__gridosSupabase = client;
+                        window.__gridosSession = session;
+                        // Attach Bearer to same-origin API calls so /usage/me works.
+                        const origFetch = window.fetch.bind(window);
+                        window.fetch = async function(input, init = {}) {
+                            const url = typeof input === 'string' ? input : (input?.url || '');
+                            const sameOrigin = url.startsWith(window.location.origin) || url.startsWith('/');
+                            if (sameOrigin) {
+                                const headers = new Headers(init.headers || {});
+                                if (!headers.has('Authorization')) {
+                                    headers.set('Authorization', `Bearer ${session.access_token}`);
+                                }
+                                init = { ...init, headers };
+                            }
+                            return origFetch(input, init);
+                        };
+                        window.dispatchEvent(new CustomEvent('gridos:saas-ready', { detail: { email: session.user?.email || null } }));
+                    }
+                }
+            }
+        } catch (_) {
+            // /cloud/status unreachable — treat as OSS and continue.
+        }
+    </script>
+    <script>
+        const API_BASE = window.location.origin;
+
+        function showLoading(text) {
+            document.getElementById("loading-text").textContent = text || "Loading…";
+            document.getElementById("loading-overlay").hidden = false;
+        }
+
+        function hideLoading() {
+            document.getElementById("loading-overlay").hidden = true;
+        }
+
+        function showError(message) {
+            const toast = document.getElementById("toast");
+            toast.textContent = message;
+            toast.hidden = false;
+            setTimeout(() => { toast.hidden = true; }, 4500);
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
+        function formatDate(iso) {
+            if (!iso) return "";
+            try {
+                const d = new Date(iso);
+                return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+            } catch {
+                return "";
+            }
+        }
+
+        const IS_SAAS = () => !!window.__gridosSession;
+
+        // Derive a short workbook title from a free-text prompt. Cuts at a
+        // word boundary near 45 chars so landing cards don't get a wall of
+        // text; the full prompt is still submitted to the agent for content.
+        function titleFromPrompt(prompt) {
+            const trimmed = (prompt || "").trim().replace(/\s+/g, " ");
+            if (!trimmed) return "Untitled workbook";
+            if (trimmed.length <= 45) return trimmed;
+            const firstSentence = trimmed.split(/[.!?]/, 1)[0].trim();
+            if (firstSentence && firstSentence.length <= 45) return firstSentence;
+            const cut = trimmed.slice(0, 45);
+            const lastSpace = cut.lastIndexOf(" ");
+            return lastSpace > 20 ? cut.slice(0, lastSpace).trim() : cut.trim();
+        }
+
+        async function createWorkbookAndOpen(title) {
+            const res = await fetch(`${API_BASE}/workbooks`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ title: title || "Untitled workbook" }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 402) {
+                hideLoading();
+                const usage = data?.detail?.usage || {};
+                showError(`Workbook slot limit reached (${usage.used || "?"}/${usage.limit || "?"}). Delete one to free a slot or upgrade your plan.`);
+                throw new Error("Quota exceeded");
+            }
+            if (!res.ok) throw new Error(data?.detail?.message || data?.detail || `Create failed (${res.status})`);
+            return data;
+        }
+
+        async function openBlank() {
+            if (IS_SAAS()) {
+                showLoading("Creating new workbook…");
+                try {
+                    const created = await createWorkbookAndOpen("Untitled workbook");
+                    window.location.href = `/workbook?id=${encodeURIComponent(created.id)}`;
+                } catch (e) {
+                    if (e.message !== "Quota exceeded") showError(`Could not start a blank workbook: ${e.message}`);
+                }
+                return;
+            }
+            showLoading("Clearing workbook…");
+            try {
+                await fetch(`${API_BASE}/system/clear`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+                window.location.href = "/workbook";
+            } catch (e) {
+                hideLoading();
+                showError(`Could not start a blank workbook: ${e.message}`);
+            }
+        }
+
+        async function openContinue() {
+            window.location.href = "/workbook";
+        }
+
+        async function applyTemplateAndOpen(templateId, templateName) {
+            showLoading(`Applying “${templateName}”…`);
+            try {
+                if (IS_SAAS()) {
+                    // SaaS: provision a fresh workbook row, apply the template
+                    // into the per-(user, workbook_id) kernel, rename it, then
+                    // persist. Every call between create and redirect must pin
+                    // the X-Workbook-Id header to the newly-created id so all
+                    // mutations land in the same kernel (without it the server
+                    // would fall back to user.id and we'd write into the wrong
+                    // per-user kernel).
+                    const displayName = templateName || "Untitled workbook";
+                    const created = await createWorkbookAndOpen(displayName);
+                    const wbHeader = { "X-Workbook-Id": created.id };
+                    const applyRes = await fetch(`${API_BASE}/templates/apply/${encodeURIComponent(templateId)}`, {
+                        method: "POST",
+                        headers: wbHeader,
+                    });
+                    const applyData = await applyRes.json().catch(() => ({}));
+                    if (!applyRes.ok) throw new Error(applyData.detail || "Template apply failed.");
+                    await fetch(`${API_BASE}/workbook/rename`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", ...wbHeader },
+                        body: JSON.stringify({ name: displayName }),
+                    }).catch(() => {});
+                    const saveRes = await fetch(`${API_BASE}/system/save?workbook_id=${encodeURIComponent(created.id)}`, { method: "POST", headers: wbHeader });
+                    if (!saveRes.ok) throw new Error(`Save after template failed (${saveRes.status})`);
+                    await fetch(`${API_BASE}/workbooks/${encodeURIComponent(created.id)}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ title: displayName }),
+                    }).catch(() => {});
+                    window.location.href = `/workbook?id=${encodeURIComponent(created.id)}`;
+                    return;
+                }
+                const res = await fetch(`${API_BASE}/templates/apply/${encodeURIComponent(templateId)}`, { method: "POST" });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.detail || "Template apply failed.");
+                window.location.href = "/workbook";
+            } catch (e) {
+                hideLoading();
+                if (e.message !== "Quota exceeded") showError(`Could not apply template: ${e.message}`);
+            }
+        }
+
+        function renderTemplates(templates) {
+            const grid = document.getElementById("template-grid");
+            const empty = document.getElementById("template-empty");
+            grid.innerHTML = "";
+            if (!templates.length) {
+                grid.hidden = true;
+                empty.hidden = false;
+                return;
+            }
+            grid.hidden = false;
+            empty.hidden = true;
+
+            templates.forEach((tpl) => {
+                const card = document.createElement("div");
+                card.className = "card";
+                const cells = tpl.cell_count != null ? `${tpl.cell_count} cell${tpl.cell_count === 1 ? "" : "s"}` : "";
+                const when = formatDate(tpl.created_at);
+                const tagBits = [cells, when].filter(Boolean).join(" · ");
+                card.innerHTML = `
+                    <div class="card-thumb template"></div>
+                    <div class="card-title">${escapeHtml(tpl.name || tpl.id)}</div>
+                    <div class="card-description">${escapeHtml(tpl.description || "Saved workbook snapshot.")}</div>
+                    <div class="card-meta">
+                        <span>${escapeHtml(tpl.sheet_count != null ? `${tpl.sheet_count} sheet${tpl.sheet_count === 1 ? "" : "s"}` : "")}</span>
+                        <span class="card-tag">${escapeHtml(tagBits)}</span>
+                    </div>
+                `;
+                card.addEventListener("click", () => applyTemplateAndOpen(tpl.id, tpl.name || tpl.id));
+                grid.appendChild(card);
+            });
+        }
+
+        async function loadTemplates() {
+            try {
+                const res = await fetch(`${API_BASE}/templates/list`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || "Could not list templates.");
+                renderTemplates(data.templates || []);
+            } catch (e) {
+                const grid = document.getElementById("template-grid");
+                grid.innerHTML = `<div class="empty-state">Could not load templates: ${escapeHtml(e.message)}</div>`;
+            }
+        }
+
+        async function loadContinueMeta() {
+            try {
+                const res = await fetch(`${API_BASE}/debug/grid`);
+                const data = await res.json();
+                const cellCount = Object.keys(data.cells || {}).length;
+                const chartCount = (data.charts || []).length;
+                const label = cellCount ? `${cellCount} filled cells` : "empty";
+                document.getElementById("continue-thumb-label").textContent = label;
+                const bits = [];
+                if (cellCount) bits.push(`${cellCount} filled cell${cellCount === 1 ? "" : "s"}`);
+                if (chartCount) bits.push(`${chartCount} chart${chartCount === 1 ? "" : "s"}`);
+                document.getElementById("continue-description").textContent = bits.length
+                    ? `Last state: ${bits.join(", ")}.`
+                    : "No data yet — equivalent to starting blank.";
+            } catch {
+                document.getElementById("continue-thumb-label").textContent = "workbook";
+            }
+        }
+
+        // "Blank workbook" card was removed — openBlank() is still reachable
+        // through the OSS path of openContinue() (no-op when SaaS-only list
+        // exists) and through the hero prompt. Optional-chain the listener so
+        // a future reintroduction of the card is a one-line HTML add.
+        document.getElementById("card-blank")?.addEventListener("click", openBlank);
+        document.getElementById("card-continue").addEventListener("click", openContinue);
+
+        // ===== Hero prompt submit =====
+        const heroInput = document.getElementById("hero-prompt-input");
+        const heroSubmit = document.getElementById("hero-prompt-submit");
+
+        function syncHeroSubmitState() {
+            heroSubmit.disabled = heroInput.value.trim().length === 0;
+        }
+        heroInput.addEventListener("input", syncHeroSubmitState);
+        heroInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                submitHeroPrompt();
+            }
+        });
+        heroSubmit.addEventListener("click", submitHeroPrompt);
+        document.querySelectorAll("[data-example]").forEach((chip) => {
+            chip.addEventListener("click", () => {
+                heroInput.value = chip.dataset.example;
+                syncHeroSubmitState();
+                heroInput.focus();
+            });
+        });
+
+        async function submitHeroPrompt() {
+            const prompt = heroInput.value.trim();
+            if (!prompt) return;
+            showLoading("Preparing workbook…");
+            try {
+                sessionStorage.setItem("gridos.initialPrompt", prompt);
+                sessionStorage.setItem("gridos.initialAutosubmit", "1");
+                if (IS_SAAS()) {
+                    const created = await createWorkbookAndOpen(titleFromPrompt(prompt));
+                    window.location.href = `/workbook?id=${encodeURIComponent(created.id)}`;
+                    return;
+                }
+                await fetch(`${API_BASE}/system/clear`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({}),
+                });
+                window.location.href = "/workbook";
+            } catch (e) {
+                hideLoading();
+                if (e.message !== "Quota exceeded") showError(`Could not start workbook: ${e.message}`);
+            }
+        }
+
+        loadTemplates();
+        loadContinueMeta();
+
+        // ===== Your workbooks (SaaS-only) =====
+        function formatRelative(iso) {
+            if (!iso) return "";
+            const then = new Date(iso).getTime();
+            if (Number.isNaN(then)) return "";
+            const diff = Date.now() - then;
+            const m = Math.round(diff / 60000);
+            if (m < 1) return "just now";
+            if (m < 60) return `${m}m ago`;
+            const h = Math.round(m / 60);
+            if (h < 24) return `${h}h ago`;
+            const d = Math.round(h / 24);
+            if (d < 30) return `${d}d ago`;
+            return new Date(iso).toLocaleDateString();
+        }
+
+        async function deleteWorkbook(id, title) {
+            if (!confirm(`Delete "${title || 'Untitled workbook'}"? This can't be undone.`)) return;
+            try {
+                const res = await fetch(`${API_BASE}/workbooks/${encodeURIComponent(id)}`, { method: "DELETE" });
+                if (!res.ok) throw new Error(`Delete failed (${res.status})`);
+                await loadWorkbooks();
+            } catch (e) {
+                showError(`Could not delete: ${e.message}`);
+            }
+        }
+
+        function renderWorkbookCards(list, quota) {
+            const grid = document.getElementById("workbooks-grid");
+            grid.innerHTML = "";
+
+            // Existing workbooks first (most-recently-used order from the server).
+            list.forEach((wb) => {
+                const card = document.createElement("div");
+                card.className = "card workbook-card";
+                card.innerHTML = `
+                    <div class="card-thumb workbook">${escapeHtml(wb.title || "Untitled")}</div>
+                    <div class="card-title">${escapeHtml(wb.title || "Untitled workbook")}</div>
+                    <div class="card-meta">
+                        <span>${escapeHtml(formatRelative(wb.updated_at))}</span>
+                    </div>
+                    <button class="workbook-card-delete" type="button" title="Delete workbook" aria-label="Delete workbook">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                    </button>
+                `;
+                card.addEventListener("click", (e) => {
+                    if (e.target.closest(".workbook-card-delete")) return;
+                    window.location.href = `/workbook?id=${encodeURIComponent(wb.id)}`;
+                });
+                card.querySelector(".workbook-card-delete").addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    deleteWorkbook(wb.id, wb.title);
+                });
+                grid.appendChild(card);
+            });
+
+            // "+ New workbook" card, unless the user's at their cap.
+            const atLimit = quota.limit > 0 && quota.used >= quota.limit;
+            if (!atLimit) {
+                const card = document.createElement("div");
+                card.className = "card";
+                card.innerHTML = `
+                    <div class="card-thumb new-workbook">+</div>
+                    <div class="card-title">New workbook</div>
+                    <div class="card-description">Blank sheet you can rename, save, and come back to.</div>
+                `;
+                card.addEventListener("click", openBlank);
+                grid.appendChild(card);
+            } else {
+                const card = document.createElement("div");
+                card.className = "empty-state";
+                card.innerHTML = `
+                    <strong>Workbook slots full.</strong><br />
+                    Delete one above or upgrade your plan for more.
+                `;
+                grid.appendChild(card);
+            }
+        }
+
+        function renderQuotaBadge(quota) {
+            const badge = document.getElementById("quota-badge");
+            if (!badge) return;
+            if (quota.limit === 0) {
+                badge.textContent = `${quota.used} workbooks · unlimited (${quota.tier})`;
+                badge.classList.remove("at-limit");
+            } else {
+                badge.textContent = `${quota.used} / ${quota.limit} used · ${quota.tier} plan`;
+                badge.classList.toggle("at-limit", quota.used >= quota.limit);
+            }
+        }
+
+        async function loadWorkbooks() {
+            try {
+                const res = await fetch(`${API_BASE}/workbooks`);
+                if (!res.ok) {
+                    // 404 = OSS mode or feature disabled — leave section hidden.
+                    return;
+                }
+                const data = await res.json();
+                const list = data.workbooks || [];
+                renderQuotaBadge({ tier: data.tier, used: data.used, limit: data.limit });
+                renderWorkbookCards(list, { used: data.used, limit: data.limit });
+                document.getElementById("workbooks-section").hidden = false;
+                // Recent-activity section is redundant in multi-workbook mode.
+                const recent = document.getElementById("recent-activity-section");
+                if (recent) recent.hidden = true;
+            } catch (_) {
+                // Network hiccup — keep the section hidden; user can still
+                // use hero-prompt / blank-card paths below.
+            }
+            // Shared-with-me renders as a separate strip under the owned
+            // grid. Failure is silent — a user with no shares or no schema
+            // migration yet shouldn't see an error.
+            try {
+                const res = await fetch(`${API_BASE}/workbook/shared-with-me`);
+                if (!res.ok) return;
+                const data = await res.json();
+                renderSharedWorkbooks(data.workbooks || []);
+            } catch (_) { /* silent */ }
+        }
+
+        function renderSharedWorkbooks(list) {
+            let section = document.getElementById("shared-section");
+            // If nobody shared anything with us, hide the section entirely.
+            if (!list.length) {
+                if (section) section.hidden = true;
+                return;
+            }
+            // Lazy-create the section the first time we have shares to show.
+            if (!section) {
+                section = document.createElement("section");
+                section.id = "shared-section";
+                section.className = "section";
+                section.innerHTML = `
+                    <h2 class="section-title">Shared with me</h2>
+                    <div class="grid" id="shared-grid"></div>
+                `;
+                const workbooksSection = document.getElementById("workbooks-section");
+                workbooksSection.insertAdjacentElement("afterend", section);
+            }
+            section.hidden = false;
+            const grid = document.getElementById("shared-grid");
+            grid.innerHTML = "";
+            list.forEach((wb) => {
+                const card = document.createElement("div");
+                card.className = "card workbook-card";
+                const owner = wb.owner_email ? `from ${escapeHtml(wb.owner_email)}` : "shared";
+                card.innerHTML = `
+                    <div class="card-thumb workbook">${escapeHtml(wb.title || "Untitled")}</div>
+                    <div class="card-title">${escapeHtml(wb.title || "Untitled workbook")}</div>
+                    <div class="card-meta">
+                        <span>${owner} · ${escapeHtml(wb.role || "editor")}</span>
+                    </div>
+                `;
+                card.addEventListener("click", () => {
+                    window.location.href = `/workbook?id=${encodeURIComponent(wb.id)}`;
+                });
+                grid.appendChild(card);
+            });
+        }
+
+        // Fire as soon as we know we're signed into SaaS.
+        window.addEventListener("gridos:saas-ready", loadWorkbooks);
+        if (window.__gridosSession) loadWorkbooks();
+
+        // ===== Account avatar + popover (SaaS only) =====
+        function avatarInitials(email) {
+            if (!email) return "·";
+            const local = (email.split("@")[0] || "");
+            if (!local) return email[0]?.toUpperCase() || "·";
+            const parts = local.split(/[.\-_]/).filter(Boolean);
+            const pick = parts.length >= 2 ? parts[0][0] + parts[1][0] : local.slice(0, 2);
+            return pick.toUpperCase();
+        }
+        function formatNumber(n) { return (n || 0).toLocaleString(); }
+        function formatCostCents(c) {
+            const v = c || 0;
+            if (v === 0) return "< $0.01";
+            return `$${(v / 100).toFixed(2)}`;
+        }
+        function formatMonthLabel(iso) {
+            if (!iso) return "";
+            const [y, m] = iso.split("-");
+            const names = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+            return `${names[Number(m) - 1] || m} ${y}`;
+        }
+
+        async function paintAccountPopover() {
+            try {
+                const res = await fetch(`${API_BASE}/usage/me`);
+                if (!res.ok) return;
+                const d = await res.json();
+                const initials = avatarInitials(d.email);
+                document.getElementById("account-avatar-initials").textContent = initials;
+                document.getElementById("account-popover-avatar").textContent = initials;
+                document.getElementById("account-popover-email").textContent = d.email || "—";
+                document.getElementById("account-popover-tier").textContent = `${d.tier || "free"} plan`;
+                document.getElementById("account-popover-month").textContent = formatMonthLabel(d.month) || "This month";
+                document.getElementById("account-popover-tokens").textContent = (d.tier_limit > 0)
+                    ? `${formatNumber(d.total_tokens)} / ${formatNumber(d.tier_limit)}`
+                    : formatNumber(d.total_tokens);
+                document.getElementById("account-popover-cost").textContent = formatCostCents(d.cost_cents);
+                const quotaWrap = document.getElementById("account-popover-quota");
+                const quotaFill = document.getElementById("account-popover-quota-fill");
+                const quotaNote = document.getElementById("account-popover-quota-note");
+                if (d.tier_limit && d.tier_limit > 0) {
+                    quotaWrap.hidden = false;
+                    const pct = Math.max(0, Math.min(100, d.quota_pct || 0));
+                    quotaFill.style.width = `${pct}%`;
+                    quotaFill.classList.toggle("over-80", pct >= 80 && pct < 100);
+                    quotaFill.classList.toggle("over-100", pct >= 100);
+                    quotaNote.textContent = pct >= 100
+                        ? "Monthly cap reached — resets on the 1st."
+                        : `${(d.tokens_remaining || 0).toLocaleString()} tokens remaining this month.`;
+                } else {
+                    quotaWrap.hidden = true;
+                }
+            } catch (_) { /* silent */ }
+        }
+
+        function toggleAccountPopover(force) {
+            const pop = document.getElementById("account-popover");
+            const avatar = document.getElementById("account-avatar");
+            if (!pop) return;
+            const open = force !== undefined ? force : pop.hasAttribute("hidden");
+            if (open) {
+                pop.removeAttribute("hidden");
+                avatar?.setAttribute("aria-expanded", "true");
+                paintAccountPopover();
+            } else {
+                pop.setAttribute("hidden", "");
+                avatar?.setAttribute("aria-expanded", "false");
+            }
+        }
+
+        function setupAccountAvatar() {
+            const wrap = document.getElementById("account-wrap");
+            if (!wrap) return;
+            wrap.hidden = false;
+            document.getElementById("account-avatar")?.addEventListener("click", (e) => {
+                e.stopPropagation();
+                toggleAccountPopover();
+            });
+            document.addEventListener("click", (e) => {
+                if (!wrap.contains(e.target)) toggleAccountPopover(false);
+            });
+            document.addEventListener("keydown", (e) => {
+                if (e.key === "Escape") toggleAccountPopover(false);
+            });
+            document.getElementById("account-popover-open")?.addEventListener("click", () => {
+                window.location.href = "/workbook";
+            });
+            document.getElementById("account-popover-signout")?.addEventListener("click", async () => {
+                if (window.__gridosSupabase) {
+                    await window.__gridosSupabase.auth.signOut();
+                }
+                window.location.replace("/login");
+            });
+            paintAccountPopover();
+        }
+
+        // If the auth-gate module fired this, we're in SaaS mode and signed in.
+        // If it already ran before this script loaded (race), the window flag
+        // will be set — check that too.
+        window.addEventListener("gridos:saas-ready", setupAccountAvatar);
+        if (window.__gridosSession) setupAccountAvatar();
+    </script>
+</body>
+</html>

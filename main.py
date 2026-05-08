@@ -2118,6 +2118,13 @@ async def serve_landing():
     return FileResponse("static/landing.html")
 
 
+@app.get("/app")
+async def serve_dashboard():
+    """Authenticated entry point — workbook list, account settings, marketplace.
+    JS bootstrap inside dashboard.html bounces unauth visitors to /login."""
+    return FileResponse("static/dashboard.html")
+
+
 @app.get("/workbook")
 async def serve_workbook():
     return FileResponse("static/index.html")

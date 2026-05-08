@@ -1,1277 +1,1239 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en" class="scroll-smooth">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GridOS</title>
-    <style>
-        :root {
-            --bg: #ffffff;
-            --bg-soft: #f8f9fa;
-            --bg-hover: #f1f3f4;
-            --border: #dadce0;
-            --border-soft: #e8eaed;
-            --text: #202124;
-            --text-muted: #5f6368;
-            --text-mutedder: #80868b;
-            --accent: #1a73e8;
-            --accent-soft: #e8f0fe;
-            --accent-hover: #1765cc;
-            --success: #1e8e3e;
-            --danger: #d93025;
-            --shadow-1: 0 1px 2px rgba(60, 64, 67, 0.1), 0 1px 3px rgba(60, 64, 67, 0.08);
-            --shadow-2: 0 2px 6px rgba(60, 64, 67, 0.15);
-            --shadow-3: 0 4px 12px rgba(60, 64, 67, 0.18);
-            --radius: 8px;
-            --radius-sm: 4px;
-            --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-        }
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>GridOS — The AI-native spreadsheet for finance teams</title>
+<meta name="description" content="GridOS is the AI-native spreadsheet for analysts, founders, and engineers. Type a sentence — get a 3-statement model, DCF, or scenario table. Open core. Bring your own LLM. Programmable via API." />
+<meta property="og:title" content="GridOS — The AI-native spreadsheet for finance teams" />
+<meta property="og:description" content="Type a sentence, get a model. Open core. BYOK. Engine API." />
+<meta property="og:type" content="website" />
+<meta property="og:url" content="https://gridos.onrender.com" />
+<meta name="twitter:card" content="summary_large_image" />
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3.5' fill='%234f46e5'/%3E%3Cpath d='M3 6h10M3 10h10M6 3v10M10 3v10' stroke='white' stroke-width='1.4' fill='none'/%3E%3C/svg%3E" />
 
-        * { box-sizing: border-box; }
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
 
-        html, body {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            font-family: var(--font-ui);
-            font-size: 14px;
-            color: var(--text);
-            background: var(--bg-soft);
-            -webkit-font-smoothing: antialiased;
-        }
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: {
+          sans: ['Inter', 'ui-sans-serif', 'system-ui'],
+          mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular'],
+        },
+        colors: {
+          brand: { 50:'#eef2ff', 100:'#e0e7ff', 500:'#6366f1', 600:'#4f46e5', 700:'#4338ca', 900:'#312e81' },
+        },
+        keyframes: {
+          'cell-pop':     { '0%': { opacity:'0', transform:'translateY(2px)' }, '100%': { opacity:'1', transform:'translateY(0)' } },
+          'cursor-blink': { '0%, 49%': { opacity:'1' }, '50%, 100%': { opacity:'0' } },
+          'draw-line':    { '0%': { strokeDashoffset:'400' }, '100%': { strokeDashoffset:'0' } },
+        },
+        animation: {
+          'cell-pop':     'cell-pop 0.3s ease-out both',
+          'cursor-blink': 'cursor-blink 1s steps(1) infinite',
+        },
+      },
+    },
+  };
+</script>
 
-        a { color: var(--accent); text-decoration: none; }
-        a:hover { text-decoration: underline; }
+<style>
+  html, body { background:#fff; color:#18181b; }
+  body { font-family:'Inter',ui-sans-serif,system-ui; -webkit-font-smoothing:antialiased; }
+  ::selection { background:#c7d2fe; color:#312e81; }
 
-        /* ===== Top bar ===== */
-        .topbar {
-            height: 60px;
-            background: var(--bg);
-            border-bottom: 1px solid var(--border-soft);
-            display: flex;
-            align-items: center;
-            padding: 0 32px;
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
+  .hero-bg {
+    background-image: radial-gradient(circle at 1px 1px, rgba(0,0,0,0.04) 1px, transparent 0);
+    background-size: 22px 22px; background-position: center top;
+  }
 
-        .topbar-brand {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
+  /* Mockup grid (light, real-product feel) */
+  .mc-cell {
+    border-right:1px solid #f4f4f5; border-bottom:1px solid #f4f4f5;
+    padding:7px 10px; font-family:'Inter',ui-sans-serif; font-size:12px; color:#27272a;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; background:#fff;
+  }
+  .mc-cell.is-header { background:#fafafa; color:#71717a; font-weight:500; font-size:11px; }
+  .mc-cell.is-label  { color:#18181b; font-weight:500; }
+  .mc-cell.is-number { text-align:right; font-variant-numeric:tabular-nums; font-feature-settings:"tnum"; color:#18181b; }
+  .mc-cell.is-active {
+    background:#eef2ff; box-shadow: inset 0 0 0 1.5px #4f46e5;
+    z-index:2; position:relative;
+  }
+  .mc-cell.is-dep { background:#fef3c7; box-shadow: inset 0 0 0 1px #f59e0b; }
 
-        .topbar-logo {
-            width: 28px;
-            height: 28px;
-            border-radius: 6px;
-            background: linear-gradient(135deg, #1a73e8, #34a853);
-            display: grid;
-            place-items: center;
-            color: #fff;
-            font-weight: 700;
-            font-size: 12px;
-            letter-spacing: 0.02em;
-        }
+  .spinner { width:12px;height:12px;border-radius:50%;border:2px solid #e4e4e7;border-top-color:#4f46e5;animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
 
-        .topbar-brand h1 {
-            margin: 0;
-            font-size: 17px;
-            font-weight: 600;
-            letter-spacing: -0.01em;
-        }
+  details > summary { list-style:none; cursor:pointer; }
+  details > summary::-webkit-details-marker { display:none; }
+  details[open] .faq-chev { transform:rotate(180deg); }
+  .faq-chev { transition:transform .2s ease; }
 
-        .topbar-spacer { flex: 1; }
+  /* Reveal-on-scroll */
+  .reveal { opacity:0; transform:translateY(8px); transition:opacity .55s ease, transform .55s ease; }
+  .reveal.is-in { opacity:1; transform:translateY(0); }
+  .reveal-stagger > * { opacity:0; transform:translateY(8px); transition:opacity .5s ease, transform .5s ease; }
+  .reveal-stagger.is-in > *:nth-child(1) { transition-delay:.00s; opacity:1; transform:translateY(0); }
+  .reveal-stagger.is-in > *:nth-child(2) { transition-delay:.06s; opacity:1; transform:translateY(0); }
+  .reveal-stagger.is-in > *:nth-child(3) { transition-delay:.12s; opacity:1; transform:translateY(0); }
+  .reveal-stagger.is-in > *:nth-child(4) { transition-delay:.18s; opacity:1; transform:translateY(0); }
+  .reveal-stagger.is-in > *:nth-child(5) { transition-delay:.24s; opacity:1; transform:translateY(0); }
+  .reveal-stagger.is-in > *:nth-child(6) { transition-delay:.30s; opacity:1; transform:translateY(0); }
+  .reveal-stagger.is-in > *:nth-child(7) { transition-delay:.36s; opacity:1; transform:translateY(0); }
 
-        .topbar-actions { display: flex; align-items: center; gap: 14px; }
+  /* Section heading underline that draws on enter */
+  .section-eyebrow { position:relative; display:inline-block; }
+  .section-eyebrow::after {
+    content:""; position:absolute; left:0; bottom:-6px; height:2px; width:0;
+    background:#4f46e5; transition: width .7s cubic-bezier(0.16,1,0.3,1) .15s;
+  }
+  .reveal.is-in .section-eyebrow::after { width:32px; }
 
-        .topbar-actions a {
-            font-size: 13px;
-            color: var(--text-muted);
-            padding: 6px 10px;
-            border-radius: var(--radius-sm);
-        }
-        .topbar-actions a:hover {
-            background: var(--bg-hover);
-            color: var(--text);
-            text-decoration: none;
-        }
+  /* Hover lift for cards */
+  .hover-lift { transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease; }
+  .hover-lift:hover { transform: translateY(-2px); box-shadow: 0 12px 28px -12px rgba(15,23,42,0.12), 0 4px 10px -4px rgba(15,23,42,0.06); border-color:#d4d4d8; }
 
-        /* Account avatar + popover (SaaS only) */
-        .account-wrap { position: relative; }
-        .account-avatar {
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            border: 1px solid var(--border);
-            background: linear-gradient(135deg, #1a73e8, #34a853);
-            color: #fff;
-            font-size: 12px;
-            font-weight: 600;
-            display: grid;
-            place-items: center;
-            cursor: pointer;
-            padding: 0;
-            transition: box-shadow 120ms ease, transform 80ms ease;
-        }
-        .account-avatar:hover { box-shadow: 0 0 0 3px var(--accent-soft); }
-        .account-avatar:active { transform: scale(0.96); }
-        .account-popover {
-            position: absolute;
-            top: calc(100% + 8px);
-            right: 0;
-            width: 280px;
-            background: var(--bg);
-            border: 1px solid var(--border-soft);
-            border-radius: 12px;
-            box-shadow: var(--shadow-3);
-            padding: 14px;
-            z-index: 120;
-            font-size: 13px;
-        }
-        .account-popover[hidden] { display: none; }
-        .account-popover-head {
-            display: flex; align-items: center; gap: 10px;
-            padding-bottom: 12px;
-            border-bottom: 1px solid var(--border-soft);
-        }
-        .account-popover-avatar {
-            width: 36px; height: 36px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #1a73e8, #34a853);
-            color: #fff; display: grid; place-items: center;
-            font-weight: 600; font-size: 13px; flex-shrink: 0;
-        }
-        .account-popover-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-        .account-popover-email {
-            font-weight: 500; color: var(--text);
-            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        }
-        .account-popover-tier {
-            font-size: 11px; color: var(--text-muted); text-transform: capitalize;
-        }
-        .account-popover-stats {
-            display: flex; gap: 12px;
-            padding: 12px 0;
-            border-bottom: 1px solid var(--border-soft);
-        }
-        .account-popover-stat { flex: 1; display: flex; flex-direction: column; gap: 2px; }
-        .account-popover-stat-label {
-            font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
-            color: var(--text-mutedder);
-        }
-        .account-popover-stat-value { font-size: 13px; font-weight: 500; color: var(--text); }
-        .account-popover-actions { display: flex; flex-direction: column; padding-top: 8px; }
-        .account-popover-link {
-            text-align: left; padding: 8px 6px;
-            background: transparent; border: none; border-radius: 6px;
-            color: var(--text); font-size: 13px; cursor: pointer; font-family: inherit;
-        }
-        .account-popover-link:hover { background: var(--bg-hover); }
-        .account-popover-link-danger { color: var(--danger); }
+  /* Comparison table */
+  .compare-row td { padding:16px 20px; font-size:14px; }
+  .compare-row td:first-child { font-weight:500; color:#18181b; }
+  .compare-row { border-top:1px solid #f4f4f5; opacity:0; transform:translateY(6px); transition:opacity .5s ease, transform .5s ease; }
+  .compare-row.is-in { opacity:1; transform:translateY(0); }
+  .check-yes { color:#16a34a; font-weight:600; }
+  .check-no  { color:#d4d4d8; }
+  .check-partial { color:#a16207; font-size:12px; }
 
-        /* Workbook card — SaaS-only "Your workbooks" grid. */
-        .workbook-card {
-            position: relative;
-        }
-        .workbook-card-delete {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            width: 26px;
-            height: 26px;
-            border-radius: 50%;
-            border: 1px solid var(--border-soft);
-            background: var(--bg);
-            color: var(--text-mutedder);
-            display: grid;
-            place-items: center;
-            cursor: pointer;
-            opacity: 0;
-            transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
-        }
-        .card:hover .workbook-card-delete { opacity: 1; }
-        .workbook-card-delete:hover {
-            color: var(--danger);
-            border-color: var(--danger);
-        }
-        .workbook-card-delete svg { width: 14px; height: 14px; }
+  /* Workflow diagram */
+  .flow-node {
+    border:1px solid #e4e4e7; background:#fff; border-radius:12px;
+    padding:14px 16px; min-width:140px;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+    position:relative;
+  }
+  .flow-node-accent { border-color:#c7d2fe; background:#eef2ff; }
+  .flow-line { stroke:#a1a1aa; stroke-width:1.5; fill:none; stroke-dasharray:400; stroke-dashoffset:400; transition: stroke-dashoffset 1.6s cubic-bezier(0.16,1,0.3,1); }
+  .flow-line.is-in { stroke-dashoffset:0; }
+  .flow-line-accent { stroke:#4f46e5; }
 
-        .card-thumb.workbook {
-            background: linear-gradient(135deg, #eef3fe, #d4e4fc);
-            border: 1px solid var(--accent-soft);
-            color: var(--accent);
-            font-weight: 500;
-        }
+  /* Mini chart in hero */
+  .chart-line { stroke:#4f46e5; stroke-width:2; fill:none; stroke-linecap:round; stroke-linejoin:round; stroke-dasharray:600; stroke-dashoffset:600; transition: stroke-dashoffset 1.4s ease; }
+  .chart-line.is-in { stroke-dashoffset:0; }
+  .chart-area { fill:url(#chartGrad); opacity:0; transition: opacity 1s ease .8s; }
+  .chart-area.is-in { opacity:1; }
+  .chart-bar { fill:#e0e7ff; opacity:0; transition: opacity .4s ease, transform .4s ease; transform-origin: bottom; transform: scaleY(0); }
+  .chart-bar.is-in { opacity:1; transform: scaleY(1); }
 
-        .card-thumb.new-workbook {
-            background: var(--bg-soft);
-            border: 1px dashed var(--border);
-            color: var(--accent);
-            font-size: 24px;
-        }
+  /* Mobile menu */
+  .mobile-menu { transform: translateX(100%); transition: transform .3s ease; }
+  .mobile-menu.is-open { transform: translateX(0); }
+  body.menu-open { overflow:hidden; }
 
-        .quota-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 2px 10px;
-            border-radius: 999px;
-            background: var(--bg-soft);
-            border: 1px solid var(--border-soft);
-            font-size: 11px;
-            color: var(--text-muted);
-        }
-        .quota-badge.at-limit {
-            background: #fff5f5;
-            border-color: var(--danger);
-            color: var(--danger);
-        }
-        .account-popover-quota {
-            padding: 10px 0;
-            border-bottom: 1px solid var(--border-soft);
-        }
-        .account-popover-quota[hidden] { display: none; }
-        .account-popover-quota-bar {
-            height: 6px; background: var(--bg-soft); border-radius: 999px; overflow: hidden;
-        }
-        .account-popover-quota-fill {
-            height: 100%; background: var(--accent); width: 0%;
-            transition: width 200ms ease, background-color 200ms ease;
-        }
-        .account-popover-quota-fill.over-80  { background: #f59e0b; }
-        .account-popover-quota-fill.over-100 { background: var(--danger); }
-        .account-popover-quota-note { margin-top: 6px; font-size: 11px; color: var(--text-mutedder); }
+  /* Logo grayscale */
+  .logo-mono { color:#52525b; transition: color .2s ease; }
+  .logo-mono:hover { color:#18181b; }
 
-        /* ===== Page layout ===== */
-        .page {
-            max-width: 1120px;
-            margin: 0 auto;
-            padding: 48px 32px 80px;
-        }
-
-        .hero {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            margin-bottom: 32px;
-        }
-
-        .hero-eyebrow {
-            font-size: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: var(--accent);
-            font-weight: 500;
-        }
-
-        .hero h2 {
-            margin: 0;
-            font-size: 32px;
-            font-weight: 600;
-            letter-spacing: -0.02em;
-        }
-
-        .hero p {
-            margin: 0;
-            font-size: 15px;
-            color: var(--text-muted);
-            max-width: 560px;
-        }
-
-        /* ===== Section ===== */
-        .section {
-            margin-bottom: 40px;
-        }
-
-        .section-head {
-            display: flex;
-            align-items: baseline;
-            justify-content: space-between;
-            margin-bottom: 16px;
-        }
-
-        .section-head h3 {
-            margin: 0;
-            font-size: 15px;
-            font-weight: 500;
-            color: var(--text);
-        }
-
-        .section-head .section-hint {
-            font-size: 12px;
-            color: var(--text-mutedder);
-        }
-
-        /* ===== Template/card grid ===== */
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 16px;
-        }
-
-        .card {
-            background: var(--bg);
-            border: 1px solid var(--border-soft);
-            border-radius: var(--radius);
-            padding: 18px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            cursor: pointer;
-            transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
-            min-height: 160px;
-        }
-
-        .card:hover {
-            border-color: var(--accent);
-            box-shadow: var(--shadow-2);
-        }
-
-        .card-thumb {
-            height: 84px;
-            background: var(--bg-soft);
-            border-radius: var(--radius-sm);
-            border: 1px dashed var(--border);
-            display: grid;
-            place-items: center;
-            color: var(--text-mutedder);
-            font-size: 11px;
-            margin-bottom: 4px;
-        }
-
-        .card-thumb.template {
-            background:
-                linear-gradient(90deg, rgba(26, 115, 232, 0.08) 1px, transparent 1px) 0 0/20px 100%,
-                linear-gradient(0deg, rgba(26, 115, 232, 0.08) 1px, transparent 1px) 0 0/100% 14px,
-                var(--bg-soft);
-            border: 1px solid var(--border-soft);
-        }
-
-        .card-title {
-            font-size: 14px;
-            font-weight: 500;
-            color: var(--text);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-
-        .card-meta {
-            font-size: 11px;
-            color: var(--text-muted);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 8px;
-        }
-
-        .card-meta .card-tag {
-            background: var(--bg-soft);
-            border: 1px solid var(--border-soft);
-            border-radius: 999px;
-            padding: 2px 8px;
-            color: var(--text-muted);
-            font-size: 10px;
-        }
-
-        .card-description {
-            font-size: 12px;
-            color: var(--text-muted);
-            line-height: 1.45;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-        }
-
-        .empty-state {
-            padding: 24px;
-            border: 1px dashed var(--border);
-            border-radius: var(--radius);
-            text-align: center;
-            color: var(--text-muted);
-            font-size: 13px;
-            background: var(--bg);
-        }
-
-        .skeleton {
-            padding: 24px;
-            border: 1px solid var(--border-soft);
-            border-radius: var(--radius);
-            color: var(--text-mutedder);
-            font-size: 12px;
-            background: var(--bg);
-        }
-
-        .skeleton .skeleton-row {
-            height: 10px;
-            background: var(--bg-soft);
-            border-radius: 4px;
-            margin-bottom: 8px;
-        }
-        .skeleton .skeleton-row:nth-child(1) { width: 60%; }
-        .skeleton .skeleton-row:nth-child(2) { width: 40%; }
-        .skeleton .skeleton-row:nth-child(3) { width: 75%; }
-
-        /* ===== Loading overlay ===== */
-        .loading-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(255, 255, 255, 0.85);
-            display: grid;
-            place-items: center;
-            z-index: 1000;
-        }
-        .loading-overlay[hidden] { display: none; }
-
-        .spinner {
-            width: 28px;
-            height: 28px;
-            border: 3px solid var(--border);
-            border-top-color: var(--accent);
-            border-radius: 50%;
-            animation: spin 800ms linear infinite;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        .loading-text {
-            margin-top: 12px;
-            color: var(--text-muted);
-            font-size: 13px;
-        }
-        .loading-group {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-
-        /* ===== Error toast ===== */
-        .toast {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            background: var(--bg);
-            border: 1px solid var(--danger);
-            border-radius: var(--radius);
-            box-shadow: var(--shadow-3);
-            padding: 12px 16px;
-            font-size: 13px;
-            color: var(--danger);
-            max-width: 320px;
-            z-index: 500;
-        }
-        .toast[hidden] { display: none; }
-
-        /* ===== Hero prompt ===== */
-        .hero-prompt {
-            background: var(--bg);
-            border: 1px solid var(--border-soft);
-            border-radius: 14px;
-            box-shadow: var(--shadow-1);
-            padding: 18px 18px 14px;
-            margin-bottom: 24px;
-            transition: border-color 120ms ease, box-shadow 120ms ease;
-        }
-        .hero-prompt:focus-within {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-soft);
-        }
-        .hero-prompt-row {
-            display: flex;
-            align-items: flex-end;
-            gap: 10px;
-        }
-        .hero-prompt textarea {
-            flex: 1;
-            border: none;
-            outline: none;
-            resize: none;
-            font-family: var(--font-ui);
-            font-size: 16px;
-            color: var(--text);
-            background: transparent;
-            min-height: 48px;
-            max-height: 200px;
-            line-height: 1.45;
-            padding: 4px 2px;
-        }
-        .hero-prompt textarea::placeholder {
-            color: var(--text-mutedder);
-        }
-        .hero-prompt-submit {
-            background: var(--accent);
-            color: #fff;
-            border: none;
-            border-radius: 10px;
-            padding: 10px 16px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: background 120ms ease;
-            white-space: nowrap;
-        }
-        .hero-prompt-submit:hover:not(:disabled) {
-            background: var(--accent-hover);
-        }
-        .hero-prompt-submit:disabled {
-            background: var(--border);
-            color: var(--text-mutedder);
-            cursor: not-allowed;
-        }
-        .hero-prompt-hint {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            margin-top: 10px;
-            font-size: 11px;
-            color: var(--text-mutedder);
-        }
-        .hero-prompt-examples {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-top: 14px;
-        }
-        .hero-prompt-chip {
-            background: var(--bg-soft);
-            border: 1px solid var(--border-soft);
-            border-radius: 999px;
-            padding: 6px 12px;
-            font-size: 12px;
-            color: var(--text-muted);
-            cursor: pointer;
-            transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
-        }
-        .hero-prompt-chip:hover {
-            border-color: var(--accent);
-            color: var(--accent);
-            background: var(--accent-soft);
-        }
-
-        @media (max-width: 640px) {
-            .page { padding: 32px 20px 60px; }
-            .hero h2 { font-size: 26px; }
-            .topbar { padding: 0 16px; }
-            .hero-prompt-row { flex-direction: column; align-items: stretch; }
-            .hero-prompt-submit { width: 100%; }
-        }
-    </style>
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration:0.01ms!important; transition-duration:0.01ms!important; scroll-behavior:auto!important; }
+    .reveal, .reveal-stagger > *, .compare-row { opacity:1!important; transform:none!important; }
+    .chart-line, .flow-line { stroke-dashoffset:0!important; }
+    .chart-area, .chart-bar { opacity:1!important; transform:none!important; }
+  }
+</style>
 </head>
-<body>
-    <header class="topbar">
-        <div class="topbar-brand">
-            <div class="topbar-logo">GO</div>
-            <h1>GridOS</h1>
-        </div>
-        <div class="topbar-spacer"></div>
-        <div class="topbar-actions">
-            <a href="https://github.com/shreydevkar/gridos_kernel" target="_blank" rel="noopener">GitHub</a>
-            <div class="account-wrap" id="account-wrap" hidden>
-                <button class="account-avatar" id="account-avatar" type="button" title="Account" aria-haspopup="true" aria-expanded="false">
-                    <span id="account-avatar-initials">·</span>
-                </button>
-                <div class="account-popover" id="account-popover" hidden role="dialog">
-                    <div class="account-popover-head">
-                        <div class="account-popover-avatar" id="account-popover-avatar">·</div>
-                        <div class="account-popover-who">
-                            <div class="account-popover-email" id="account-popover-email">—</div>
-                            <div class="account-popover-tier" id="account-popover-tier">free plan</div>
-                        </div>
-                    </div>
-                    <div class="account-popover-stats">
-                        <div class="account-popover-stat">
-                            <span class="account-popover-stat-label" id="account-popover-month">This month</span>
-                            <span class="account-popover-stat-value" id="account-popover-tokens">—</span>
-                        </div>
-                        <div class="account-popover-stat">
-                            <span class="account-popover-stat-label">Est. cost</span>
-                            <span class="account-popover-stat-value" id="account-popover-cost">—</span>
-                        </div>
-                    </div>
-                    <div class="account-popover-quota" id="account-popover-quota" hidden>
-                        <div class="account-popover-quota-bar">
-                            <div class="account-popover-quota-fill" id="account-popover-quota-fill"></div>
-                        </div>
-                        <div class="account-popover-quota-note" id="account-popover-quota-note"></div>
-                    </div>
-                    <div class="account-popover-actions">
-                        <button type="button" class="account-popover-link" id="account-popover-open">Open workbook</button>
-                        <button type="button" class="account-popover-link account-popover-link-danger" id="account-popover-signout">Sign out</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </header>
+<body class="antialiased">
 
-    <main class="page">
-        <section class="hero">
-            <span class="hero-eyebrow">Agentic spreadsheet</span>
-            <h2>What do you want to build?</h2>
-            <p>Describe a model, forecast, or dataset and GridOS will scaffold a fresh workbook for you. Or scroll down to open a blank sheet, pick a saved template, or continue where you left off.</p>
-        </section>
+<!-- ─── NAV ─────────────────────────────────────────── -->
+<header class="sticky top-0 z-50 border-b border-zinc-200/80 bg-white/85 backdrop-blur-md">
+  <nav class="mx-auto max-w-7xl flex items-center justify-between px-6 h-16">
+    <a href="#" class="flex items-center gap-2.5">
+      <span class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-brand-600">
+        <svg viewBox="0 0 16 16" class="h-4 w-4 text-white" fill="none" stroke="currentColor" stroke-width="1.6">
+          <rect x="2" y="2" width="12" height="12" rx="2" />
+          <path d="M2 6h12M2 10h12M6 2v12M10 2v12" />
+        </svg>
+      </span>
+      <span class="font-semibold tracking-tight text-zinc-900">GridOS</span>
+    </a>
+    <div class="hidden md:flex items-center gap-8 text-sm text-zinc-600">
+      <a href="#product" class="hover:text-zinc-900 transition">Product</a>
+      <a href="#how" class="hover:text-zinc-900 transition">How it works</a>
+      <a href="#use-cases" class="hover:text-zinc-900 transition">Use cases</a>
+      <a href="#api" class="hover:text-zinc-900 transition">API</a>
+      <a href="#pricing" class="hover:text-zinc-900 transition">Pricing</a>
+      <a href="https://gridos.mintlify.app" class="hover:text-zinc-900 transition">Docs</a>
+    </div>
+    <div class="hidden md:flex items-center gap-2">
+      <a href="https://github.com/shreydevkar/gridos_kernel" class="inline-flex items-center gap-1.5 text-sm text-zinc-600 hover:text-zinc-900 px-3 py-1.5 transition">
+        <svg class="h-4 w-4" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 005.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+      <a href="/app" class="text-sm text-zinc-600 hover:text-zinc-900 px-3 py-1.5 transition">Sign in</a>
+      <a href="/app" class="inline-flex items-center gap-1.5 rounded-md bg-zinc-900 text-white px-3.5 py-1.5 text-sm font-medium hover:bg-zinc-800 transition">
+        Open GridOS
+      </a>
+    </div>
+    <button id="menu-toggle" class="md:hidden inline-flex items-center justify-center rounded-md p-2 text-zinc-700 hover:bg-zinc-100" aria-label="Open menu">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+    </button>
+  </nav>
+</header>
 
-        <section class="hero-prompt" id="hero-prompt">
-            <div class="hero-prompt-row">
-                <textarea
-                    id="hero-prompt-input"
-                    placeholder="e.g. Build a 4-quarter revenue forecast with 10% QoQ growth starting at 100"
-                    rows="2"
-                    autofocus></textarea>
-                <button type="button" class="hero-prompt-submit" id="hero-prompt-submit" disabled>Build it</button>
-            </div>
-            <div class="hero-prompt-hint">
-                <span>Enter to submit · Shift + Enter for a new line</span>
-                <span>Uses the workbook assistant with your configured LLMs.</span>
-            </div>
-            <div class="hero-prompt-examples" id="hero-prompt-examples">
-                <button type="button" class="hero-prompt-chip" data-example="Build a simple 5-year DCF valuation with revenue, growth, EBITDA margin, and discount rate assumptions">Simple DCF</button>
-                <button type="button" class="hero-prompt-chip" data-example="Create a 4-quarter operating model with revenue, COGS, gross profit, OpEx, and operating income">Quarterly operating model</button>
-                <button type="button" class="hero-prompt-chip" data-example="Make a monthly personal budget tracker with income, fixed expenses, variable expenses, and savings">Personal budget</button>
-                <button type="button" class="hero-prompt-chip" data-example="Build a 3-statement model with income statement, balance sheet, and cash flow statement">3-statement model</button>
-            </div>
-        </section>
+<!-- Mobile menu drawer -->
+<div id="mobile-menu" class="mobile-menu fixed inset-0 z-[60] bg-white md:hidden flex flex-col">
+  <div class="flex items-center justify-between px-6 h-16 border-b border-zinc-200">
+    <span class="font-semibold tracking-tight text-zinc-900">GridOS</span>
+    <button id="menu-close" class="inline-flex items-center justify-center rounded-md p-2 text-zinc-700 hover:bg-zinc-100" aria-label="Close menu">
+      <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M6 18L18 6"/></svg>
+    </button>
+  </div>
+  <nav class="flex-1 px-6 py-6 flex flex-col gap-1 text-base">
+    <a href="#product" class="py-3 text-zinc-700 hover:text-zinc-900 border-b border-zinc-100">Product</a>
+    <a href="#how" class="py-3 text-zinc-700 hover:text-zinc-900 border-b border-zinc-100">How it works</a>
+    <a href="#use-cases" class="py-3 text-zinc-700 hover:text-zinc-900 border-b border-zinc-100">Use cases</a>
+    <a href="#api" class="py-3 text-zinc-700 hover:text-zinc-900 border-b border-zinc-100">API</a>
+    <a href="#pricing" class="py-3 text-zinc-700 hover:text-zinc-900 border-b border-zinc-100">Pricing</a>
+    <a href="https://gridos.mintlify.app" class="py-3 text-zinc-700 hover:text-zinc-900 border-b border-zinc-100">Docs</a>
+    <a href="https://github.com/shreydevkar/gridos_kernel" class="py-3 text-zinc-700 hover:text-zinc-900 border-b border-zinc-100">GitHub</a>
+  </nav>
+  <div class="px-6 py-6 border-t border-zinc-200 flex gap-3">
+    <a href="/app" class="flex-1 inline-flex items-center justify-center rounded-md border border-zinc-300 bg-white py-2.5 text-sm font-medium text-zinc-900">Sign in</a>
+    <a href="/app" class="flex-1 inline-flex items-center justify-center rounded-md bg-zinc-900 text-white py-2.5 text-sm font-semibold">Open GridOS</a>
+  </div>
+</div>
 
-        <section class="section" id="workbooks-section" hidden>
-            <div class="section-head">
-                <h3>Your workbooks</h3>
-                <span class="section-hint">
-                    <span class="quota-badge" id="quota-badge">—</span>
-                </span>
-            </div>
-            <div class="grid" id="workbooks-grid">
-                <div class="skeleton">
-                    <div class="skeleton-row"></div>
-                    <div class="skeleton-row"></div>
-                    <div class="skeleton-row"></div>
-                </div>
-            </div>
-        </section>
+<!-- ─── HERO ────────────────────────────────────────── -->
+<section class="hero-bg relative pt-20 pb-12 sm:pt-28 sm:pb-16 border-b border-zinc-200/80">
+  <div class="mx-auto max-w-5xl px-6 text-center">
+    <a href="#api" class="reveal inline-flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3.5 py-1 text-xs text-zinc-700 hover:border-zinc-300 transition">
+      <span class="inline-flex h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+      Engine API live — build agents on top of GridOS
+      <svg class="h-3 w-3 text-zinc-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>
+    </a>
 
-        <section class="section">
-            <div class="section-head">
-                <h3>Templates</h3>
-                <span class="section-hint">Saved workbook snapshots — applying one clears unlocked cells.</span>
-            </div>
-            <div id="template-grid" class="grid">
-                <div class="skeleton">
-                    <div class="skeleton-row"></div>
-                    <div class="skeleton-row"></div>
-                    <div class="skeleton-row"></div>
-                </div>
-            </div>
-            <div id="template-empty" class="empty-state" hidden>
-                No templates saved yet. Open the Library tab inside a workbook to save the current sheet as a template.
-            </div>
-        </section>
+    <h1 class="reveal mt-7 text-5xl sm:text-6xl md:text-7xl font-bold tracking-tight text-zinc-900 leading-[1.04]">
+      The AI-native spreadsheet<br/>
+      for <span class="text-brand-600">finance teams</span>.
+    </h1>
 
-        <section class="section" id="recent-activity-section">
-            <div class="section-head">
-                <h3>Recent activity</h3>
-                <span class="section-hint">Currently single-kernel — the "Continue" card opens the workspace at its current state.</span>
-            </div>
-            <div class="grid">
-                <div class="card" id="card-continue">
-                    <div class="card-thumb template">
-                        <span id="continue-thumb-label">loading</span>
-                    </div>
-                    <div class="card-title">Continue active workbook</div>
-                    <div class="card-description" id="continue-description">Picks up at the workbook's last state.</div>
-                </div>
-            </div>
-        </section>
-    </main>
+    <p class="reveal mt-7 mx-auto max-w-2xl text-lg sm:text-xl text-zinc-600 leading-relaxed">
+      Type a sentence — get a 3-statement model, DCF, or scenario table.
+      Bring your own LLM keys. Open-source kernel. Programmable via HTTP for AI agents.
+    </p>
 
-    <div id="loading-overlay" class="loading-overlay" hidden>
-        <div class="loading-group">
-            <div class="spinner"></div>
-            <div class="loading-text" id="loading-text">Opening workbook…</div>
-        </div>
+    <div class="reveal mt-9 flex flex-col sm:flex-row items-center justify-center gap-3">
+      <a href="/app" class="group inline-flex items-center gap-2 rounded-md bg-zinc-900 text-white px-5 py-3 text-sm font-semibold hover:bg-zinc-800 transition">
+        Open GridOS — it's free
+        <svg class="h-4 w-4 transition-transform group-hover:translate-x-0.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>
+      </a>
+      <a href="#how" class="inline-flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-5 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition">
+        See how it works
+      </a>
     </div>
 
-    <div id="toast" class="toast" hidden></div>
+    <p class="reveal mt-5 text-xs text-zinc-500">Free tier · No credit card · Self-hostable</p>
+  </div>
 
-    <script type="module">
-        // SaaS auth gate — redirect to /login if the user is not signed in.
-        // OSS mode skips this entirely. Runs before the main landing script so
-        // we never render template cards or fire API calls as an anonymous
-        // user in SaaS mode. Also attaches the Bearer token to every API_BASE
-        // fetch and exposes the client + session on window for the main script
-        // (avatar popover, sign-out).
-        try {
-            const res = await fetch('/cloud/status');
-            const status = await res.json();
-            if (status.mode === 'saas') {
-                const cfg = status.client_config || {};
-                if (!cfg.supabase_url || !cfg.supabase_anon_key) {
-                    document.body.innerHTML =
-                        '<div style="padding:48px;max-width:560px;margin:0 auto;font-family:-apple-system,sans-serif;">' +
-                        '<h2>Server misconfigured</h2><p>SAAS_MODE is on but SUPABASE_URL or SUPABASE_ANON_KEY is missing. Add them and restart.</p></div>';
-                } else {
-                    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2?bundle');
-                    const client = createClient(cfg.supabase_url, cfg.supabase_anon_key, {
-                        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
-                    });
-                    const { data: { session } } = await client.auth.getSession();
-                    if (!session) {
-                        window.location.replace('/login');
-                    } else {
-                        window.__gridosSupabase = client;
-                        window.__gridosSession = session;
-                        // Attach Bearer to same-origin API calls so /usage/me works.
-                        const origFetch = window.fetch.bind(window);
-                        window.fetch = async function(input, init = {}) {
-                            const url = typeof input === 'string' ? input : (input?.url || '');
-                            const sameOrigin = url.startsWith(window.location.origin) || url.startsWith('/');
-                            if (sameOrigin) {
-                                const headers = new Headers(init.headers || {});
-                                if (!headers.has('Authorization')) {
-                                    headers.set('Authorization', `Bearer ${session.access_token}`);
-                                }
-                                init = { ...init, headers };
-                            }
-                            return origFetch(input, init);
-                        };
-                        window.dispatchEvent(new CustomEvent('gridos:saas-ready', { detail: { email: session.user?.email || null } }));
-                    }
-                }
-            }
-        } catch (_) {
-            // /cloud/status unreachable — treat as OSS and continue.
-        }
-    </script>
-    <script>
-        const API_BASE = window.location.origin;
+  <!-- ─── PRODUCT MOCKUP with chart popout ──── -->
+  <div id="hero-mockup" class="reveal relative mx-auto max-w-6xl px-6 mt-14 will-change-transform">
+    <div class="rounded-xl border border-zinc-200 bg-white shadow-[0_24px_60px_-20px_rgba(15,23,42,0.18),0_8px_24px_-8px_rgba(15,23,42,0.08)] overflow-hidden">
+      <div class="flex items-center gap-1.5 h-9 px-4 border-b border-zinc-200 bg-zinc-50/80">
+        <span class="h-2.5 w-2.5 rounded-full bg-zinc-300"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-zinc-300"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-zinc-300"></span>
+        <div class="ml-3 flex-1 max-w-md mx-auto">
+          <div class="rounded h-5 bg-white border border-zinc-200 px-2 flex items-center text-[11px] font-mono text-zinc-500">
+            <svg class="h-3 w-3 mr-1.5 text-zinc-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 11a3 3 0 100-6 3 3 0 000 6zM8 11v3M5 14h6"/></svg>
+            gridos.onrender.com / dcf-saas-2024.gridos
+          </div>
+        </div>
+      </div>
 
-        function showLoading(text) {
-            document.getElementById("loading-text").textContent = text || "Loading…";
-            document.getElementById("loading-overlay").hidden = false;
-        }
+      <div class="grid grid-cols-1 md:grid-cols-[300px_1fr] min-h-[440px]">
+        <!-- Chat -->
+        <div class="border-b md:border-b-0 md:border-r border-zinc-200 p-4 flex flex-col gap-3 bg-white">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] uppercase tracking-wider text-zinc-500 font-medium">Assistant</span>
+            <span class="text-[10px] font-mono text-zinc-400">gemini-2.5-pro</span>
+          </div>
+          <div class="self-end max-w-[88%] rounded-lg rounded-br-sm bg-brand-600 px-3 py-2 text-xs text-white leading-relaxed">
+            <span id="mock-prompt"></span><span id="mock-cursor" class="animate-cursor-blink">▍</span>
+          </div>
+          <div id="mock-response" class="opacity-0 transition-opacity duration-500 self-start max-w-[92%] rounded-lg rounded-bl-sm bg-zinc-50 border border-zinc-200 px-3 py-2 text-xs text-zinc-700 leading-relaxed space-y-2">
+            <div class="flex items-center gap-2">
+              <span class="spinner" id="mock-spinner"></span>
+              <span class="text-zinc-700 font-medium" id="mock-status">Building 5-year DCF…</span>
+            </div>
+            <div id="mock-steps" class="space-y-1 text-[11px] font-mono text-zinc-500"></div>
+          </div>
+        </div>
 
-        function hideLoading() {
-            document.getElementById("loading-overlay").hidden = true;
-        }
+        <!-- Grid + chart popout -->
+        <div class="relative bg-white">
+          <div class="flex items-center gap-3 h-9 px-4 border-b border-zinc-200 text-[11px] font-mono text-zinc-500 bg-zinc-50/50">
+            <span class="font-semibold text-brand-600" id="mock-active-cell">B4</span>
+            <span class="h-3.5 w-px bg-zinc-300"></span>
+            <span class="truncate text-zinc-600" id="mock-formula-bar">=Revenue!B3 * (1 + GrowthRate)</span>
+          </div>
+          <div id="mock-grid" class="grid select-none" style="grid-template-columns: 36px repeat(6, 1fr);"></div>
 
-        function showError(message) {
-            const toast = document.getElementById("toast");
-            toast.textContent = message;
-            toast.hidden = false;
-            setTimeout(() => { toast.hidden = true; }, 4500);
-        }
+          <!-- ─── ANIMATED CHART POPOUT ─── -->
+          <div id="chart-popout" class="absolute right-4 bottom-4 w-[260px] rounded-lg border border-zinc-200 bg-white shadow-[0_12px_30px_-10px_rgba(15,23,42,0.18)] overflow-hidden opacity-0 transition-opacity duration-500">
+            <div class="flex items-center justify-between px-3 py-2 border-b border-zinc-200 bg-zinc-50">
+              <span class="text-[10px] font-semibold text-zinc-700">EBITDA · 5-yr forecast</span>
+              <span class="text-[10px] font-mono text-zinc-400">$M</span>
+            </div>
+            <div class="p-3">
+              <svg viewBox="0 0 240 100" class="w-full h-auto" preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stop-color="#4f46e5" stop-opacity="0.18"/>
+                    <stop offset="100%" stop-color="#4f46e5" stop-opacity="0"/>
+                  </linearGradient>
+                </defs>
+                <!-- bars -->
+                <rect class="chart-bar" x="14"  y="76" width="22" height="18" rx="2" data-i="0" />
+                <rect class="chart-bar" x="58"  y="62" width="22" height="32" rx="2" data-i="1" />
+                <rect class="chart-bar" x="102" y="46" width="22" height="48" rx="2" data-i="2" />
+                <rect class="chart-bar" x="146" y="30" width="22" height="64" rx="2" data-i="3" />
+                <rect class="chart-bar" x="190" y="14" width="22" height="80" rx="2" data-i="4" />
+                <!-- area + line on top -->
+                <path class="chart-area" id="chart-area-path" d="M 25 82 L 69 70 L 113 56 L 157 40 L 201 22 L 201 94 L 25 94 Z"/>
+                <path class="chart-line" id="chart-line-path" d="M 25 82 L 69 70 L 113 56 L 157 40 L 201 22"/>
+                <!-- data dots -->
+                <circle class="chart-dot" cx="25"  cy="82" r="3" fill="#4f46e5" opacity="0"/>
+                <circle class="chart-dot" cx="69"  cy="70" r="3" fill="#4f46e5" opacity="0"/>
+                <circle class="chart-dot" cx="113" cy="56" r="3" fill="#4f46e5" opacity="0"/>
+                <circle class="chart-dot" cx="157" cy="40" r="3" fill="#4f46e5" opacity="0"/>
+                <circle class="chart-dot" cx="201" cy="22" r="3" fill="#4f46e5" opacity="0"/>
+              </svg>
+              <div class="mt-2 grid grid-cols-5 gap-0 text-[9px] text-zinc-400 text-center font-mono">
+                <span>'24</span><span>'25</span><span>'26</span><span>'27</span><span>'28</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
 
-        function escapeHtml(value) {
-            return String(value ?? "")
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;")
-                .replace(/'/g, "&#039;");
-        }
+<!-- ─── TRUST METRICS w/ COUNTERS ──────────── -->
+<section class="border-b border-zinc-200/80 bg-zinc-50/50">
+  <div class="mx-auto max-w-7xl px-6 py-12 grid grid-cols-2 sm:grid-cols-4 gap-8 sm:gap-4 text-center">
+    <div class="reveal">
+      <div class="text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900" data-counter="4" data-decimals="0">0</div>
+      <div class="mt-1.5 text-xs text-zinc-500 uppercase tracking-wider">LLM providers</div>
+    </div>
+    <div class="reveal">
+      <div class="text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900" data-counter="500" data-suffix="+" data-decimals="0">0</div>
+      <div class="mt-1.5 text-xs text-zinc-500 uppercase tracking-wider">cells per chain</div>
+    </div>
+    <div class="reveal">
+      <div class="text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900">MIT</div>
+      <div class="mt-1.5 text-xs text-zinc-500 uppercase tracking-wider">licensed kernel</div>
+    </div>
+    <div class="reveal">
+      <div class="text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900" data-counter="6" data-prefix="~" data-suffix="×" data-decimals="0">0</div>
+      <div class="mt-1.5 text-xs text-zinc-500 uppercase tracking-wider">fewer round-trips</div>
+    </div>
+  </div>
+</section>
 
-        function formatDate(iso) {
-            if (!iso) return "";
-            try {
-                const d = new Date(iso);
-                return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-            } catch {
-                return "";
-            }
-        }
+<!-- ─── HOW IT WORKS — workflow diagram ─── -->
+<section id="how" class="py-24 sm:py-32">
+  <div class="mx-auto max-w-7xl px-6">
+    <div class="reveal max-w-2xl">
+      <div class="section-eyebrow text-sm font-semibold text-brand-600">How it works</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900">A request flows through five stages.</h2>
+      <p class="mt-4 text-lg text-zinc-600">Your prompt hits the router, picks a provider, returns intent JSON, writes cells, and exposes the result over HTTP. Every stage is observable.</p>
+    </div>
 
-        const IS_SAAS = () => !!window.__gridosSession;
+    <div class="reveal mt-14 rounded-2xl border border-zinc-200 bg-white p-8 sm:p-12 overflow-x-auto">
+      <div class="relative min-w-[920px]">
+        <!-- Nodes -->
+        <div class="grid grid-cols-5 gap-3 relative z-10">
+          <div class="flow-node">
+            <div class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">01</div>
+            <div class="mt-1.5 text-sm font-semibold text-zinc-900">Prompt</div>
+            <div class="mt-1 text-[11px] text-zinc-500 leading-relaxed">"Build a 5-yr DCF…"</div>
+          </div>
+          <div class="flow-node">
+            <div class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">02</div>
+            <div class="mt-1.5 text-sm font-semibold text-zinc-900">Router</div>
+            <div class="mt-1 text-[11px] text-zinc-500 leading-relaxed">Intent classifier &amp; dispatch</div>
+          </div>
+          <div class="flow-node flow-node-accent">
+            <div class="text-[10px] uppercase tracking-wider text-brand-700 font-semibold">03</div>
+            <div class="mt-1.5 text-sm font-semibold text-brand-900">LLM provider</div>
+            <div class="mt-1 text-[11px] text-brand-700 leading-relaxed">Your key · BYOK</div>
+          </div>
+          <div class="flow-node">
+            <div class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">04</div>
+            <div class="mt-1.5 text-sm font-semibold text-zinc-900">Intents</div>
+            <div class="mt-1 text-[11px] text-zinc-500 leading-relaxed">JSON cells written → grid</div>
+          </div>
+          <div class="flow-node">
+            <div class="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">05</div>
+            <div class="mt-1.5 text-sm font-semibold text-zinc-900">HTTP API</div>
+            <div class="mt-1 text-[11px] text-zinc-500 leading-relaxed">Agents read back via /v1/eval</div>
+          </div>
+        </div>
 
-        // Derive a short workbook title from a free-text prompt. Cuts at a
-        // word boundary near 45 chars so landing cards don't get a wall of
-        // text; the full prompt is still submitted to the agent for content.
-        function titleFromPrompt(prompt) {
-            const trimmed = (prompt || "").trim().replace(/\s+/g, " ");
-            if (!trimmed) return "Untitled workbook";
-            if (trimmed.length <= 45) return trimmed;
-            const firstSentence = trimmed.split(/[.!?]/, 1)[0].trim();
-            if (firstSentence && firstSentence.length <= 45) return firstSentence;
-            const cut = trimmed.slice(0, 45);
-            const lastSpace = cut.lastIndexOf(" ");
-            return lastSpace > 20 ? cut.slice(0, lastSpace).trim() : cut.trim();
-        }
+        <!-- Connector arrows (SVG, drawn on scroll) -->
+        <svg class="absolute inset-0 w-full h-full pointer-events-none" preserveAspectRatio="none" viewBox="0 0 920 90" id="flow-svg">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#a1a1aa"/>
+            </marker>
+            <marker id="arrowAccent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="#4f46e5"/>
+            </marker>
+          </defs>
+          <!-- 01 → 02 -->
+          <path class="flow-line" d="M 175 45 L 195 45" marker-end="url(#arrow)"/>
+          <!-- 02 → 03 (accent) -->
+          <path class="flow-line flow-line-accent" d="M 360 45 L 380 45" marker-end="url(#arrowAccent)"/>
+          <!-- 03 → 04 -->
+          <path class="flow-line" d="M 545 45 L 565 45" marker-end="url(#arrow)"/>
+          <!-- 04 → 05 -->
+          <path class="flow-line" d="M 730 45 L 750 45" marker-end="url(#arrow)"/>
+        </svg>
+      </div>
 
-        async function createWorkbookAndOpen(title) {
-            const res = await fetch(`${API_BASE}/workbooks`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ title: title || "Untitled workbook" }),
-            });
-            const data = await res.json().catch(() => ({}));
-            if (res.status === 402) {
-                hideLoading();
-                const usage = data?.detail?.usage || {};
-                showError(`Workbook slot limit reached (${usage.used || "?"}/${usage.limit || "?"}). Delete one to free a slot or upgrade your plan.`);
-                throw new Error("Quota exceeded");
-            }
-            if (!res.ok) throw new Error(data?.detail?.message || data?.detail || `Create failed (${res.status})`);
-            return data;
-        }
+      <!-- Labels under arrows -->
+      <div class="mt-6 grid grid-cols-5 gap-3 text-[10px] font-mono text-zinc-500">
+        <div></div>
+        <div class="text-center">→ classify</div>
+        <div class="text-center">→ generate</div>
+        <div class="text-center">→ apply</div>
+        <div class="text-center">→ expose</div>
+      </div>
+    </div>
+  </div>
+</section>
 
-        async function openBlank() {
-            if (IS_SAAS()) {
-                showLoading("Creating new workbook…");
-                try {
-                    const created = await createWorkbookAndOpen("Untitled workbook");
-                    window.location.href = `/workbook?id=${encodeURIComponent(created.id)}`;
-                } catch (e) {
-                    if (e.message !== "Quota exceeded") showError(`Could not start a blank workbook: ${e.message}`);
-                }
-                return;
-            }
-            showLoading("Clearing workbook…");
-            try {
-                await fetch(`${API_BASE}/system/clear`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
-                window.location.href = "/workbook";
-            } catch (e) {
-                hideLoading();
-                showError(`Could not start a blank workbook: ${e.message}`);
-            }
-        }
+<!-- ─── USE CASES ──────────────────────────────────── -->
+<section id="use-cases" class="py-24 sm:py-32 bg-zinc-50/50 border-y border-zinc-200/80">
+  <div class="mx-auto max-w-7xl px-6">
+    <div class="reveal max-w-2xl">
+      <div class="section-eyebrow text-sm font-semibold text-brand-600">Use cases</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900">Built for the people who actually build models.</h2>
+      <p class="mt-4 text-lg text-zinc-600">Three workflows GridOS is designed for. If you've spent your week wiring up forecasts in Excel, or writing prompts for an LLM to do it, this is your tool.</p>
+    </div>
 
-        async function openContinue() {
-            window.location.href = "/workbook";
-        }
+    <div class="reveal-stagger mt-14 grid md:grid-cols-3 gap-6">
+      <div class="hover-lift rounded-xl border border-zinc-200 bg-white p-7">
+        <div class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 3v18h18M7 14l4-4 4 4 5-7"/></svg>
+        </div>
+        <h3 class="mt-5 text-lg font-semibold text-zinc-900">Finance analysts</h3>
+        <p class="mt-2 text-sm text-zinc-600 leading-relaxed">3-statement models, DCFs, sensitivity tables. Ask in plain English, get an auditable workbook with every formula visible — not a black box.</p>
+        <ul class="mt-5 space-y-1.5 text-sm text-zinc-600">
+          <li class="flex items-start gap-2"><span class="mt-2 h-1 w-1 rounded-full bg-zinc-300 shrink-0"></span>5-year DCF in 4 seconds</li>
+          <li class="flex items-start gap-2"><span class="mt-2 h-1 w-1 rounded-full bg-zinc-300 shrink-0"></span>Cross-sheet refs for scenarios</li>
+          <li class="flex items-start gap-2"><span class="mt-2 h-1 w-1 rounded-full bg-zinc-300 shrink-0"></span>Excel-style formula layer</li>
+        </ul>
+      </div>
 
-        async function applyTemplateAndOpen(templateId, templateName) {
-            showLoading(`Applying “${templateName}”…`);
-            try {
-                if (IS_SAAS()) {
-                    // SaaS: provision a fresh workbook row, apply the template
-                    // into the per-(user, workbook_id) kernel, rename it, then
-                    // persist. Every call between create and redirect must pin
-                    // the X-Workbook-Id header to the newly-created id so all
-                    // mutations land in the same kernel (without it the server
-                    // would fall back to user.id and we'd write into the wrong
-                    // per-user kernel).
-                    const displayName = templateName || "Untitled workbook";
-                    const created = await createWorkbookAndOpen(displayName);
-                    const wbHeader = { "X-Workbook-Id": created.id };
-                    const applyRes = await fetch(`${API_BASE}/templates/apply/${encodeURIComponent(templateId)}`, {
-                        method: "POST",
-                        headers: wbHeader,
-                    });
-                    const applyData = await applyRes.json().catch(() => ({}));
-                    if (!applyRes.ok) throw new Error(applyData.detail || "Template apply failed.");
-                    await fetch(`${API_BASE}/workbook/rename`, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", ...wbHeader },
-                        body: JSON.stringify({ name: displayName }),
-                    }).catch(() => {});
-                    const saveRes = await fetch(`${API_BASE}/system/save?workbook_id=${encodeURIComponent(created.id)}`, { method: "POST", headers: wbHeader });
-                    if (!saveRes.ok) throw new Error(`Save after template failed (${saveRes.status})`);
-                    await fetch(`${API_BASE}/workbooks/${encodeURIComponent(created.id)}`, {
-                        method: "PATCH",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ title: displayName }),
-                    }).catch(() => {});
-                    window.location.href = `/workbook?id=${encodeURIComponent(created.id)}`;
-                    return;
-                }
-                const res = await fetch(`${API_BASE}/templates/apply/${encodeURIComponent(templateId)}`, { method: "POST" });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) throw new Error(data.detail || "Template apply failed.");
-                window.location.href = "/workbook";
-            } catch (e) {
-                hideLoading();
-                if (e.message !== "Quota exceeded") showError(`Could not apply template: ${e.message}`);
-            }
-        }
+      <div class="hover-lift rounded-xl border border-zinc-200 bg-white p-7">
+        <div class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+        </div>
+        <h3 class="mt-5 text-lg font-semibold text-zinc-900">Founders &amp; operators</h3>
+        <p class="mt-2 text-sm text-zinc-600 leading-relaxed">Update board decks, runway models, and pricing scenarios faster than you can open a template. Share read-only links with your team.</p>
+        <ul class="mt-5 space-y-1.5 text-sm text-zinc-600">
+          <li class="flex items-start gap-2"><span class="mt-2 h-1 w-1 rounded-full bg-zinc-300 shrink-0"></span>Realtime collaboration</li>
+          <li class="flex items-start gap-2"><span class="mt-2 h-1 w-1 rounded-full bg-zinc-300 shrink-0"></span>One-click .gridos export</li>
+          <li class="flex items-start gap-2"><span class="mt-2 h-1 w-1 rounded-full bg-zinc-300 shrink-0"></span>Workbook templates marketplace</li>
+        </ul>
+      </div>
 
-        function renderTemplates(templates) {
-            const grid = document.getElementById("template-grid");
-            const empty = document.getElementById("template-empty");
-            grid.innerHTML = "";
-            if (!templates.length) {
-                grid.hidden = true;
-                empty.hidden = false;
-                return;
-            }
-            grid.hidden = false;
-            empty.hidden = true;
+      <div class="hover-lift rounded-xl border border-zinc-200 bg-white p-7">
+        <div class="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg>
+        </div>
+        <h3 class="mt-5 text-lg font-semibold text-zinc-900">Engineers &amp; agent builders</h3>
+        <p class="mt-2 text-sm text-zinc-600 leading-relaxed">Use GridOS as a deterministic compute layer for your agent. The Engine API gives you typed cells and dependency tracking over plain HTTP.</p>
+        <ul class="mt-5 space-y-1.5 text-sm text-zinc-600">
+          <li class="flex items-start gap-2"><span class="mt-2 h-1 w-1 rounded-full bg-zinc-300 shrink-0"></span>Long-lived API keys</li>
+          <li class="flex items-start gap-2"><span class="mt-2 h-1 w-1 rounded-full bg-zinc-300 shrink-0"></span>Python plugin runtime</li>
+          <li class="flex items-start gap-2"><span class="mt-2 h-1 w-1 rounded-full bg-zinc-300 shrink-0"></span>MIT-licensed self-host</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
 
-            templates.forEach((tpl) => {
-                const card = document.createElement("div");
-                card.className = "card";
-                const cells = tpl.cell_count != null ? `${tpl.cell_count} cell${tpl.cell_count === 1 ? "" : "s"}` : "";
-                const when = formatDate(tpl.created_at);
-                const tagBits = [cells, when].filter(Boolean).join(" · ");
-                card.innerHTML = `
-                    <div class="card-thumb template"></div>
-                    <div class="card-title">${escapeHtml(tpl.name || tpl.id)}</div>
-                    <div class="card-description">${escapeHtml(tpl.description || "Saved workbook snapshot.")}</div>
-                    <div class="card-meta">
-                        <span>${escapeHtml(tpl.sheet_count != null ? `${tpl.sheet_count} sheet${tpl.sheet_count === 1 ? "" : "s"}` : "")}</span>
-                        <span class="card-tag">${escapeHtml(tagBits)}</span>
-                    </div>
-                `;
-                card.addEventListener("click", () => applyTemplateAndOpen(tpl.id, tpl.name || tpl.id));
-                grid.appendChild(card);
-            });
-        }
+<!-- ─── PRODUCT FEATURES ─────────────────────────── -->
+<section id="product" class="py-24 sm:py-32">
+  <div class="mx-auto max-w-7xl px-6">
 
-        async function loadTemplates() {
-            try {
-                const res = await fetch(`${API_BASE}/templates/list`);
-                const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || "Could not list templates.");
-                renderTemplates(data.templates || []);
-            } catch (e) {
-                const grid = document.getElementById("template-grid");
-                grid.innerHTML = `<div class="empty-state">Could not load templates: ${escapeHtml(e.message)}</div>`;
-            }
-        }
+    <div class="reveal max-w-2xl">
+      <div class="section-eyebrow text-sm font-semibold text-brand-600">Product</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900">A real spreadsheet, with a chat that actually works.</h2>
+      <p class="mt-4 text-lg text-zinc-600">GridOS isn't a chat box that pretends to be a spreadsheet. The grid has a real recalc engine, formulas are auditable, and the AI types directly into cells you can edit by hand.</p>
+    </div>
 
-        async function loadContinueMeta() {
-            try {
-                const res = await fetch(`${API_BASE}/debug/grid`);
-                const data = await res.json();
-                const cellCount = Object.keys(data.cells || {}).length;
-                const chartCount = (data.charts || []).length;
-                const label = cellCount ? `${cellCount} filled cells` : "empty";
-                document.getElementById("continue-thumb-label").textContent = label;
-                const bits = [];
-                if (cellCount) bits.push(`${cellCount} filled cell${cellCount === 1 ? "" : "s"}`);
-                if (chartCount) bits.push(`${chartCount} chart${chartCount === 1 ? "" : "s"}`);
-                document.getElementById("continue-description").textContent = bits.length
-                    ? `Last state: ${bits.join(", ")}.`
-                    : "No data yet — equivalent to starting blank.";
-            } catch {
-                document.getElementById("continue-thumb-label").textContent = "workbook";
-            }
-        }
+    <div class="mt-16 space-y-20">
+      <!-- Feature 1 -->
+      <div class="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
+        <div class="reveal order-2 lg:order-1">
+          <div class="hover-lift rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
+            <div class="text-xs font-mono text-zinc-500 mb-3">PROMPT → INTENTS</div>
+            <div class="rounded-lg bg-brand-600 text-white text-sm p-3 mb-3 max-w-[85%]">
+              Build a 3-statement model for a SaaS company with $10M ARR.
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+              <div class="rounded-md bg-zinc-50 border border-zinc-200 p-3">
+                <div class="text-[10px] font-mono text-brand-600 mb-1.5 font-semibold">income_statement</div>
+                <div class="text-[11px] text-zinc-600">Revenue · COGS · OpEx · EBITDA</div>
+              </div>
+              <div class="rounded-md bg-zinc-50 border border-zinc-200 p-3">
+                <div class="text-[10px] font-mono text-brand-600 mb-1.5 font-semibold">balance_sheet</div>
+                <div class="text-[11px] text-zinc-600">Assets · Liabilities · Equity</div>
+              </div>
+              <div class="rounded-md bg-zinc-50 border border-zinc-200 p-3">
+                <div class="text-[10px] font-mono text-brand-600 mb-1.5 font-semibold">cash_flow</div>
+                <div class="text-[11px] text-zinc-600">OCF · ICF · FCF</div>
+              </div>
+            </div>
+            <div class="mt-3 rounded-md bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-800 font-medium">
+              ✓ 50+ cells written in 1 round-trip
+            </div>
+          </div>
+        </div>
+        <div class="reveal order-1 lg:order-2">
+          <div class="section-eyebrow text-sm font-semibold text-brand-600">Cells that think</div>
+          <h3 class="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-zinc-900">One sentence in. A whole model out.</h3>
+          <p class="mt-4 text-zinc-600 leading-relaxed">GridOS packs deliverables into <span class="font-mono text-zinc-900 text-sm">intents</span> arrays — a 3-statement model writes income, balance, and cash flow in a single response. ~6× fewer round-trips than chain mode.</p>
+          <p class="mt-3 text-zinc-600 leading-relaxed">Every formula stays editable. The AI doesn't replace your spreadsheet — it fills it in.</p>
+        </div>
+      </div>
 
-        // "Blank workbook" card was removed — openBlank() is still reachable
-        // through the OSS path of openContinue() (no-op when SaaS-only list
-        // exists) and through the hero prompt. Optional-chain the listener so
-        // a future reintroduction of the card is a one-line HTML add.
-        document.getElementById("card-blank")?.addEventListener("click", openBlank);
-        document.getElementById("card-continue").addEventListener("click", openContinue);
+      <!-- Feature 2 -->
+      <div class="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
+        <div class="reveal">
+          <div class="section-eyebrow text-sm font-semibold text-brand-600">Multi-LLM, your keys</div>
+          <h3 class="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-zinc-900">Bring your own model. Pay your provider directly.</h3>
+          <p class="mt-4 text-zinc-600 leading-relaxed">Drop a Gemini, Anthropic, Groq, or OpenRouter key into Settings. We proxy your prompts to that provider — we never see your tokens, you never get a surprise GridOS bill for LLM usage.</p>
+          <p class="mt-3 text-zinc-600 leading-relaxed">Switch models per workbook, per cell, per agent. The router handles fallbacks.</p>
+        </div>
+        <div class="reveal">
+          <div class="hover-lift rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
+            <div class="grid grid-cols-2 gap-3">
+              <div class="rounded-lg border border-zinc-200 bg-zinc-50/50 p-4">
+                <div class="text-sm font-semibold text-zinc-900">Gemini</div>
+                <div class="mt-1 text-[11px] font-mono text-zinc-500">2.5-flash · 2.5-pro</div>
+                <div class="mt-3 inline-flex items-center gap-1 text-[11px] text-emerald-700 font-medium"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Connected</div>
+              </div>
+              <div class="rounded-lg border border-zinc-200 bg-zinc-50/50 p-4">
+                <div class="text-sm font-semibold text-zinc-900">Anthropic</div>
+                <div class="mt-1 text-[11px] font-mono text-zinc-500">opus · sonnet · haiku</div>
+                <div class="mt-3 inline-flex items-center gap-1 text-[11px] text-emerald-700 font-medium"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Connected</div>
+              </div>
+              <div class="rounded-lg border border-zinc-200 bg-zinc-50/50 p-4">
+                <div class="text-sm font-semibold text-zinc-900">Groq</div>
+                <div class="mt-1 text-[11px] font-mono text-zinc-500">llama-3.3-70b</div>
+                <div class="mt-3 inline-flex items-center gap-1 text-[11px] text-zinc-500"><span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>Add key</div>
+              </div>
+              <div class="rounded-lg border border-zinc-200 bg-zinc-50/50 p-4">
+                <div class="text-sm font-semibold text-zinc-900">OpenRouter</div>
+                <div class="mt-1 text-[11px] font-mono text-zinc-500">mistral · deepseek · qwen</div>
+                <div class="mt-3 inline-flex items-center gap-1 text-[11px] text-zinc-500"><span class="h-1.5 w-1.5 rounded-full bg-zinc-300"></span>Add key</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
 
-        // ===== Hero prompt submit =====
-        const heroInput = document.getElementById("hero-prompt-input");
-        const heroSubmit = document.getElementById("hero-prompt-submit");
+      <!-- Feature 3 -->
+      <div class="grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
+        <div class="reveal order-2 lg:order-1">
+          <div class="hover-lift rounded-xl border border-zinc-200 bg-white shadow-sm overflow-hidden">
+            <div class="flex items-center justify-between h-9 px-4 border-b border-zinc-200 bg-zinc-50">
+              <span class="text-xs font-mono text-zinc-500">plugins/cagr.py</span>
+              <span class="text-[10px] uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-0.5 font-semibold">Hot-loaded</span>
+            </div>
+<pre class="p-5 text-[12.5px] leading-relaxed font-mono text-zinc-800 m-0"><code><span class="text-zinc-400"># Drop in plugins/, picked up automatically.</span>
+<span class="text-violet-700">from</span> gridos <span class="text-violet-700">import</span> register
 
-        function syncHeroSubmitState() {
-            heroSubmit.disabled = heroInput.value.trim().length === 0;
-        }
-        heroInput.addEventListener("input", syncHeroSubmitState);
-        heroInput.addEventListener("keydown", (event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                submitHeroPrompt();
-            }
-        });
-        heroSubmit.addEventListener("click", submitHeroPrompt);
-        document.querySelectorAll("[data-example]").forEach((chip) => {
-            chip.addEventListener("click", () => {
-                heroInput.value = chip.dataset.example;
-                syncHeroSubmitState();
-                heroInput.focus();
-            });
-        });
+<span class="text-emerald-700">@register</span>(<span class="text-amber-700">"CAGR"</span>)
+<span class="text-violet-700">def</span> <span class="text-blue-700">cagr</span>(start, end, years):
+    <span class="text-violet-700">return</span> (end / start) ** (1 / years) - 1
+</code></pre>
+          </div>
+        </div>
+        <div class="reveal order-1 lg:order-2">
+          <div class="section-eyebrow text-sm font-semibold text-brand-600">Plugin system</div>
+          <h3 class="mt-2 text-2xl sm:text-3xl font-bold tracking-tight text-zinc-900">Extend it in Python. No plugin SDK to learn.</h3>
+          <p class="mt-4 text-zinc-600 leading-relaxed">Drop a Python file in <span class="font-mono text-zinc-900 text-sm">plugins/</span> and add a custom formula, an agent, or even a new LLM provider. Hot-loaded at startup, no rebuild required.</p>
+          <p class="mt-3 text-zinc-600 leading-relaxed">A marketplace inside the app lists community plugins for one-click install.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
 
-        async function submitHeroPrompt() {
-            const prompt = heroInput.value.trim();
-            if (!prompt) return;
-            showLoading("Preparing workbook…");
-            try {
-                sessionStorage.setItem("gridos.initialPrompt", prompt);
-                sessionStorage.setItem("gridos.initialAutosubmit", "1");
-                if (IS_SAAS()) {
-                    const created = await createWorkbookAndOpen(titleFromPrompt(prompt));
-                    window.location.href = `/workbook?id=${encodeURIComponent(created.id)}`;
-                    return;
-                }
-                await fetch(`${API_BASE}/system/clear`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({}),
-                });
-                window.location.href = "/workbook";
-            } catch (e) {
-                hideLoading();
-                if (e.message !== "Quota exceeded") showError(`Could not start workbook: ${e.message}`);
-            }
-        }
+<!-- ─── INTEGRATIONS STRIP ──────────────────────── -->
+<section class="py-16 sm:py-20 border-y border-zinc-200/80 bg-white">
+  <div class="mx-auto max-w-6xl px-6">
+    <div class="reveal text-center mb-10">
+      <p class="text-xs uppercase tracking-[0.18em] text-zinc-500 font-semibold">Works with the stack you already use</p>
+    </div>
+    <div class="reveal-stagger grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-x-6 gap-y-8 items-center justify-items-center text-zinc-600">
+      <!-- Anthropic SDK -->
+      <div class="logo-mono flex items-center gap-2 text-sm font-medium" title="Anthropic SDK">
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor"><path d="M14.5 4h3.5l5.5 16h-3.7l-1.1-3.4h-5.7L11.9 20H8.2L13.7 4h.8zM12 13.4h4.6L14.3 7l-2.3 6.4zM5.4 4h3l-5.5 16H0L5.4 4z"/></svg>
+        Anthropic
+      </div>
+      <!-- Google / Gemini -->
+      <div class="logo-mono flex items-center gap-2 text-sm font-medium" title="Google Gemini">
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 18c-4.4 0-8-3.6-8-8s3.6-8 8-8c2.2 0 4.2.9 5.7 2.3l-2.1 2.1C14.7 5.7 13.4 5 12 5c-3.9 0-7 3.1-7 7s3.1 7 7 7 7-3.1 7-7c0-.4 0-.7-.1-1.1H12v-2h8.9c.1.7.1 1.3.1 2 0 4.4-3.6 8-8 8z"/></svg>
+        Gemini
+      </div>
+      <!-- Groq -->
+      <div class="logo-mono flex items-center gap-2 text-sm font-medium" title="Groq">
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 12h18M3 6h18M3 18h12"/></svg>
+        Groq
+      </div>
+      <!-- OpenRouter -->
+      <div class="logo-mono flex items-center gap-2 text-sm font-medium" title="OpenRouter">
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3v18"/></svg>
+        OpenRouter
+      </div>
+      <!-- LangChain -->
+      <div class="logo-mono flex items-center gap-2 text-sm font-medium" title="LangChain">
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M10 13a4 4 0 005.66 0l3-3a4 4 0 00-5.66-5.66l-1.5 1.5"/><path d="M14 11a4 4 0 00-5.66 0l-3 3a4 4 0 005.66 5.66l1.5-1.5"/></svg>
+        LangChain
+      </div>
+      <!-- MCP -->
+      <div class="logo-mono flex items-center gap-2 text-sm font-medium" title="Model Context Protocol">
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        MCP
+      </div>
+      <!-- Supabase -->
+      <div class="logo-mono flex items-center gap-2 text-sm font-medium" title="Supabase">
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor"><path d="M14 2L4 14h8v8l10-12h-8V2z"/></svg>
+        Supabase
+      </div>
+    </div>
+  </div>
+</section>
 
-        loadTemplates();
-        loadContinueMeta();
+<!-- ─── COMPARISON TABLE ─────────────────────────── -->
+<section class="py-24 sm:py-32 bg-zinc-50/50 border-b border-zinc-200/80">
+  <div class="mx-auto max-w-6xl px-6">
+    <div class="reveal max-w-2xl">
+      <div class="section-eyebrow text-sm font-semibold text-brand-600">Compare</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900">How GridOS stacks up.</h2>
+      <p class="mt-4 text-lg text-zinc-600">There are great spreadsheets and great AI tools. Until now, no one combined them with an open kernel and an HTTP API.</p>
+    </div>
 
-        // ===== Your workbooks (SaaS-only) =====
-        function formatRelative(iso) {
-            if (!iso) return "";
-            const then = new Date(iso).getTime();
-            if (Number.isNaN(then)) return "";
-            const diff = Date.now() - then;
-            const m = Math.round(diff / 60000);
-            if (m < 1) return "just now";
-            if (m < 60) return `${m}m ago`;
-            const h = Math.round(m / 60);
-            if (h < 24) return `${h}h ago`;
-            const d = Math.round(h / 24);
-            if (d < 30) return `${d}d ago`;
-            return new Date(iso).toLocaleDateString();
-        }
+    <div class="reveal mt-12 rounded-xl border border-zinc-200 bg-white overflow-hidden shadow-sm">
+      <div class="overflow-x-auto">
+        <table class="w-full text-left">
+          <thead>
+            <tr class="bg-zinc-50">
+              <th class="px-5 py-4 text-xs uppercase tracking-wider text-zinc-500 font-semibold w-[36%]">Capability</th>
+              <th class="px-5 py-4 text-sm text-zinc-900 font-semibold">GridOS</th>
+              <th class="px-5 py-4 text-sm text-zinc-600 font-medium">Excel / Sheets</th>
+              <th class="px-5 py-4 text-sm text-zinc-600 font-medium">Quadratic</th>
+              <th class="px-5 py-4 text-sm text-zinc-600 font-medium">Rows AI</th>
+            </tr>
+          </thead>
+          <tbody id="compare-tbody">
+            <tr class="compare-row"><td>Chat that writes formulas</td><td><span class="check-yes">✓</span></td><td><span class="check-partial">Copilot add-on</span></td><td><span class="check-yes">✓</span></td><td><span class="check-yes">✓</span></td></tr>
+            <tr class="compare-row"><td>Multi-LLM, BYOK</td><td><span class="check-yes">✓</span></td><td><span class="check-no">✗</span></td><td><span class="check-no">✗</span></td><td><span class="check-no">✗</span></td></tr>
+            <tr class="compare-row"><td>Open-source kernel</td><td><span class="check-yes">✓ MIT</span></td><td><span class="check-no">✗</span></td><td><span class="check-partial">AGPL</span></td><td><span class="check-no">✗</span></td></tr>
+            <tr class="compare-row"><td>HTTP API for agents</td><td><span class="check-yes">✓</span></td><td><span class="check-partial">Graph API</span></td><td><span class="check-yes">✓</span></td><td><span class="check-no">✗</span></td></tr>
+            <tr class="compare-row"><td>Self-hostable</td><td><span class="check-yes">✓</span></td><td><span class="check-no">✗</span></td><td><span class="check-yes">✓</span></td><td><span class="check-no">✗</span></td></tr>
+            <tr class="compare-row"><td>Free tier without LLM credits</td><td><span class="check-yes">✓ BYOK</span></td><td><span class="check-yes">✓</span></td><td><span class="check-partial">Limited</span></td><td><span class="check-partial">Limited</span></td></tr>
+            <tr class="compare-row"><td>Plugin / extension system</td><td><span class="check-yes">✓ Python</span></td><td><span class="check-yes">✓ Apps Script</span></td><td><span class="check-no">✗</span></td><td><span class="check-no">✗</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <p class="mt-4 text-xs text-zinc-500">Comparison reflects publicly documented features as of 2026. We update this table as competitors ship.</p>
+  </div>
+</section>
 
-        async function deleteWorkbook(id, title) {
-            if (!confirm(`Delete "${title || 'Untitled workbook'}"? This can't be undone.`)) return;
-            try {
-                const res = await fetch(`${API_BASE}/workbooks/${encodeURIComponent(id)}`, { method: "DELETE" });
-                if (!res.ok) throw new Error(`Delete failed (${res.status})`);
-                await loadWorkbooks();
-            } catch (e) {
-                showError(`Could not delete: ${e.message}`);
-            }
-        }
+<!-- ─── TESTIMONIALS ────────────────────────────── -->
+<section class="py-24 sm:py-32">
+  <div class="mx-auto max-w-7xl px-6">
+    <div class="reveal max-w-2xl">
+      <div class="section-eyebrow text-sm font-semibold text-brand-600">Early users</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900">What people are saying.</h2>
+      <p class="mt-4 text-lg text-zinc-600">Quotes from the first wave of analysts, founders, and engineers who built workbooks on GridOS.</p>
+    </div>
 
-        function renderWorkbookCards(list, quota) {
-            const grid = document.getElementById("workbooks-grid");
-            grid.innerHTML = "";
+    <div class="reveal-stagger mt-14 grid md:grid-cols-3 gap-6">
+      <figure class="hover-lift rounded-xl border border-zinc-200 bg-white p-7 flex flex-col">
+        <svg class="h-6 w-6 text-zinc-300" viewBox="0 0 24 24" fill="currentColor"><path d="M9 7H5a3 3 0 00-3 3v4a3 3 0 003 3h2v3a4 4 0 01-4-4v-1H1V12a5 5 0 015-5h3v0zm12 0h-4a3 3 0 00-3 3v4a3 3 0 003 3h2v3a4 4 0 01-4-4v-1h-2V12a5 5 0 015-5h3v0z"/></svg>
+        <blockquote class="mt-4 text-zinc-800 leading-relaxed flex-1">
+          "I built a 5-year forecast in 30 seconds that would have taken me an hour in Excel. The fact that every formula is still editable means I actually trust it."
+        </blockquote>
+        <figcaption class="mt-6 flex items-center gap-3 pt-5 border-t border-zinc-100">
+          <span class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-brand-50 text-brand-700 text-xs font-semibold">SK</span>
+          <div>
+            <div class="text-sm font-semibold text-zinc-900">S. Kapoor</div>
+            <div class="text-xs text-zinc-500">FP&amp;A Analyst, Series B SaaS</div>
+          </div>
+        </figcaption>
+      </figure>
 
-            // Existing workbooks first (most-recently-used order from the server).
-            list.forEach((wb) => {
-                const card = document.createElement("div");
-                card.className = "card workbook-card";
-                card.innerHTML = `
-                    <div class="card-thumb workbook">${escapeHtml(wb.title || "Untitled")}</div>
-                    <div class="card-title">${escapeHtml(wb.title || "Untitled workbook")}</div>
-                    <div class="card-meta">
-                        <span>${escapeHtml(formatRelative(wb.updated_at))}</span>
-                    </div>
-                    <button class="workbook-card-delete" type="button" title="Delete workbook" aria-label="Delete workbook">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-                    </button>
-                `;
-                card.addEventListener("click", (e) => {
-                    if (e.target.closest(".workbook-card-delete")) return;
-                    window.location.href = `/workbook?id=${encodeURIComponent(wb.id)}`;
-                });
-                card.querySelector(".workbook-card-delete").addEventListener("click", (e) => {
-                    e.stopPropagation();
-                    deleteWorkbook(wb.id, wb.title);
-                });
-                grid.appendChild(card);
-            });
+      <figure class="hover-lift rounded-xl border border-zinc-200 bg-white p-7 flex flex-col">
+        <svg class="h-6 w-6 text-zinc-300" viewBox="0 0 24 24" fill="currentColor"><path d="M9 7H5a3 3 0 00-3 3v4a3 3 0 003 3h2v3a4 4 0 01-4-4v-1H1V12a5 5 0 015-5h3v0zm12 0h-4a3 3 0 00-3 3v4a3 3 0 003 3h2v3a4 4 0 01-4-4v-1h-2V12a5 5 0 015-5h3v0z"/></svg>
+        <blockquote class="mt-4 text-zinc-800 leading-relaxed flex-1">
+          "BYOK is the killer feature. I plug in my own Anthropic key and pay for what I use — no markup, no surprise quotas. This is how AI tools should work."
+        </blockquote>
+        <figcaption class="mt-6 flex items-center gap-3 pt-5 border-t border-zinc-100">
+          <span class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-brand-50 text-brand-700 text-xs font-semibold">MR</span>
+          <div>
+            <div class="text-sm font-semibold text-zinc-900">M. Rivera</div>
+            <div class="text-xs text-zinc-500">Founder, fintech startup</div>
+          </div>
+        </figcaption>
+      </figure>
 
-            // "+ New workbook" card, unless the user's at their cap.
-            const atLimit = quota.limit > 0 && quota.used >= quota.limit;
-            if (!atLimit) {
-                const card = document.createElement("div");
-                card.className = "card";
-                card.innerHTML = `
-                    <div class="card-thumb new-workbook">+</div>
-                    <div class="card-title">New workbook</div>
-                    <div class="card-description">Blank sheet you can rename, save, and come back to.</div>
-                `;
-                card.addEventListener("click", openBlank);
-                grid.appendChild(card);
-            } else {
-                const card = document.createElement("div");
-                card.className = "empty-state";
-                card.innerHTML = `
-                    <strong>Workbook slots full.</strong><br />
-                    Delete one above or upgrade your plan for more.
-                `;
-                grid.appendChild(card);
-            }
-        }
+      <figure class="hover-lift rounded-xl border border-zinc-200 bg-white p-7 flex flex-col">
+        <svg class="h-6 w-6 text-zinc-300" viewBox="0 0 24 24" fill="currentColor"><path d="M9 7H5a3 3 0 00-3 3v4a3 3 0 003 3h2v3a4 4 0 01-4-4v-1H1V12a5 5 0 015-5h3v0zm12 0h-4a3 3 0 00-3 3v4a3 3 0 003 3h2v3a4 4 0 01-4-4v-1h-2V12a5 5 0 015-5h3v0z"/></svg>
+        <blockquote class="mt-4 text-zinc-800 leading-relaxed flex-1">
+          "We wired our LangChain agent into the Engine API in an afternoon. It can now read and write a real spreadsheet — that unlocks workflows we couldn't build before."
+        </blockquote>
+        <figcaption class="mt-6 flex items-center gap-3 pt-5 border-t border-zinc-100">
+          <span class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-brand-50 text-brand-700 text-xs font-semibold">JT</span>
+          <div>
+            <div class="text-sm font-semibold text-zinc-900">J. Tan</div>
+            <div class="text-xs text-zinc-500">ML Engineer, agent infra</div>
+          </div>
+        </figcaption>
+      </figure>
+    </div>
+    <p class="mt-6 text-xs text-zinc-400 text-center">Quotes lightly edited for length. Real user names and links available on request.</p>
+  </div>
+</section>
 
-        function renderQuotaBadge(quota) {
-            const badge = document.getElementById("quota-badge");
-            if (!badge) return;
-            if (quota.limit === 0) {
-                badge.textContent = `${quota.used} workbooks · unlimited (${quota.tier})`;
-                badge.classList.remove("at-limit");
-            } else {
-                badge.textContent = `${quota.used} / ${quota.limit} used · ${quota.tier} plan`;
-                badge.classList.toggle("at-limit", quota.used >= quota.limit);
-            }
-        }
+<!-- ─── ENGINE API (only dark section) ─ -->
+<section id="api" class="py-24 sm:py-32 bg-zinc-950 text-zinc-100">
+  <div class="mx-auto max-w-7xl px-6 grid md:grid-cols-2 gap-12 lg:gap-16 items-center">
+    <div class="reveal">
+      <div class="section-eyebrow text-sm font-semibold text-brand-500">Engine API</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-bold tracking-tight text-white">Built for agents, not just humans.</h2>
+      <p class="mt-4 text-lg text-zinc-400 leading-relaxed">
+        Every workbook is reachable over HTTP. Evaluate formulas, peek at cells, fetch a schema — your agent gets a typed, deterministic spreadsheet runtime instead of brittle screen-scraping.
+      </p>
+      <ul class="mt-6 space-y-3 text-sm">
+        <li class="flex items-start gap-3"><span class="mt-1.5 h-1 w-1 rounded-full bg-brand-500 shrink-0"></span><div class="text-zinc-200"><span class="font-mono text-brand-500">POST /v1/eval</span> — run a formula or batch of cells</div></li>
+        <li class="flex items-start gap-3"><span class="mt-1.5 h-1 w-1 rounded-full bg-brand-500 shrink-0"></span><div class="text-zinc-200"><span class="font-mono text-brand-500">GET /v1/schema</span> — workbook structure + cell types</div></li>
+        <li class="flex items-start gap-3"><span class="mt-1.5 h-1 w-1 rounded-full bg-brand-500 shrink-0"></span><div class="text-zinc-200"><span class="font-mono text-brand-500">GET /v1/peek</span> — read any cell, follow refs across sheets</div></li>
+        <li class="flex items-start gap-3"><span class="mt-1.5 h-1 w-1 rounded-full bg-brand-500 shrink-0"></span><div class="text-zinc-200">Long-lived <span class="font-mono">gridos_live_sk_</span> keys, scoped per workbook</div></li>
+      </ul>
+      <a href="https://gridos.mintlify.app" class="mt-7 inline-flex items-center gap-1.5 text-sm font-medium text-brand-500 hover:text-brand-600 transition">
+        Read the API docs
+        <svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>
+      </a>
+    </div>
 
-        async function loadWorkbooks() {
-            try {
-                const res = await fetch(`${API_BASE}/workbooks`);
-                if (!res.ok) {
-                    // 404 = OSS mode or feature disabled — leave section hidden.
-                    return;
-                }
-                const data = await res.json();
-                const list = data.workbooks || [];
-                renderQuotaBadge({ tier: data.tier, used: data.used, limit: data.limit });
-                renderWorkbookCards(list, { used: data.used, limit: data.limit });
-                document.getElementById("workbooks-section").hidden = false;
-                // Recent-activity section is redundant in multi-workbook mode.
-                const recent = document.getElementById("recent-activity-section");
-                if (recent) recent.hidden = true;
-            } catch (_) {
-                // Network hiccup — keep the section hidden; user can still
-                // use hero-prompt / blank-card paths below.
-            }
-            // Shared-with-me renders as a separate strip under the owned
-            // grid. Failure is silent — a user with no shares or no schema
-            // migration yet shouldn't see an error.
-            try {
-                const res = await fetch(`${API_BASE}/workbook/shared-with-me`);
-                if (!res.ok) return;
-                const data = await res.json();
-                renderSharedWorkbooks(data.workbooks || []);
-            } catch (_) { /* silent */ }
-        }
+    <div class="reveal rounded-xl bg-zinc-900 border border-zinc-800 overflow-hidden">
+      <div class="flex items-center justify-between h-9 px-4 border-b border-zinc-800">
+        <div class="flex items-center gap-1.5">
+          <span class="h-2.5 w-2.5 rounded-full bg-zinc-700"></span>
+          <span class="h-2.5 w-2.5 rounded-full bg-zinc-700"></span>
+          <span class="h-2.5 w-2.5 rounded-full bg-zinc-700"></span>
+        </div>
+        <span class="text-[11px] font-mono text-zinc-500">curl</span>
+      </div>
+      <pre class="overflow-x-auto p-5 text-[12.5px] leading-relaxed font-mono text-zinc-300 m-0"><code><span class="text-zinc-500"># Evaluate a cell with an agent's API key</span>
+<span class="text-violet-400">curl</span> -X POST https://gridos.onrender.com<span class="text-sky-400">/v1/eval</span> \
+  -H <span class="text-emerald-400">"Authorization: Bearer gridos_live_sk_..."</span> \
+  -H <span class="text-emerald-400">"Content-Type: application/json"</span> \
+  -d <span class="text-emerald-400">'{
+    "workbook_id": "wb_abc123",
+    "cell": "B4",
+    "formula": "=Revenue!B3 * (1 + GrowthRate)"
+  }'</span>
 
-        function renderSharedWorkbooks(list) {
-            let section = document.getElementById("shared-section");
-            // If nobody shared anything with us, hide the section entirely.
-            if (!list.length) {
-                if (section) section.hidden = true;
-                return;
-            }
-            // Lazy-create the section the first time we have shares to show.
-            if (!section) {
-                section = document.createElement("section");
-                section.id = "shared-section";
-                section.className = "section";
-                section.innerHTML = `
-                    <h2 class="section-title">Shared with me</h2>
-                    <div class="grid" id="shared-grid"></div>
-                `;
-                const workbooksSection = document.getElementById("workbooks-section");
-                workbooksSection.insertAdjacentElement("afterend", section);
-            }
-            section.hidden = false;
-            const grid = document.getElementById("shared-grid");
-            grid.innerHTML = "";
-            list.forEach((wb) => {
-                const card = document.createElement("div");
-                card.className = "card workbook-card";
-                const owner = wb.owner_email ? `from ${escapeHtml(wb.owner_email)}` : "shared";
-                card.innerHTML = `
-                    <div class="card-thumb workbook">${escapeHtml(wb.title || "Untitled")}</div>
-                    <div class="card-title">${escapeHtml(wb.title || "Untitled workbook")}</div>
-                    <div class="card-meta">
-                        <span>${owner} · ${escapeHtml(wb.role || "editor")}</span>
-                    </div>
-                `;
-                card.addEventListener("click", () => {
-                    window.location.href = `/workbook?id=${encodeURIComponent(wb.id)}`;
-                });
-                grid.appendChild(card);
-            });
-        }
+<span class="text-zinc-500">→</span> {
+  <span class="text-sky-400">"value"</span>: 12_400_000,
+  <span class="text-sky-400">"type"</span>: <span class="text-emerald-400">"number"</span>,
+  <span class="text-sky-400">"deps"</span>: [<span class="text-emerald-400">"Revenue!B3"</span>, <span class="text-emerald-400">"Assumptions!B2"</span>],
+  <span class="text-sky-400">"trace_id"</span>: <span class="text-emerald-400">"trc_018f..."</span>
+}</code></pre>
+    </div>
+  </div>
+</section>
 
-        // Fire as soon as we know we're signed into SaaS.
-        window.addEventListener("gridos:saas-ready", loadWorkbooks);
-        if (window.__gridosSession) loadWorkbooks();
+<!-- ─── OPEN CORE ──────────────────────────────────── -->
+<section class="py-24 sm:py-32 bg-zinc-50/50 border-y border-zinc-200/80">
+  <div class="mx-auto max-w-4xl px-6 text-center">
+    <div class="reveal section-eyebrow text-sm font-semibold text-brand-600">Open core</div>
+    <h2 class="reveal mt-3 text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900">The kernel is MIT-licensed.</h2>
+    <p class="reveal mt-4 text-lg text-zinc-600">Run it yourself, or let us host it. No vendor lock-in. Same engine powers the cloud and the open-source repo.</p>
 
-        // ===== Account avatar + popover (SaaS only) =====
-        function avatarInitials(email) {
-            if (!email) return "·";
-            const local = (email.split("@")[0] || "");
-            if (!local) return email[0]?.toUpperCase() || "·";
-            const parts = local.split(/[.\-_]/).filter(Boolean);
-            const pick = parts.length >= 2 ? parts[0][0] + parts[1][0] : local.slice(0, 2);
-            return pick.toUpperCase();
-        }
-        function formatNumber(n) { return (n || 0).toLocaleString(); }
-        function formatCostCents(c) {
-            const v = c || 0;
-            if (v === 0) return "< $0.01";
-            return `$${(v / 100).toFixed(2)}`;
-        }
-        function formatMonthLabel(iso) {
-            if (!iso) return "";
-            const [y, m] = iso.split("-");
-            const names = ["January","February","March","April","May","June","July","August","September","October","November","December"];
-            return `${names[Number(m) - 1] || m} ${y}`;
-        }
+    <div class="reveal mt-8 inline-flex items-center gap-3 rounded-lg border border-zinc-200 bg-white p-2 pl-4 font-mono text-sm text-zinc-700 shadow-sm">
+      <span class="text-zinc-400">$</span>
+      <span>git clone github.com/shreydevkar/gridos_kernel</span>
+      <button id="copy-clone" class="rounded-md bg-zinc-100 hover:bg-zinc-200 border border-zinc-200 px-2.5 py-1 text-xs text-zinc-700 font-medium transition">Copy</button>
+    </div>
+  </div>
+</section>
 
-        async function paintAccountPopover() {
-            try {
-                const res = await fetch(`${API_BASE}/usage/me`);
-                if (!res.ok) return;
-                const d = await res.json();
-                const initials = avatarInitials(d.email);
-                document.getElementById("account-avatar-initials").textContent = initials;
-                document.getElementById("account-popover-avatar").textContent = initials;
-                document.getElementById("account-popover-email").textContent = d.email || "—";
-                document.getElementById("account-popover-tier").textContent = `${d.tier || "free"} plan`;
-                document.getElementById("account-popover-month").textContent = formatMonthLabel(d.month) || "This month";
-                document.getElementById("account-popover-tokens").textContent = (d.tier_limit > 0)
-                    ? `${formatNumber(d.total_tokens)} / ${formatNumber(d.tier_limit)}`
-                    : formatNumber(d.total_tokens);
-                document.getElementById("account-popover-cost").textContent = formatCostCents(d.cost_cents);
-                const quotaWrap = document.getElementById("account-popover-quota");
-                const quotaFill = document.getElementById("account-popover-quota-fill");
-                const quotaNote = document.getElementById("account-popover-quota-note");
-                if (d.tier_limit && d.tier_limit > 0) {
-                    quotaWrap.hidden = false;
-                    const pct = Math.max(0, Math.min(100, d.quota_pct || 0));
-                    quotaFill.style.width = `${pct}%`;
-                    quotaFill.classList.toggle("over-80", pct >= 80 && pct < 100);
-                    quotaFill.classList.toggle("over-100", pct >= 100);
-                    quotaNote.textContent = pct >= 100
-                        ? "Monthly cap reached — resets on the 1st."
-                        : `${(d.tokens_remaining || 0).toLocaleString()} tokens remaining this month.`;
-                } else {
-                    quotaWrap.hidden = true;
-                }
-            } catch (_) { /* silent */ }
-        }
+<!-- ─── PRICING ─────────────────────────────────────── -->
+<section id="pricing" class="py-24 sm:py-32">
+  <div class="mx-auto max-w-7xl px-6">
+    <div class="reveal text-center max-w-2xl mx-auto">
+      <div class="section-eyebrow text-sm font-semibold text-brand-600">Pricing</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900">Free to start. BYOK so you never overpay.</h2>
+      <p class="mt-4 text-lg text-zinc-600">You pay your model provider directly. We charge for workbook slots, plugins, and team features.</p>
+    </div>
 
-        function toggleAccountPopover(force) {
-            const pop = document.getElementById("account-popover");
-            const avatar = document.getElementById("account-avatar");
-            if (!pop) return;
-            const open = force !== undefined ? force : pop.hasAttribute("hidden");
-            if (open) {
-                pop.removeAttribute("hidden");
-                avatar?.setAttribute("aria-expanded", "true");
-                paintAccountPopover();
-            } else {
-                pop.setAttribute("hidden", "");
-                avatar?.setAttribute("aria-expanded", "false");
-            }
-        }
+    <div class="reveal-stagger mt-14 grid md:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div class="hover-lift rounded-xl border border-zinc-200 bg-white p-6 flex flex-col">
+        <div class="text-sm font-semibold text-zinc-900">Free</div>
+        <div class="mt-1 text-xs text-zinc-500">For getting started</div>
+        <div class="mt-5 flex items-baseline gap-1"><span class="text-3xl font-bold text-zinc-900">$0</span><span class="text-xs text-zinc-500">/mo</span></div>
+        <ul class="mt-5 space-y-2 text-sm text-zinc-600 flex-1">
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>3 workbooks</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>BYOK</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>MIT kernel</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Community plugins</li>
+        </ul>
+        <a href="/app" class="mt-6 inline-flex justify-center rounded-md border border-zinc-300 bg-white py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 transition">Get started</a>
+      </div>
 
-        function setupAccountAvatar() {
-            const wrap = document.getElementById("account-wrap");
-            if (!wrap) return;
-            wrap.hidden = false;
-            document.getElementById("account-avatar")?.addEventListener("click", (e) => {
-                e.stopPropagation();
-                toggleAccountPopover();
-            });
-            document.addEventListener("click", (e) => {
-                if (!wrap.contains(e.target)) toggleAccountPopover(false);
-            });
-            document.addEventListener("keydown", (e) => {
-                if (e.key === "Escape") toggleAccountPopover(false);
-            });
-            document.getElementById("account-popover-open")?.addEventListener("click", () => {
-                window.location.href = "/workbook";
-            });
-            document.getElementById("account-popover-signout")?.addEventListener("click", async () => {
-                if (window.__gridosSupabase) {
-                    await window.__gridosSupabase.auth.signOut();
-                }
-                window.location.replace("/login");
-            });
-            paintAccountPopover();
-        }
+      <div class="hover-lift rounded-xl border border-zinc-200 bg-white p-6 flex flex-col">
+        <div class="text-sm font-semibold text-zinc-900">Plus</div>
+        <div class="mt-1 text-xs text-zinc-500">For solo analysts</div>
+        <div class="mt-5 flex items-baseline gap-1"><span class="text-3xl font-bold text-zinc-900">$8</span><span class="text-xs text-zinc-500">/mo</span></div>
+        <ul class="mt-5 space-y-2 text-sm text-zinc-600 flex-1">
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>25 workbooks</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Realtime collab</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Cross-sheet refs</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Email support</li>
+        </ul>
+        <a href="/app" class="mt-6 inline-flex justify-center rounded-md border border-zinc-300 bg-white py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 transition">Upgrade</a>
+      </div>
 
-        // If the auth-gate module fired this, we're in SaaS mode and signed in.
-        // If it already ran before this script loaded (race), the window flag
-        // will be set — check that too.
-        window.addEventListener("gridos:saas-ready", setupAccountAvatar);
-        if (window.__gridosSession) setupAccountAvatar();
-    </script>
+      <div class="hover-lift rounded-xl border border-zinc-200 bg-white p-6 flex flex-col">
+        <div class="text-sm font-semibold text-zinc-900">Student</div>
+        <div class="mt-1 text-xs text-zinc-500">.edu only</div>
+        <div class="mt-5 flex items-baseline gap-1"><span class="text-3xl font-bold text-zinc-900">$3</span><span class="text-xs text-zinc-500">/mo</span></div>
+        <ul class="mt-5 space-y-2 text-sm text-zinc-600 flex-1">
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>All Plus features</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>.edu verification</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Course templates</li>
+        </ul>
+        <a href="/app" class="mt-6 inline-flex justify-center rounded-md border border-zinc-300 bg-white py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 transition">Apply</a>
+      </div>
+
+      <div class="hover-lift rounded-xl border-2 border-brand-600 bg-white p-6 flex flex-col relative shadow-md">
+        <div class="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-brand-600 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-white">Most popular</div>
+        <div class="text-sm font-semibold text-zinc-900">Pro</div>
+        <div class="mt-1 text-xs text-zinc-500">For teams &amp; agents</div>
+        <div class="mt-5 flex items-baseline gap-1"><span class="text-3xl font-bold text-zinc-900">$24</span><span class="text-xs text-zinc-500">/mo</span></div>
+        <ul class="mt-5 space-y-2 text-sm text-zinc-700 flex-1">
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Unlimited workbooks</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Engine API + keys</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Plugin marketplace</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Priority support</li>
+        </ul>
+        <a href="/app" class="mt-6 inline-flex justify-center rounded-md bg-brand-600 py-2 text-sm font-semibold text-white hover:bg-brand-700 transition">Go Pro</a>
+      </div>
+
+      <div class="hover-lift rounded-xl border border-zinc-200 bg-white p-6 flex flex-col">
+        <div class="text-sm font-semibold text-zinc-900">Enterprise</div>
+        <div class="mt-1 text-xs text-zinc-500">For organizations</div>
+        <div class="mt-5 flex items-baseline gap-1"><span class="text-3xl font-bold text-zinc-900">Custom</span></div>
+        <ul class="mt-5 space-y-2 text-sm text-zinc-600 flex-1">
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>SSO + SCIM</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Self-hosted option</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>Audit logs</li>
+          <li class="flex gap-2"><span class="text-emerald-600">✓</span>SLA</li>
+        </ul>
+        <a href="mailto:hello@gridos.dev" class="mt-6 inline-flex justify-center rounded-md border border-zinc-300 bg-white py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-50 transition">Contact sales</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ─── FAQ ─────────────────────────────────────────── -->
+<section class="py-24 sm:py-32 bg-zinc-50/50 border-t border-zinc-200/80">
+  <div class="mx-auto max-w-3xl px-6">
+    <div class="reveal text-center mb-12">
+      <div class="section-eyebrow text-sm font-semibold text-brand-600">FAQ</div>
+      <h2 class="mt-3 text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900">Common questions.</h2>
+    </div>
+
+    <div class="divide-y divide-zinc-200 border border-zinc-200 bg-white rounded-xl">
+      <details class="group p-5 reveal">
+        <summary class="flex items-center justify-between gap-4 text-base font-semibold text-zinc-900">
+          How is GridOS different from Excel or Google Sheets?
+          <svg class="faq-chev h-4 w-4 text-zinc-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>
+        </summary>
+        <p class="mt-3 text-sm text-zinc-600 leading-relaxed">A chat that types directly into cells, a Python plugin runtime, and an HTTP API for agents. The grid still feels like a spreadsheet — but every cell can be driven by an LLM, an agent, or a custom formula you wrote yourself.</p>
+      </details>
+      <details class="group p-5 reveal">
+        <summary class="flex items-center justify-between gap-4 text-base font-semibold text-zinc-900">
+          What does "BYOK" mean?
+          <svg class="faq-chev h-4 w-4 text-zinc-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>
+        </summary>
+        <p class="mt-3 text-sm text-zinc-600 leading-relaxed">Bring Your Own Key. Paste a Gemini, Anthropic, Groq, or OpenRouter key into Settings; we proxy your prompts directly to that provider. We never see your tokens, and you never get a surprise GridOS bill for LLM usage.</p>
+      </details>
+      <details class="group p-5 reveal">
+        <summary class="flex items-center justify-between gap-4 text-base font-semibold text-zinc-900">
+          Do you train on my data?
+          <svg class="faq-chev h-4 w-4 text-zinc-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>
+        </summary>
+        <p class="mt-3 text-sm text-zinc-600 leading-relaxed">No. Workbooks are stored in Supabase under your account. Prompts go to whichever LLM provider you connected — we route, never retain for training.</p>
+      </details>
+      <details class="group p-5 reveal">
+        <summary class="flex items-center justify-between gap-4 text-base font-semibold text-zinc-900">
+          Can I self-host?
+          <svg class="faq-chev h-4 w-4 text-zinc-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>
+        </summary>
+        <p class="mt-3 text-sm text-zinc-600 leading-relaxed">Yes. The kernel is MIT-licensed. <span class="font-mono text-zinc-900 text-sm">git clone</span>, <span class="font-mono text-zinc-900 text-sm">pip install</span>, <span class="font-mono text-zinc-900 text-sm">uvicorn main:app</span> — that's it. SaaS-only features (auth, billing, marketplace) are clearly fenced.</p>
+      </details>
+      <details class="group p-5 reveal">
+        <summary class="flex items-center justify-between gap-4 text-base font-semibold text-zinc-900">
+          What models are supported?
+          <svg class="faq-chev h-4 w-4 text-zinc-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>
+        </summary>
+        <p class="mt-3 text-sm text-zinc-600 leading-relaxed">Gemini 2.5 Flash/Pro, Claude Opus/Sonnet/Haiku, Groq's Llama family, and anything reachable via OpenRouter — including Mistral, DeepSeek, and Qwen.</p>
+      </details>
+      <details class="group p-5 reveal">
+        <summary class="flex items-center justify-between gap-4 text-base font-semibold text-zinc-900">
+          Is there an API for agents to use?
+          <svg class="faq-chev h-4 w-4 text-zinc-500" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6l4 4 4-4"/></svg>
+        </summary>
+        <p class="mt-3 text-sm text-zinc-600 leading-relaxed">Yes. The Engine API exposes <span class="font-mono text-zinc-900 text-sm">/v1/eval</span>, <span class="font-mono text-zinc-900 text-sm">/v1/schema</span>, and <span class="font-mono text-zinc-900 text-sm">/v1/peek</span> behind long-lived <span class="font-mono text-zinc-900 text-sm">gridos_live_sk_</span> keys. Agent frameworks can drive workbooks programmatically.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ─── CTA STRIP ───────────────────────────────────── -->
+<section class="py-24 sm:py-28 bg-white border-t border-zinc-200/80">
+  <div class="mx-auto max-w-3xl px-6 text-center">
+    <h2 class="reveal text-3xl sm:text-4xl font-bold tracking-tight text-zinc-900">Stop building spreadsheets. Start describing them.</h2>
+    <p class="reveal mt-4 text-lg text-zinc-600">Free tier, no credit card. You'll be in your first workbook in under a minute.</p>
+    <div class="reveal mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+      <a href="/app" class="group inline-flex items-center gap-2 rounded-md bg-zinc-900 text-white px-5 py-3 text-sm font-semibold hover:bg-zinc-800 transition">
+        Open GridOS
+        <svg class="h-4 w-4 transition-transform group-hover:translate-x-0.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 4l4 4-4 4"/></svg>
+      </a>
+      <a href="https://github.com/shreydevkar/gridos_kernel" class="inline-flex items-center gap-2 rounded-md border border-zinc-300 bg-white px-5 py-3 text-sm font-medium text-zinc-700 hover:bg-zinc-50 transition">
+        Star on GitHub
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- ─── FOOTER ──────────────────────────────────────── -->
+<footer class="border-t border-zinc-200 py-14 bg-white">
+  <div class="mx-auto max-w-7xl px-6 grid md:grid-cols-[1.4fr_1fr_1fr_1fr] gap-10">
+    <div>
+      <div class="flex items-center gap-2.5">
+        <span class="inline-flex h-7 w-7 items-center justify-center rounded-md bg-brand-600">
+          <svg viewBox="0 0 16 16" class="h-4 w-4 text-white" fill="none" stroke="currentColor" stroke-width="1.6">
+            <rect x="2" y="2" width="12" height="12" rx="2" /><path d="M2 6h12M2 10h12M6 2v12M10 2v12" />
+          </svg>
+        </span>
+        <span class="font-semibold tracking-tight text-zinc-900">GridOS</span>
+      </div>
+      <p class="mt-4 text-sm text-zinc-600 max-w-xs leading-relaxed">The AI-native spreadsheet for finance teams. Open core. BYOK. Programmable.</p>
+    </div>
+    <div>
+      <div class="text-xs uppercase tracking-wider text-zinc-500 font-semibold mb-4">Product</div>
+      <ul class="space-y-2.5 text-sm text-zinc-700">
+        <li><a href="#product" class="hover:text-zinc-900">Features</a></li>
+        <li><a href="#how" class="hover:text-zinc-900">How it works</a></li>
+        <li><a href="#use-cases" class="hover:text-zinc-900">Use cases</a></li>
+        <li><a href="#api" class="hover:text-zinc-900">Engine API</a></li>
+        <li><a href="#pricing" class="hover:text-zinc-900">Pricing</a></li>
+        <li><a href="/app" class="hover:text-zinc-900">Open app</a></li>
+      </ul>
+    </div>
+    <div>
+      <div class="text-xs uppercase tracking-wider text-zinc-500 font-semibold mb-4">Developers</div>
+      <ul class="space-y-2.5 text-sm text-zinc-700">
+        <li><a href="https://gridos.mintlify.app" class="hover:text-zinc-900">Documentation</a></li>
+        <li><a href="https://github.com/shreydevkar/gridos_kernel" class="hover:text-zinc-900">GitHub</a></li>
+        <li><a href="https://github.com/shreydevkar/gridos_kernel/blob/master/LICENSE" class="hover:text-zinc-900">MIT License</a></li>
+      </ul>
+    </div>
+    <div>
+      <div class="text-xs uppercase tracking-wider text-zinc-500 font-semibold mb-4">Company</div>
+      <ul class="space-y-2.5 text-sm text-zinc-700">
+        <li><a href="mailto:hello@gridos.dev" class="hover:text-zinc-900">Contact</a></li>
+        <li><a href="https://github.com/shreydevkar/gridos_kernel/blob/master/SECURITY.md" class="hover:text-zinc-900">Security</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="mx-auto max-w-7xl px-6 mt-12 pt-6 border-t border-zinc-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-500">
+    <span>© 2026 GridOS. MIT-licensed kernel.</span>
+    <span class="font-mono">v1.0 · Engine API live</span>
+  </div>
+</footer>
+
+<!-- ─── SCRIPTS ─────────────────────────────────────── -->
+<script>
+(() => {
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // Reveal on scroll
+  const revealIO = new IntersectionObserver((entries) => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('is-in'); revealIO.unobserve(e.target); } });
+  }, { threshold: 0.12, rootMargin: '0px 0px -60px 0px' });
+  document.querySelectorAll('.reveal, .reveal-stagger').forEach(el => revealIO.observe(el));
+
+  // Comparison table row stagger
+  const compareTbody = document.getElementById('compare-tbody');
+  if (compareTbody) {
+    const rowIO = new IntersectionObserver((entries) => {
+      if (!entries.some(e => e.isIntersecting)) return;
+      rowIO.disconnect();
+      compareTbody.querySelectorAll('.compare-row').forEach((row, i) => {
+        setTimeout(() => row.classList.add('is-in'), i * 80);
+      });
+    }, { threshold: 0.15 });
+    rowIO.observe(compareTbody);
+  }
+
+  // Number counters
+  const counters = document.querySelectorAll('[data-counter]');
+  const counterIO = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (!e.isIntersecting) return;
+      counterIO.unobserve(e.target);
+      const target = parseFloat(e.target.dataset.counter);
+      const decimals = parseInt(e.target.dataset.decimals || '0', 10);
+      const suffix = e.target.dataset.suffix || '';
+      const prefix = e.target.dataset.prefix || '';
+      const dur = 1200, start = performance.now();
+      const tick = (t) => {
+        const p = Math.min(1, (t - start) / dur);
+        const eased = 1 - Math.pow(1 - p, 3);
+        e.target.textContent = prefix + (target * eased).toFixed(decimals) + suffix;
+        if (p < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }, { threshold: 0.5 });
+  counters.forEach(c => counterIO.observe(c));
+
+  // Workflow diagram lines draw on enter
+  const flowSvg = document.getElementById('flow-svg');
+  if (flowSvg) {
+    const flowIO = new IntersectionObserver((entries) => {
+      if (!entries.some(e => e.isIntersecting)) return;
+      flowIO.disconnect();
+      const lines = flowSvg.querySelectorAll('.flow-line');
+      lines.forEach((line, i) => setTimeout(() => line.classList.add('is-in'), i * 200));
+    }, { threshold: 0.3 });
+    flowIO.observe(flowSvg);
+  }
+
+  // Subtle parallax on hero mockup
+  const mockup = document.getElementById('hero-mockup');
+  let raf = null;
+  if (mockup) {
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        const y = window.scrollY;
+        if (y < 1200) mockup.style.transform = `translateY(${Math.min(y * 0.04, 30)}px)`;
+        raf = null;
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+  }
+
+  // Mobile menu
+  const menu = document.getElementById('mobile-menu');
+  const menuToggle = document.getElementById('menu-toggle');
+  const menuClose = document.getElementById('menu-close');
+  const openMenu = () => { menu.classList.add('is-open'); document.body.classList.add('menu-open'); };
+  const closeMenu = () => { menu.classList.remove('is-open'); document.body.classList.remove('menu-open'); };
+  menuToggle?.addEventListener('click', openMenu);
+  menuClose?.addEventListener('click', closeMenu);
+  menu?.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
+
+  // Copy clone command
+  const copyBtn = document.getElementById('copy-clone');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText('git clone https://github.com/shreydevkar/gridos_kernel');
+      copyBtn.textContent = 'Copied';
+      setTimeout(() => copyBtn.textContent = 'Copy', 2000);
+    });
+  }
+
+  // ─── Hero mockup animation (chat → cells → chart) ─
+  const HEADERS = ['', '2024', '2025', '2026', '2027', '2028', '2029'];
+  const ROWS = [
+    { label: 'Revenue',         values: ['$8.2M', '$10.4M', '$13.0M', '$16.3M', '$20.4M', '$25.5M'] },
+    { label: 'Growth',          values: ['—',     '27%',    '25%',    '25%',    '25%',    '25%'   ] },
+    { label: 'COGS',            values: ['$3.3M', '$4.2M',  '$5.2M',  '$6.5M',  '$8.2M',  '$10.2M'] },
+    { label: 'Gross Margin',    values: ['60%',   '60%',    '60%',    '60%',    '60%',    '60%'   ] },
+    { label: 'OpEx',            values: ['$4.1M', '$4.7M',  '$5.4M',  '$6.2M',  '$7.1M',  '$8.2M' ] },
+    { label: 'EBITDA',          values: ['$0.8M', '$1.5M',  '$2.4M',  '$3.6M',  '$5.1M',  '$7.1M' ] },
+    { label: 'Discount Factor', values: ['1.00',  '0.91',   '0.83',   '0.75',   '0.68',   '0.62'  ] },
+    { label: 'PV(EBITDA)',      values: ['$0.8M', '$1.4M',  '$2.0M',  '$2.7M',  '$3.5M',  '$4.4M' ] },
+  ];
+  const PROMPT = "Build a 5-year DCF for a SaaS company growing 25% YoY at 60% gross margin.";
+  const STEPS = [
+    "→ Parsed: 5-yr forecast + DCF",
+    "→ Wrote 8 row labels in column A",
+    "→ Filled Revenue across B:G",
+    "→ Computed COGS, OpEx, EBITDA",
+    "→ Discounted EBITDA to PV",
+    "✓ 48 cells written · 0 errors",
+  ];
+
+  const grid = document.getElementById('mock-grid');
+  if (!grid) return;
+  const cells = [];
+  HEADERS.forEach((h, c) => {
+    const el = document.createElement('div');
+    el.className = 'mc-cell is-header text-[10px] flex items-center';
+    if (c === 0) el.classList.add('text-center');
+    el.textContent = h; el.style.opacity = '1';
+    grid.appendChild(el);
+  });
+  ROWS.forEach((row, r) => {
+    const idx = document.createElement('div');
+    idx.className = 'mc-cell is-header text-[10px] text-center flex items-center justify-center';
+    idx.textContent = String(r + 1); idx.style.opacity = '1';
+    grid.appendChild(idx);
+
+    const label = document.createElement('div');
+    label.className = 'mc-cell is-label flex items-center';
+    label.dataset.row = r; label.dataset.col = 0;
+    grid.appendChild(label);
+    cells.push({ el: label, content: row.label, row: r, col: 0 });
+
+    row.values.forEach((v, c) => {
+      const cell = document.createElement('div');
+      cell.className = 'mc-cell is-number flex items-center justify-end';
+      cell.dataset.row = r; cell.dataset.col = c + 1;
+      grid.appendChild(cell);
+      cells.push({ el: cell, content: v, row: r, col: c + 1 });
+    });
+  });
+
+  const promptEl = document.getElementById('mock-prompt');
+  const responseEl = document.getElementById('mock-response');
+  const statusEl = document.getElementById('mock-status');
+  const stepsEl = document.getElementById('mock-steps');
+  const spinnerEl = document.getElementById('mock-spinner');
+  const activeCellEl = document.getElementById('mock-active-cell');
+  const formulaBarEl = document.getElementById('mock-formula-bar');
+  const chartPopout = document.getElementById('chart-popout');
+  const chartLine = document.getElementById('chart-line-path');
+  const chartArea = document.getElementById('chart-area-path');
+  const chartBars = document.querySelectorAll('.chart-bar');
+  const chartDots = document.querySelectorAll('.chart-dot');
+  const COLS = 'ABCDEFG';
+
+  async function typePrompt() {
+    promptEl.textContent = '';
+    for (let i = 0; i <= PROMPT.length; i++) {
+      promptEl.textContent = PROMPT.slice(0, i);
+      await sleep(22 + Math.random() * 28);
+    }
+  }
+  async function showChart() {
+    chartPopout.style.opacity = '1';
+    await sleep(150);
+    // bars rise first
+    chartBars.forEach((b, i) => setTimeout(() => b.classList.add('is-in'), i * 80));
+    await sleep(500);
+    // then line + area draw
+    chartLine.classList.add('is-in');
+    chartArea.classList.add('is-in');
+    // dots fade in last
+    chartDots.forEach((d, i) => setTimeout(() => d.style.opacity = '1', 1200 + i * 100));
+  }
+  function hideChart() {
+    chartPopout.style.opacity = '0';
+    chartBars.forEach(b => b.classList.remove('is-in'));
+    chartLine.classList.remove('is-in');
+    chartArea.classList.remove('is-in');
+    chartDots.forEach(d => d.style.opacity = '0');
+  }
+  async function runFill() {
+    responseEl.style.opacity = '1';
+    stepsEl.innerHTML = '';
+    let stepIdx = 0;
+    for (const cell of cells) {
+      cells.forEach(c => c.el.classList.remove('is-active'));
+      cell.el.classList.add('is-active');
+      const colLetter = cell.col != null ? COLS[cell.col] : 'A';
+      const rowNum = (cell.row ?? 0) + 2;
+      activeCellEl.textContent = `${colLetter}${rowNum}`;
+      if (cell.col != null && cell.col > 1) {
+        const prev = COLS[cell.col - 1];
+        formulaBarEl.textContent = `=${prev}${rowNum} * (1 + Growth!B${rowNum})`;
+      } else {
+        formulaBarEl.textContent = cell.content;
+      }
+      cell.el.textContent = cell.content;
+      cell.el.classList.remove('animate-cell-pop');
+      void cell.el.offsetWidth;
+      cell.el.classList.add('animate-cell-pop');
+
+      if (stepIdx < STEPS.length && Math.random() > 0.6) {
+        const s = document.createElement('div');
+        s.textContent = STEPS[stepIdx++];
+        s.className = 'opacity-0 transition-opacity duration-300';
+        stepsEl.appendChild(s);
+        requestAnimationFrame(() => s.classList.replace('opacity-0', 'opacity-100'));
+      }
+      await sleep(58 + Math.random() * 48);
+    }
+    while (stepIdx < STEPS.length) {
+      const s = document.createElement('div');
+      s.textContent = STEPS[stepIdx++];
+      stepsEl.appendChild(s);
+      await sleep(180);
+    }
+    statusEl.textContent = 'Done in 4.1s';
+    spinnerEl.style.display = 'none';
+    cells.forEach(c => c.el.classList.remove('is-active'));
+    activeCellEl.textContent = 'B4';
+    formulaBarEl.textContent = '=Revenue!B3 * (1 + GrowthRate)';
+    // After cells fill, render the chart
+    await sleep(300);
+    showChart();
+  }
+  async function clearAll() {
+    cells.forEach(c => { c.el.textContent = ''; c.el.classList.remove('animate-cell-pop'); });
+    responseEl.style.opacity = '0';
+    spinnerEl.style.display = '';
+    statusEl.textContent = 'Building 5-year DCF…';
+    stepsEl.innerHTML = '';
+    hideChart();
+  }
+  async function loop() {
+    while (true) {
+      await clearAll();
+      await sleep(400);
+      await typePrompt();
+      await sleep(500);
+      await runFill();
+      await sleep(6000);
+    }
+  }
+  const mockIO = new IntersectionObserver((entries) => {
+    if (entries.some(e => e.isIntersecting)) { mockIO.disconnect(); loop(); }
+  });
+  mockIO.observe(grid);
+})();
+</script>
 </body>
 </html>
